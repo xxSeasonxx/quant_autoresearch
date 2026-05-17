@@ -16,11 +16,11 @@ from strategy import generate_signals
 ROOT = Path(__file__).resolve().parent
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-attempts", type=int)
     parser.add_argument("--results-dir", default="results")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     experiment = load_experiment(ROOT / "experiment.yml")
     max_attempts = args.max_attempts or int(experiment.get("max_attempts", 1))
@@ -68,6 +68,11 @@ def run_once(experiment: dict[str, Any], *, attempt: int, results_dir: Path) -> 
         if validate.returncode != 0:
             (attempt_dir / "notes.md").write_text(f"validate failed\n\n```json\n{validate.stderr}```\n")
             return attempt_dir
+        validate_summary = json.loads(validate.stdout)
+        if not validate_summary["passed"]:
+            failed_gates = ", ".join(validate_summary["failed_gates"])
+            (attempt_dir / "notes.md").write_text(f"validation gates failed: {failed_gates}\n")
+            return attempt_dir
 
         evidence = _run_engine("validate", attempt_dir / "request.json", summary=False)
         (attempt_dir / "evidence.json").write_text(evidence.stdout)
@@ -92,7 +97,7 @@ def _parse_scalar(value: str) -> str | int | float:
 
 
 def _attempt_dir(results_dir: Path, attempt: int) -> Path:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S%fZ")
     return results_dir / f"{timestamp}_attempt_{attempt:04d}"
 
 

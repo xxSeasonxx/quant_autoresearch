@@ -1,0 +1,8 @@
+strategy_id: simple_momentum
+symbol: DEMO
+max_attempts: 1
+weight: 1.0
+hold_bars: 1
+entry_lag_bars: 1
+fee_bps_per_side: 2.0
+slippage_bps_per_side: 1.0

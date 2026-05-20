@@ -1,54 +1,99 @@
 # quant_autoresearch
 
-## Objective
+This is an experiment to have an LLM do quant research inside a fixed harness.
 
-Find plausible quant strategy candidates in the fixed harness. A run is evidence
-for one window, not proof of market edge.
+## Setup
 
-## Files
+Read the in-scope files before each research attempt:
 
-Read `program.md`, `AGENTS.md`, `README.md`, `experiment.yml`, `strategy.py`,
-and the latest `results/` attempt.
+- `program.md` - this loop brief
+- `AGENTS.md` - hard repository rules
+- `README.md` - harness shape and run command
+- `experiment.yml` - active parameters and window
+- `strategy.py` - the strategy under test
+- latest `results/` attempt, if present
 
-During research loops, edit only: `strategy.py`, `experiment.yml`.
+Check `git status --short` and note any dirty files before editing. Existing
+dirty files may belong to the user; do not overwrite or revert them.
 
-Do not edit: `runner.py`, `prepare.py`, `README.md`, `AGENTS.md`, `program.md`,
-`tests/`, or `results/`.
+## Experimentation
+
+One loop means one strategy/window attempt.
+
+What you can edit during a research loop:
+
+- `strategy.py`
+- `experiment.yml`
+
+What you cannot edit during a research loop:
+
+- `runner.py`
+- `prepare.py`
+- `README.md`
+- `AGENTS.md`
+- `program.md`
+- `tests/`
+- `results/`
 
 Harness improvements happen outside research loops.
 
-## Experiment
+The goal is simple: find plausible causal strategy candidates that pass the
+fixed harness for the active window. A run is not proof of market edge.
 
-One loop = one strategy/window attempt.
+Use simple, falsifiable ideas. Account for timing, costs, holding period, and
+the active window. Do not add registries, discovery, generated prompts, batch
+runners, new dependencies, or paper-trading approval.
 
-Pick one causal hypothesis or focused revision. Use `experiment.yml` for active
-parameters and the active window.
+## Running
 
-Run:
+Run exactly one attempt:
 
 ```bash
 conda run -n quant python runner.py --max-attempts 1
 ```
 
-Window ladder: primary -> alternate earlier/later -> holdout/stress. Run one
-window per loop. Passing one window is not robustness.
+Then inspect the latest attempt under `results/`:
 
-## Results
+- `notes.md`
+- `screen_summary.json`
+- `validate_summary.json`
+- `evidence.json`, if present
 
-Inspect the latest attempt artifacts: `notes.md`, `screen_summary.json`,
-`validate_summary.json`, and `evidence.json` if present.
+Key fields are `passed`, `failed_gates`, `trade_count`, `gross_return`,
+`net_return`, and `cost_return`.
 
-Report: hypothesis, active window, `keep`/`discard`/`crash`, what passed or
-failed, and next window or idea.
+## Logging
 
-`keep` means worth carrying forward, not market evidence. `discard` means failed
-or too complex for the result. `crash` means no usable artifacts.
+At the end of the loop, report one compact result row in the final response:
 
-## Rules
+```text
+window status net_return trade_count failed_gates description
+```
 
-Use causal signals only.
-Keep the strategy simple and falsifiable.
-Account for costs, timing, and holding period.
-Do not overfit tiny or synthetic samples.
-Do not claim market evidence or paper-trading readiness.
-Do not add registries, discovery, generated prompts, or batch runners.
+Use these statuses:
+
+- `keep` - worth carrying to the next window or next loop
+- `discard` - failed, overfit, or too complex for the result
+- `crash` - did not produce usable artifacts
+
+`keep` does not mean market evidence. It only means the candidate is worth
+testing again.
+
+## Loop
+
+1. Look at git state and the latest result.
+2. Pick one causal hypothesis or one focused revision.
+3. Edit only `strategy.py` and `experiment.yml`.
+4. Run the one-attempt command.
+5. Read the attempt artifacts.
+6. Report the result row and a short explanation.
+7. Stop.
+
+Window ladder: primary -> alternate earlier/later -> holdout/stress.
+Run one window per loop. Passing one window is not robustness.
+
+If the run crashes because of a simple mistake, fix your own mistake and rerun
+once. If the idea is broken, report `crash` or `discard` and stop.
+
+Do not claim market evidence, robustness, or paper-trading readiness from the
+current synthetic harness.

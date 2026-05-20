@@ -5,9 +5,9 @@
 Add a short `program.md` as the standing instruction file for autonomous quant
 research loops.
 
-The file should be direct and operational. It should tell a Codex/Claude-style
-agent what to read, what it may edit, how to run one attempt, how to interpret
-the artifacts, and when to stop.
+The file should read like an operating note, not a framework. It should tell a
+Codex/Claude-style agent the goal, the files, the command, the result artifacts,
+and the keep/discard rules.
 
 ## Purpose
 
@@ -18,8 +18,8 @@ strategy.py + experiment.yml -> runner.py -> quant_engine -> results/
 ```
 
 The missing piece is the research-loop brief. Without it, an agent has no
-project-local instruction for how to turn one result into the next quant
-research attempt.
+project-local instruction for how to run one quant research attempt and report
+the result.
 
 `program.md` is not a generated prompt, strategy registry, or harness
 orchestrator. It is a human-authored standing brief for the LLM.
@@ -52,23 +52,18 @@ tests/
 
 Harness improvements happen outside the autonomous research loop.
 
-## Program.md Content
+## Program.md Shape
 
-The file should stay compact and use these sections:
+The file should stay compact and use only these sections:
 
 ```text
 # quant_autoresearch
 
 ## Objective
-## Read First
-## Editable Files
-## Fixed Harness
-## One-Attempt Loop
-## Window Protocol
-## Research Rules
-## Result Review
-## Stop And Report
-## Forbidden Actions
+## Files
+## Experiment
+## Results
+## Rules
 ```
 
 ## Behavior Contract
@@ -78,7 +73,7 @@ One research loop means exactly one strategy/window attempt.
 The agent should:
 
 1. Read `program.md`, `AGENTS.md`, `README.md`, `experiment.yml`,
-   `strategy.py`, and recent result artifacts if present.
+   `strategy.py`, and the latest result artifacts if present.
 2. Form one causal quant hypothesis or one focused revision.
 3. Edit only `strategy.py` and `experiment.yml`.
 4. Run:
@@ -96,8 +91,8 @@ validate_summary.json
 evidence.json
 ```
 
-6. Stop and report the hypothesis, active window, result, failure mode, and
-   next suggested window or idea.
+6. Stop and report the hypothesis, active window, result, keep/discard
+   decision, and next suggested window or idea.
 
 ## Window Protocol
 
@@ -123,6 +118,24 @@ claim robustness.
 - Treat current synthetic-data results as harness evidence, not market evidence.
 - Do not claim paper-trading readiness.
 
+## Keep Or Discard
+
+The result report should use simple labels:
+
+```text
+keep
+discard
+crash
+```
+
+`keep` means the attempt is worth carrying into the next window or next loop.
+It does not mean the strategy has market evidence.
+
+`discard` means the idea did not survive the current run or is too complex for
+the result.
+
+`crash` means the attempt did not produce usable artifacts.
+
 ## Non-Goals
 
 Do not add these in this design:
@@ -137,9 +150,9 @@ Do not add these in this design:
 
 These can be designed later if the fixed harness needs them.
 
-## Testing
+## Verification
 
-Implementation should verify:
+Implementation should manually verify:
 
 - `program.md` exists at the repo root.
 - `program.md` names only `strategy.py` and `experiment.yml` as editable during
@@ -148,4 +161,4 @@ Implementation should verify:
 - `program.md` states that `runner.py` and other harness files are read-only
   during research loops.
 - `program.md` states that synthetic-data results are not market evidence.
-
+- `program.md` fits on one screen in normal terminal output.

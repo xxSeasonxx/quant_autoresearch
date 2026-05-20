@@ -64,7 +64,7 @@ Key fields are `passed`, `failed_gates`, `trade_count`, `gross_return`,
 
 ## Logging
 
-At the end of the loop, report one compact result row in the final response:
+At the end of each loop, keep one compact result row for the final response:
 
 ```text
 window status net_return trade_count failed_gates description
@@ -87,13 +87,20 @@ testing again.
 4. Run the one-attempt command.
 5. Read the attempt artifacts.
 6. Report the result row and a short explanation.
-7. Stop.
+7. Decide the next loop.
+
+Continue looping until Season stops you, the harness needs changes outside the
+editable files, or the next useful action is unclear.
 
 Window ladder: primary -> alternate earlier/later -> holdout/stress.
 Run one window per loop. Passing one window is not robustness.
 
 If the run crashes because of a simple mistake, fix your own mistake and rerun
-once. If the idea is broken, report `crash` or `discard` and stop.
+once. If it still crashes, report `crash` and stop.
+
+If the result is `keep`, continue with the next window in the ladder. If all
+windows keep, report the candidate as worth deeper review, not as proven alpha.
+If the result is `discard`, continue with a new simple hypothesis.
 
 Do not claim market evidence, robustness, or paper-trading readiness from the
 current synthetic harness.

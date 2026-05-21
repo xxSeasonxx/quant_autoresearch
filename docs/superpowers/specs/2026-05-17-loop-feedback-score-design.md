@@ -8,9 +8,9 @@ Add a fixed scratchpad score artifact:
 score.json
 ```
 
-The score lives in `quant_autoresearch`, not `quant_engine`, because it is loop
-feedback for the active research workbench. It is not evidence, validation, or
-promotion.
+The score lives in `quant_autoresearch`, not the internal evaluator, because it
+is loop feedback for the active research workbench. It is not evidence,
+validation, or promotion.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ inventing its own objective from raw JSON.
 The score must stay boring and sample-aware:
 
 ```text
-raw_net_return = screen_summary.net_return
+raw_net_return = validation_report.screening_result.net_return
 score = raw_net_return only when trade_count >= min_score_trades
 ```
 
@@ -29,7 +29,7 @@ formula in this version. `min_score_trades` is a guardrail, not a formula.
 
 ## Boundaries
 
-- `quant_engine` remains unchanged.
+- The internal evaluator remains unchanged.
 - `strategy.py` remains signal generation only.
 - `experiment.yml` owns the fixed evaluation window and the minimum sample
   threshold:
@@ -50,25 +50,25 @@ Statuses:
 build_error
   strategy, prepare, or request building failed before screen summary existed
 
-screen_failed
-  quant-engine screen could not evaluate the request
+evaluation_failed
+  the runner could not evaluate the generated request
 
 validation_failed
-  quant-engine validate ran, but validate_summary.passed was false
+  the runner validate pass completed, but summary.engine.passed was false
 
 insufficient_sample
-  quant-engine produced a screen summary, but trade_count is below
-  min_score_trades for the fixed evaluation window
+  the runner produced evidence, but trade_count is below min_score_trades for
+  the fixed evaluation window
 
 validated
-  quant-engine validate passed all gates
+  runner validation passed all gates
 ```
 
 Score values:
 
 ```text
 build_error         score = null
-screen_failed       score = null
+evaluation_failed   score = null
 insufficient_sample score = null
 validation_failed   score = raw_net_return
 validated           score = raw_net_return
@@ -168,8 +168,8 @@ def build_score(
     *,
     status: str,
     experiment: dict[str, object],
-    screen_summary: dict[str, object] | None,
-    validate_summary: dict[str, object] | None,
+    summary: dict[str, object] | None,
+    evidence: dict[str, object] | None,
 ) -> dict[str, object]:
     ...
 ```
@@ -180,12 +180,12 @@ def build_score(
 
 Add focused tests for:
 
-- validated attempt writes score from `screen_summary.net_return`
-- validation-failed attempt writes score from `screen_summary.net_return` when
+- validated attempt writes score from validation evidence net return
+- validation-failed attempt writes score from validation evidence net return when
   `trade_count >= min_score_trades`
 - attempt below `min_score_trades` writes `status = insufficient_sample` and
   `score = null`
-- screen-failed attempt writes `score = null`
+- evaluation-failed attempt writes `score = null`
 - request-build error writes `score = null`
 - `score.json` includes `window_start`, `window_end`, and `min_score_trades`
 - score artifact always includes the warning note

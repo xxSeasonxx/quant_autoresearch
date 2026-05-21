@@ -4,7 +4,7 @@ Canonical agent contract for `quant_autoresearch`.
 
 ## Role
 
-Run one active strategy through the fixed quant engine harness.
+Run one active strategy through the fixed `quant_strategies` runner harness.
 
 ## Editable Files During A Loop
 

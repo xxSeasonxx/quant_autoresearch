@@ -55,12 +55,13 @@ conda run -n quant python runner.py --max-attempts 1
 Then inspect the latest attempt under `results/`:
 
 - `notes.md`
-- `screen_summary.json`
-- `validate_summary.json`
+- `summary.json`
+- `run_manifest.json`
+- `data_manifest.json`
 - `evidence.json`, if present
 
-Key fields are `passed`, `failed_gates`, `trade_count`, `gross_return`,
-`net_return`, and `cost_return`.
+Key fields are `summary.status`, `summary.engine.passed`,
+`summary.engine.trade_count`, and the evidence packet's validation report.
 
 ## Logging
 

@@ -14,7 +14,7 @@ and the keep/discard rules.
 This project already has the fixed harness shape:
 
 ```text
-strategy.py + experiment.yml -> runner.py -> quant_engine -> results/
+strategy.py + experiment.yml -> runner.py -> quant_strategies.runner -> results/
 ```
 
 The missing piece is the research-loop brief. Without it, an agent has no
@@ -86,8 +86,9 @@ conda run -n quant python runner.py --max-attempts 1
 
 ```text
 notes.md
-screen_summary.json
-validate_summary.json
+summary.json
+run_manifest.json
+data_manifest.json
 evidence.json
 ```
 

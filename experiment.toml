@@ -2,7 +2,7 @@ strategy_id = "crypto_perp_funding_crowding_reversal"
 strategy_path = "strategy.py"
 source_strategy_path = "/Users/Season_Yang/Personal/quant_strategies/untested/crypto_perp_funding_crowding_reversal.py"
 max_attempts = 24
-active_window_id = "research_2024_h1"
+active_window_id = "locked_recent_2026"
 
 [[windows]]
 id = "stress_2022_deleveraging"

@@ -48,11 +48,9 @@ end = "2026-04-13"
 kind = "crypto_perp_funding"
 symbols = [
   "ETH-PERP",
-  "SOL-PERP",
   "XRP-PERP",
   "DOGE-PERP",
   "ADA-PERP",
-  "AVAX-PERP",
   "LINK-PERP",
 ]
 strict = true

@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-PROGRAM = Path("program.md")
+ROOT = Path(__file__).resolve().parents[1]
+PROGRAM = ROOT / "program.md"
 
 
 def test_program_names_exactly_strategy_and_experiment_toml_as_loop_editable_files():
@@ -22,7 +23,13 @@ def test_program_names_exactly_strategy_and_experiment_toml_as_loop_editable_fil
 def test_program_does_not_expose_attempt_count_or_max_attempts():
     text = PROGRAM.read_text().lower()
 
-    banned_fragments = ("max_attempts", "24 attempts", "attempt budget", "run 24")
+    banned_fragments = (
+        "attempt_count",
+        "max_attempts",
+        "24 attempts",
+        "attempt budget",
+        "run 24",
+    )
     assert all(fragment not in text for fragment in banned_fragments)
 
 

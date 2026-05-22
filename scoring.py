@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -90,11 +91,14 @@ def build_score(
     raw_net_return = _as_float_or_none(screening_result.get("net_return"))
     gross_return = _as_float_or_none(screening_result.get("gross_return"))
     cost_return = _as_float_or_none(screening_result.get("cost_return"))
-    passed_validation = bool(validation_report.get("passed", True))
+    passed_validation = validation_report.get("passed") is True
     failed_gates = _failed_gate_names(validation_report.get("gates"))
 
     if trade_count is None or trade_count < min_score_trades:
         status = "insufficient_sample"
+        score = None
+    elif raw_net_return is None:
+        status = "runner_failed"
         score = None
     elif not passed_validation:
         status = "validation_failed"
@@ -170,7 +174,8 @@ def _as_float_or_none(value: object) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int | float):
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     return None
 
 

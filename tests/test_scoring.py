@@ -91,6 +91,56 @@ def test_build_score_classifies_runner_failure_without_evidence():
     assert score["trade_count"] is None
 
 
+def test_build_score_returns_runner_failed_when_net_return_is_missing_with_enough_trades():
+    malformed_evidence = evidence(trade_count=25)
+    del malformed_evidence["validation_report"]["screening_result"]["net_return"]
+
+    score = build_score(
+        summary={"stage": "completed", "assessment_status": "smoke_passed"},
+        evidence=malformed_evidence,
+        min_score_trades=20,
+        window_id="primary",
+        failure_source=None,
+    )
+
+    assert score["status"] == "runner_failed"
+    assert score["score"] is None
+    assert score["raw_net_return"] is None
+    assert score["trade_count"] == 25
+
+
+def test_build_score_fails_closed_when_validation_passed_is_not_bool():
+    malformed_evidence = evidence(net_return=0.03, trade_count=25)
+    malformed_evidence["validation_report"]["passed"] = "false"
+
+    score = build_score(
+        summary={"stage": "completed", "assessment_status": "smoke_passed"},
+        evidence=malformed_evidence,
+        min_score_trades=20,
+        window_id="primary",
+        failure_source=None,
+    )
+
+    assert score["status"] == "validation_failed"
+    assert score["score"] == 0.03
+    assert score["passed_validation"] is False
+
+
+def test_build_score_returns_runner_failed_when_net_return_is_non_finite():
+    score = build_score(
+        summary={"stage": "completed", "assessment_status": "smoke_passed"},
+        evidence=evidence(net_return=float("nan"), trade_count=25),
+        min_score_trades=20,
+        window_id="primary",
+        failure_source=None,
+    )
+
+    assert score["status"] == "runner_failed"
+    assert score["score"] is None
+    assert score["raw_net_return"] is None
+    assert score["trade_count"] == 25
+
+
 def test_classify_failure_source_maps_runner_stages_and_messages():
     assert classify_failure_source("signal_generation", "strategy execution failed") == "strategy_error"
     assert classify_failure_source("request_build", "entry fill is outside available bars") == "strategy_error"

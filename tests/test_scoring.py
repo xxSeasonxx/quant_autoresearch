@@ -35,12 +35,18 @@ def test_build_score_returns_guarded_score_when_trade_count_is_sufficient():
         min_score_trades=20,
         window_id="primary",
         failure_source=None,
+        window_start="2024-01-01",
+        window_end="2024-01-07",
+        window_days=7,
     )
 
     assert score["status"] == "scored"
     assert score["score"] == 0.03
     assert score["raw_net_return"] == 0.03
     assert score["trade_count"] == 25
+    assert score["window_start"] == "2024-01-01"
+    assert score["window_end"] == "2024-01-07"
+    assert score["window_days"] == 7
     assert score["passed_validation"] is True
     assert score["failed_gates"] == []
     assert score["notes"] == "Loop feedback only. Not market evidence."

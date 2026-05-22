@@ -50,6 +50,23 @@ def test_program_requires_quant_research_review_not_metric_chasing():
         assert phrase in text
 
 
+def test_program_allows_quant_judgment_window_changes_without_cherry_picking():
+    text = PROGRAM.read_text()
+
+    required = [
+        "Choose windows from a quant research perspective",
+        "`active_window_id`",
+        "`--window-id`",
+        "regime",
+        "sample quality",
+        "holdout/stress check",
+        "falsifier",
+        "Do not cherry-pick windows",
+    ]
+    for phrase in required:
+        assert phrase in text
+
+
 def test_program_documents_upstream_limitation_reporting():
     text = PROGRAM.read_text()
 

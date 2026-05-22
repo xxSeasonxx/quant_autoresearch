@@ -23,10 +23,23 @@ SESSION_POINTER_NAME = ".autoresearch_session.json"
 CONFIG_FAILURE_MAX_ATTEMPTS = 1
 CONFIG_FAILURE_MIN_SCORE_TRADES = 1
 CONFIG_FAILURE_WINDOW_ID = "config"
+OLD_LEDGER_HEADER = [
+    "attempt",
+    "commit",
+    "window_id",
+    "score",
+    "raw_net_return",
+    "trade_count",
+    "status",
+    "description",
+]
 LEDGER_HEADER = [
     "attempt",
     "commit",
     "window_id",
+    "window_start",
+    "window_end",
+    "window_days",
     "score",
     "raw_net_return",
     "trade_count",
@@ -82,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
 
     attempt = state.attempts_used + 1
     window_id = args.window_id or config.selected_window_id
+    window_metadata = _window_metadata(config, window_id)
     commit = current_commit()
     generated_config = results_dir / ".generated" / f"attempt_{attempt:04d}_{window_id}.toml"
     materialize_runner_toml(config, generated_config, window_id=window_id, results_dir=results_dir)
@@ -102,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         window_id=window_id,
         failure_source=failure_source,
         complexity_note="simplification" if args.simplification else "",
+        **window_metadata,
     )
 
     write_score(result_dir / "score.json", score)
@@ -113,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         description=args.description,
         generated_config=generated_config,
         failure_source=failure_source,
+        **window_metadata,
     )
 
     return _finish_attempt(
@@ -122,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         attempt=attempt,
         commit=commit,
         window_id=window_id,
+        window_metadata=window_metadata,
         result_dir=result_dir,
         description=args.description,
         simplification=args.simplification,
@@ -149,6 +166,7 @@ def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) ->
 
     attempt = state.attempts_used + 1
     window_id = args.window_id or CONFIG_FAILURE_WINDOW_ID
+    window_metadata = _empty_window_metadata()
     commit = current_commit()
     result_dir = results_dir / f"attempt_{attempt:04d}_config_failed"
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +184,7 @@ def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) ->
         window_id=window_id,
         failure_source=failure_source,
         complexity_note="simplification" if args.simplification else "",
+        **window_metadata,
     )
 
     write_score(result_dir / "score.json", score)
@@ -177,6 +196,7 @@ def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) ->
         description=args.description,
         generated_config=_rooted_path(args.config),
         failure_source=failure_source,
+        **window_metadata,
     )
 
     return _finish_attempt(
@@ -186,6 +206,7 @@ def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) ->
         attempt=attempt,
         commit=commit,
         window_id=window_id,
+        window_metadata=window_metadata,
         result_dir=result_dir,
         description=args.description,
         simplification=args.simplification,
@@ -201,6 +222,7 @@ def _finish_attempt(
     attempt: int,
     commit: str | None,
     window_id: str,
+    window_metadata: dict[str, str | int | None],
     result_dir: Path,
     description: str,
     simplification: bool,
@@ -214,6 +236,9 @@ def _finish_attempt(
         attempt=attempt,
         commit=commit,
         window_id=window_id,
+        window_start=_optional_str(window_metadata["window_start"]),
+        window_end=_optional_str(window_metadata["window_end"]),
+        window_days=_optional_int(window_metadata["window_days"]),
         score=score,
         status=decision,
         description=description,
@@ -229,6 +254,7 @@ def _finish_attempt(
                 "result_dir": str(result_dir),
                 "score": score["score"],
                 "status": next_state.status,
+                **window_metadata,
             },
             sort_keys=True,
         )
@@ -344,11 +370,14 @@ def append_ledger(
     attempt: int,
     commit: str | None,
     window_id: str,
+    window_start: str | None,
+    window_end: str | None,
+    window_days: int | None,
     score: dict[str, Any],
     status: str,
     description: str,
 ) -> None:
-    exists = path.exists()
+    exists = _ensure_ledger_schema(path)
     with path.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=LEDGER_HEADER, delimiter="\t", lineterminator="\n")
         if not exists:
@@ -358,6 +387,9 @@ def append_ledger(
                 "attempt": attempt,
                 "commit": commit or "",
                 "window_id": window_id,
+                "window_start": window_start or "",
+                "window_end": window_end or "",
+                "window_days": "" if window_days is None else window_days,
                 "score": "" if score.get("score") is None else score["score"],
                 "raw_net_return": "" if score.get("raw_net_return") is None else score["raw_net_return"],
                 "trade_count": "" if score.get("trade_count") is None else score["trade_count"],
@@ -367,12 +399,37 @@ def append_ledger(
         )
 
 
+def _ensure_ledger_schema(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        if fieldnames == LEDGER_HEADER:
+            return True
+        rows = list(reader)
+
+    if fieldnames != OLD_LEDGER_HEADER:
+        raise ValueError(f"unexpected results.tsv header: {fieldnames}")
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEDGER_HEADER, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") or "" for field in LEDGER_HEADER})
+    return True
+
+
 def write_attempt_metadata(
     path: Path,
     *,
     attempt: int,
     commit: str | None,
     window_id: str,
+    window_start: str | None,
+    window_end: str | None,
+    window_days: int | None,
     description: str,
     generated_config: Path,
     failure_source: str | None,
@@ -384,6 +441,9 @@ def write_attempt_metadata(
         "failure_source": failure_source,
         "generated_config": str(generated_config),
         "window_id": window_id,
+        "window_start": window_start,
+        "window_end": window_end,
+        "window_days": window_days,
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -410,6 +470,23 @@ def _results_dir(config: ExperimentConfig) -> Path:
     if configured.is_absolute():
         return configured
     return ROOT / configured
+
+
+def _window_metadata(config: ExperimentConfig, window_id: str) -> dict[str, str | int | None]:
+    window = config.window_by_id(window_id)
+    return {
+        "window_start": window.start,
+        "window_end": window.end,
+        "window_days": window.days,
+    }
+
+
+def _empty_window_metadata() -> dict[str, str | int | None]:
+    return {
+        "window_start": None,
+        "window_end": None,
+        "window_days": None,
+    }
 
 
 def _config_failure_results_dir() -> Path:
@@ -524,6 +601,12 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _optional_str(value: Any) -> str | None:

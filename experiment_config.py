@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 import json
 import math
 from pathlib import Path
@@ -17,6 +18,10 @@ class WindowConfig:
     id: str
     start: str
     end: str
+
+    @property
+    def days(self) -> int:
+        return _window_days(self.start, self.end, table=f"window {self.id}")
 
 
 @dataclass(frozen=True)
@@ -167,11 +172,25 @@ def _parse_windows(raw_windows: Any) -> tuple[WindowConfig, ...]:
             start=_required_str(raw_window, "start", table=f"windows[{index}]"),
             end=_required_str(raw_window, "end", table=f"windows[{index}]"),
         )
+        _window_days(window.start, window.end, table=f"windows[{index}]")
         if window.id in seen_ids:
             raise ConfigError(f"duplicate window id: {window.id}")
         seen_ids.add(window.id)
         windows.append(window)
     return tuple(windows)
+
+
+def _window_days(start: str, end: str, *, table: str) -> int:
+    try:
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end)
+    except ValueError as exc:
+        raise ConfigError(f"{table}.start and {table}.end must be YYYY-MM-DD dates") from exc
+
+    days = (end_date - start_date).days + 1
+    if days <= 0:
+        raise ConfigError(f"{table}.end must be on or after {table}.start")
+    return days
 
 
 def _parse_scoring(raw_scoring: dict[str, Any]) -> ScoringConfig:

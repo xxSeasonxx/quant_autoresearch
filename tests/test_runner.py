@@ -20,6 +20,12 @@ class FakeRunResult:
     promotion_eligible: bool = False
 
 
+LEDGER_HEADER = (
+    "attempt\tcommit\twindow_id\twindow_start\twindow_end\twindow_days\t"
+    "score\traw_net_return\ttrade_count\tstatus\tdescription"
+)
+
+
 def write_experiment(root: Path, *, max_attempts: int = 2, results_dir: str = "results") -> None:
     (root / "experiment.toml").write_text(
         f'''
@@ -32,6 +38,11 @@ active_window_id = "primary"
 id = "primary"
 start = "2024-01-01"
 end = "2024-01-31"
+
+[[windows]]
+id = "holdout"
+start = "2024-02-01"
+end = "2024-02-10"
 
 [data]
 kind = "bars"
@@ -129,10 +140,57 @@ def test_main_runs_one_attempt_writes_score_state_and_ledger(tmp_path: Path, mon
     assert state["best_score"] == 0.05
     assert state["last_decision"] == "keep"
     ledger = (tmp_path / "results.tsv").read_text()
-    assert "attempt\tcommit\twindow_id\tscore\traw_net_return\ttrade_count\tstatus\tdescription" in ledger
+    assert LEDGER_HEADER in ledger
     assert "baseline" in ledger
+    rows = list(csv.DictReader(ledger.splitlines(), delimiter="\t"))
+    assert rows[0]["window_id"] == "primary"
+    assert rows[0]["window_start"] == "2024-01-01"
+    assert rows[0]["window_end"] == "2024-01-31"
+    assert rows[0]["window_days"] == "31"
     score_files = list((tmp_path / "results").glob("attempt_0_05/score.json"))
     assert len(score_files) == 1
+    score = json.loads(score_files[0].read_text())
+    assert score["window_start"] == "2024-01-01"
+    assert score["window_end"] == "2024-01-31"
+    assert score["window_days"] == 31
+
+
+def test_main_records_explicit_window_metadata(tmp_path: Path, monkeypatch, capsys):
+    write_experiment(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        generated = config_path.read_text()
+        assert 'start = "2024-02-01"' in generated
+        assert 'end = "2024-02-10"' in generated
+        return fake_success_run(tmp_path / "results", net_return=0.05)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--window-id", "holdout", "--description", "holdout check"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["window_start"] == "2024-02-01"
+    assert output["window_end"] == "2024-02-10"
+    assert output["window_days"] == 10
+    attempt_dir = tmp_path / "results" / "attempt_0_05"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    metadata = json.loads((attempt_dir / "attempt_metadata.json").read_text())
+    assert score["window_id"] == "holdout"
+    assert score["window_start"] == "2024-02-01"
+    assert score["window_end"] == "2024-02-10"
+    assert score["window_days"] == 10
+    assert metadata["window_id"] == "holdout"
+    assert metadata["window_start"] == "2024-02-01"
+    assert metadata["window_end"] == "2024-02-10"
+    assert metadata["window_days"] == 10
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert rows[0]["window_id"] == "holdout"
+    assert rows[0]["window_start"] == "2024-02-01"
+    assert rows[0]["window_end"] == "2024-02-10"
+    assert rows[0]["window_days"] == "10"
 
 
 def test_main_marks_non_improving_attempt_discard_but_consumes_budget(tmp_path: Path, monkeypatch):
@@ -218,7 +276,13 @@ def test_main_writes_failure_artifacts_when_run_config_has_no_result_dir(tmp_pat
     assert score["status"] == "runner_failed"
     assert score["score"] is None
     assert score["failure_source"] == "config_error"
+    assert score["window_start"] == "2024-01-01"
+    assert score["window_end"] == "2024-01-31"
+    assert score["window_days"] == 31
     assert metadata["failure_source"] == "config_error"
+    assert metadata["window_start"] == "2024-01-01"
+    assert metadata["window_end"] == "2024-01-31"
+    assert metadata["window_days"] == 31
     assert state["attempts_used"] == 1
     assert state["last_decision"] == "discard"
     assert "\tdiscard\tbad config" in ledger
@@ -246,7 +310,13 @@ def test_main_writes_failure_artifacts_for_invalid_local_config(tmp_path: Path, 
     assert state["remaining_attempts"] == 0
     assert state["status"] == "exhausted"
     assert state["last_decision"] == "discard"
-    assert "\tconfig\t\t\t\tdiscard\tbroken local config" in ledger
+    rows = list(csv.DictReader(ledger.splitlines(), delimiter="\t"))
+    assert rows[0]["window_id"] == "config"
+    assert rows[0]["window_start"] == ""
+    assert rows[0]["window_end"] == ""
+    assert rows[0]["window_days"] == ""
+    assert rows[0]["status"] == "discard"
+    assert rows[0]["description"] == "broken local config"
 
 
 def test_new_invalid_local_config_session_ignores_max_attempts_override(
@@ -267,6 +337,9 @@ def test_new_invalid_local_config_session_ignores_max_attempts_override(
     assert state["status"] == "exhausted"
     assert output["max_attempts"] == 1
     assert output["remaining_attempts"] == 0
+    assert output["window_start"] is None
+    assert output["window_end"] is None
+    assert output["window_days"] is None
 
 
 def test_main_writes_failure_artifacts_for_unreadable_local_config(tmp_path: Path, monkeypatch):
@@ -410,6 +483,32 @@ def test_ledger_sanitizes_newlines_in_description(tmp_path: Path, monkeypatch):
     rows = list(csv.DictReader(ledger_text.splitlines(), delimiter="\t"))
     assert len(ledger_text.splitlines()) == 2
     assert rows[0]["description"] == "line one line two line three"
+
+
+def test_ledger_upgrades_old_header_when_appending(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path)
+    (tmp_path / "results.tsv").write_text(
+        "attempt\tcommit\twindow_id\tscore\traw_net_return\ttrade_count\tstatus\tdescription\n"
+        "0\told123\tprimary\t0.01\t0.01\t3\tkeep\tlegacy row\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(runner_module, "run_config", fake_success_run(tmp_path / "results", net_return=0.05))
+
+    assert main(["--description", "new row"]) == 0
+
+    ledger_text = (tmp_path / "results.tsv").read_text()
+    assert ledger_text.splitlines()[0] == LEDGER_HEADER
+    rows = list(csv.DictReader(ledger_text.splitlines(), delimiter="\t"))
+    assert rows[0]["description"] == "legacy row"
+    assert rows[0]["window_start"] == ""
+    assert rows[0]["window_end"] == ""
+    assert rows[0]["window_days"] == ""
+    assert rows[1]["description"] == "new row"
+    assert rows[1]["window_start"] == "2024-01-01"
+    assert rows[1]["window_end"] == "2024-01-31"
+    assert rows[1]["window_days"] == "31"
 
 
 def test_smoke_attempt_uses_real_default_strategy_file_without_live_quant_data(

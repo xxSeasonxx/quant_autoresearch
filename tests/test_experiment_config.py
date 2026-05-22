@@ -68,6 +68,8 @@ def test_load_experiment_config_parses_windows_and_scoring(tmp_path: Path):
     assert config.max_attempts == 3
     assert [window.id for window in config.windows] == ["primary", "holdout"]
     assert config.active_window_id == "primary"
+    assert config.window_by_id("primary").days == 31
+    assert config.window_by_id("holdout").days == 29
     assert config.scoring.metric == "net_return"
     assert config.scoring.min_score_trades == 5
 
@@ -108,6 +110,13 @@ def test_load_experiment_config_rejects_unknown_active_window(tmp_path: Path):
     bad = VALID_TOML.replace('active_window_id = "primary"', 'active_window_id = "missing"')
 
     with pytest.raises(ConfigError, match="active_window_id"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
+def test_load_experiment_config_rejects_invalid_window_dates(tmp_path: Path):
+    bad = VALID_TOML.replace('end = "2024-01-31"', 'end = "2023-12-31"', 1)
+
+    with pytest.raises(ConfigError, match="on or after"):
         load_experiment_config(write_config(tmp_path, bad))
 
 

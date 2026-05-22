@@ -52,6 +52,7 @@ class _SymbolRows:
         "closes_by_timestamp",
         "conflicting_close_timestamps",
         "funding_event_rows",
+        "latest_timestamp",
     )
 
     def __init__(
@@ -61,11 +62,13 @@ class _SymbolRows:
         closes_by_timestamp: dict[datetime, float],
         conflicting_close_timestamps: frozenset[datetime],
         funding_event_rows: tuple[tuple[datetime, datetime, float], ...],
+        latest_timestamp: datetime,
     ) -> None:
         self.timestamps = timestamps
         self.closes_by_timestamp = closes_by_timestamp
         self.conflicting_close_timestamps = conflicting_close_timestamps
         self.funding_event_rows = funding_event_rows
+        self.latest_timestamp = latest_timestamp
 
 
 def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, object]) -> list[dict[str, object]]:
@@ -85,6 +88,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("include_negative_funding_longs", True),
         "include_negative_funding_longs",
     )
+    require_exit_horizon = _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
     weight = float(params.get("weight", 1.0))
     hold_bars = int(params.get("hold_bars", params.get("hold_minutes", 480)))
 
@@ -109,6 +113,13 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         if len(candidates) < min_cross_section:
             continue
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
+        candidates = _filter_exit_horizon(
+            candidates,
+            rows_by_symbol,
+            decision_time,
+            hold_bars,
+            require_exit_horizon,
+        )
 
         positive_tail = [
             candidate
@@ -218,8 +229,29 @@ def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRo
             closes_by_timestamp=closes_by_timestamp,
             conflicting_close_timestamps=frozenset(conflicting_close_timestamps),
             funding_event_rows=tuple(funding_event_rows),
+            latest_timestamp=timestamps[-1],
         )
     return indexed
+
+
+def _filter_exit_horizon(
+    candidates: list[dict[str, Any]],
+    rows_by_symbol: dict[str, _SymbolRows],
+    decision_time: datetime,
+    hold_bars: int,
+    require_exit_horizon: bool,
+) -> list[dict[str, Any]]:
+    if not require_exit_horizon:
+        return candidates
+    return [
+        candidate
+        for candidate in candidates
+        if _has_exit_horizon(rows_by_symbol[candidate["symbol"]], decision_time, hold_bars)
+    ]
+
+
+def _has_exit_horizon(rows: _SymbolRows, decision_time: datetime, hold_bars: int) -> bool:
+    return decision_time + timedelta(minutes=hold_bars) <= rows.latest_timestamp
 
 
 def _decision_candidates(

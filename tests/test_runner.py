@@ -249,6 +249,26 @@ def test_main_writes_failure_artifacts_for_invalid_local_config(tmp_path: Path, 
     assert "\tconfig\t\t\t\tdiscard\tbroken local config" in ledger
 
 
+def test_new_invalid_local_config_session_ignores_max_attempts_override(
+    tmp_path: Path, monkeypatch, capsys
+):
+    (tmp_path / "experiment.toml").write_text("max_attempts = \n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    assert main(["--description", "broken local config", "--max-attempts", "3"]) == 0
+
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    output = json.loads(capsys.readouterr().out)
+    assert state["max_attempts"] == 1
+    assert state["attempts_used"] == 1
+    assert state["remaining_attempts"] == 0
+    assert state["status"] == "exhausted"
+    assert output["max_attempts"] == 1
+    assert output["remaining_attempts"] == 0
+
+
 def test_main_writes_failure_artifacts_for_unreadable_local_config(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runner_module, "ROOT", tmp_path)

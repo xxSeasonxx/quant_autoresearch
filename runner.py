@@ -135,7 +135,7 @@ def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) ->
     state = load_session_state(
         state_path,
         config=None,
-        max_attempts_override=args.max_attempts,
+        max_attempts_override=None,
         fallback_max_attempts=CONFIG_FAILURE_MAX_ATTEMPTS,
     )
     ignored_max_attempts_override = _ignored_max_attempts_override(

@@ -25,6 +25,7 @@ symbols = [
   "DOGE-PERP",
   "ADA-PERP",
   "AVAX-PERP",
+  "LINK-PERP",
 ]
 strict = true
 

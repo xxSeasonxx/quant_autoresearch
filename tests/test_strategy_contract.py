@@ -7,6 +7,8 @@ from pathlib import Path
 import strategy
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
 REQUIRED_DOCSTRING_HEADINGS = (
     "Source / provenance:",
     "Market rationale:",
@@ -43,7 +45,7 @@ def crypto_rows() -> list[dict[str, object]]:
 
 
 def test_strategy_docstring_matches_quant_strategies_shape():
-    docstring = ast.get_docstring(ast.parse(Path("strategy.py").read_text())) or ""
+    docstring = ast.get_docstring(ast.parse((ROOT / "strategy.py").read_text())) or ""
 
     for heading in REQUIRED_DOCSTRING_HEADINGS:
         assert heading in docstring
@@ -70,9 +72,16 @@ def test_strategy_generates_quant_strategies_signal_shape():
         },
     )
 
-    assert signals
-    first = signals[0]
-    assert set(first).issuperset({"symbol", "decision_time", "as_of_time", "side", "weight", "hold_bars"})
-    assert first["side"] in {"long", "short"}
-    assert first["weight"] == 0.25
-    assert first["hold_bars"] == 1
+    assert [(signal["symbol"], signal["side"]) for signal in signals] == [
+        ("BTC-PERP", "short"),
+        ("SOL-PERP", "long"),
+    ]
+
+    required_keys = {"symbol", "decision_time", "as_of_time", "side", "weight", "hold_bars"}
+    for signal in signals:
+        assert set(signal).issuperset(required_keys)
+        assert signal["decision_time"] is not None
+        assert signal["as_of_time"] is not None
+        assert signal["side"] in {"long", "short"}
+        assert signal["weight"] == 0.25
+        assert signal["hold_bars"] == 1

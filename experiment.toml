@@ -30,7 +30,7 @@ strict = true
 
 [params]
 funding_lookback_events = 5
-return_lookback_minutes = 480
+return_lookback_minutes = 240
 decision_interval_minutes = 480
 decision_lag_minutes = 1
 top_n = 3

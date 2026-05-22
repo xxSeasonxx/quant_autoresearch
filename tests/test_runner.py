@@ -247,3 +247,27 @@ def test_ledger_sanitizes_newlines_in_description(tmp_path: Path, monkeypatch):
     rows = list(csv.DictReader(ledger_text.splitlines(), delimiter="\t"))
     assert len(ledger_text.splitlines()) == 2
     assert rows[0]["description"] == "line one line two line three"
+
+
+def test_smoke_attempt_uses_real_default_strategy_file_without_live_quant_data(
+    tmp_path: Path, monkeypatch
+):
+    write_experiment(tmp_path, max_attempts=1)
+    source_strategy = Path(__file__).resolve().parents[1] / "strategy.py"
+    (tmp_path / "strategy.py").write_text(source_strategy.read_text())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(
+        runner_module,
+        "run_config",
+        fake_success_run(tmp_path / "results", net_return=0.02, trade_count=5),
+    )
+
+    exit_code = main(["--description", "strategy compatibility smoke"])
+
+    assert exit_code == 0
+    score_path = next((tmp_path / "results").glob("attempt_0_02/score.json"))
+    score = json.loads(score_path.read_text())
+    assert score["status"] == "scored"
+    assert score["score"] == 0.02

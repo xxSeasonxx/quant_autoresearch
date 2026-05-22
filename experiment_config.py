@@ -91,6 +91,15 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     if output_mode not in {"screen", "validate"}:
         raise ConfigError("output.mode must be screen or validate")
 
+    for table_name, table in (
+        ("data", data),
+        ("params", params),
+        ("fill_model", fill_model),
+        ("cost_model", cost_model),
+        ("output", output),
+    ):
+        _validate_finite_numbers(table_name, table)
+
     return ExperimentConfig(
         strategy_id=strategy_id,
         strategy_path=strategy_path,
@@ -214,6 +223,8 @@ def _required_number(raw: dict[str, Any], key: str, *, table: str | None = None)
     value = raw.get(key)
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ConfigError(f"missing required numeric field: {_field_name(key, table)}")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigError(f"{_field_name(key, table)} must be finite")
     return value
 
 
@@ -221,6 +232,24 @@ def _field_name(key: str, table: str | None) -> str:
     if table is None:
         return key
     return f"{table}.{key}"
+
+
+def _validate_finite_numbers(path: str, value: Any) -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ConfigError(f"{path} contains non-finite numeric value")
+        return
+    if isinstance(value, int):
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            _validate_finite_numbers(f"{path}.{key}", nested)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _validate_finite_numbers(f"{path}[{index}]", nested)
 
 
 def _format_table(name: str, values: dict[str, Any]) -> str:

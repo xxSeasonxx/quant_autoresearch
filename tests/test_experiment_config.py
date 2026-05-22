@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -117,6 +118,13 @@ def test_load_experiment_config_rejects_non_net_return_metric(tmp_path: Path):
         load_experiment_config(write_config(tmp_path, bad))
 
 
+def test_load_experiment_config_rejects_non_finite_numbers(tmp_path: Path):
+    bad = VALID_TOML.replace("weight = 1.0", "weight = nan")
+
+    with pytest.raises(ConfigError, match="finite|non-finite"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
 def test_materialize_runner_toml_uses_selected_window_dates(tmp_path: Path):
     config = load_experiment_config(write_config(tmp_path))
     generated = tmp_path / "results" / ".generated" / "attempt_0001_primary.toml"
@@ -124,9 +132,28 @@ def test_materialize_runner_toml_uses_selected_window_dates(tmp_path: Path):
     materialize_runner_toml(config, generated, window_id="holdout", results_dir=Path("results"))
 
     text = generated.read_text()
+    parsed = tomllib.loads(text)
+
     assert 'strategy_path = "strategy.py"' in text
     assert 'strategy_id = "demo_strategy"' in text
     assert 'start = "2024-02-01"' in text
     assert 'end = "2024-02-29"' in text
     assert 'results_dir = "results"' in text
     assert 'dataset = "equity_1min"' in text
+    assert parsed["strategy_path"] == "strategy.py"
+    assert parsed["strategy_id"] == "demo_strategy"
+    assert parsed["data"]["kind"] == "bars"
+    assert parsed["data"]["dataset"] == "equity_1min"
+    assert parsed["data"]["symbols"] == ["SPY"]
+    assert parsed["data"]["strict"] is True
+    assert parsed["data"]["start"] == "2024-02-01"
+    assert parsed["data"]["end"] == "2024-02-29"
+    assert parsed["params"]["weight"] == 1.0
+    assert parsed["params"]["hold_bars"] == 2
+    assert parsed["fill_model"]["price"] == "close"
+    assert parsed["fill_model"]["entry_lag_bars"] == 1
+    assert parsed["fill_model"]["exit_lag_bars"] == 0
+    assert parsed["cost_model"]["fee_bps_per_side"] == 1.0
+    assert parsed["cost_model"]["slippage_bps_per_side"] == 2.0
+    assert parsed["output"]["results_dir"] == "results"
+    assert parsed["output"]["mode"] == "validate"

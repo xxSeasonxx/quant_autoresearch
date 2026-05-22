@@ -118,6 +118,17 @@ def test_load_experiment_config_rejects_non_net_return_metric(tmp_path: Path):
         load_experiment_config(write_config(tmp_path, bad))
 
 
+@pytest.mark.parametrize("min_score_trades", [0, -1])
+def test_load_experiment_config_rejects_non_positive_min_score_trades(
+    tmp_path: Path,
+    min_score_trades: int,
+):
+    bad = VALID_TOML.replace("min_score_trades = 5", f"min_score_trades = {min_score_trades}")
+
+    with pytest.raises(ConfigError, match="min_score_trades|positive"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
 def test_load_experiment_config_rejects_non_finite_numbers(tmp_path: Path):
     bad = VALID_TOML.replace("weight = 1.0", "weight = nan")
 

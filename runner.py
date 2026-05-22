@@ -75,8 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     if result_dir is None:
         result_dir = results_dir / f"attempt_{attempt:04d}_config_failed"
         result_dir.mkdir(parents=True, exist_ok=True)
-    summary = load_json(result_dir / "summary.json") if result_dir is not None else None
-    evidence = load_json(result_dir / "evidence.json") if result_dir is not None else None
+    summary, evidence = _load_artifacts(result_dir, result_message=getattr(result, "message", None))
     if result.result_dir is None:
         summary = {"stage": "config", "message": getattr(result, "message", None)}
     failure_source = _failure_source(summary, evidence, getattr(result, "message", None))
@@ -300,6 +299,51 @@ def _failure_source(
     stage = _optional_str(summary.get("stage")) if summary is not None else None
     message = _optional_str(summary.get("message")) if summary is not None else None
     return classify_failure_source(stage, message or result_message)
+
+
+def _load_artifacts(
+    result_dir: Path,
+    *,
+    result_message: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    try:
+        summary = load_json(result_dir / "summary.json")
+    except ValueError as exc:
+        return _artifact_failure_summary("summary.json", exc, result_message), None
+
+    try:
+        evidence = load_json(result_dir / "evidence.json")
+    except ValueError as exc:
+        if summary is None:
+            summary = _artifact_failure_summary("evidence.json", exc, result_message)
+        else:
+            summary = dict(summary)
+            summary["message"] = _artifact_failure_message("evidence.json", exc, result_message)
+        return summary, None
+
+    return summary, evidence
+
+
+def _artifact_failure_summary(
+    artifact_name: str,
+    error: ValueError,
+    result_message: str | None,
+) -> dict[str, str]:
+    return {
+        "stage": "engine_evaluation",
+        "message": _artifact_failure_message(artifact_name, error, result_message),
+    }
+
+
+def _artifact_failure_message(
+    artifact_name: str,
+    error: ValueError,
+    result_message: str | None,
+) -> str:
+    message = f"malformed {artifact_name}: {error}"
+    if result_message:
+        return f"{message}; {result_message}"
+    return message
 
 
 def _numeric_score(value: Any) -> float | None:

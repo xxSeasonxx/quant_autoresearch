@@ -100,6 +100,19 @@ def fake_config_failure_run():
     return _run_config
 
 
+def fake_malformed_evidence_run(result_root: Path):
+    def _run_config(config_path: Path, *, repo_root: Path):
+        attempt_dir = result_root / "attempt_bad_evidence"
+        attempt_dir.mkdir(parents=True)
+        (attempt_dir / "summary.json").write_text(
+            json.dumps({"stage": "completed", "assessment_status": "smoke_passed"}) + "\n"
+        )
+        (attempt_dir / "evidence.json").write_text("{invalid json\n")
+        return FakeRunResult(False, attempt_dir, attempt_dir / "notes.md", "malformed evidence")
+
+    return _run_config
+
+
 def test_main_runs_one_attempt_writes_score_state_and_ledger(tmp_path: Path, monkeypatch):
     write_experiment(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -208,6 +221,34 @@ def test_main_writes_failure_artifacts_when_run_config_has_no_result_dir(tmp_pat
     assert state["attempts_used"] == 1
     assert state["last_decision"] == "discard"
     assert "\tdiscard\tbad config" in ledger
+
+
+def test_main_writes_failure_artifacts_for_malformed_evidence_json(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(
+        runner_module,
+        "run_config",
+        fake_malformed_evidence_run(tmp_path / "results"),
+    )
+
+    assert main(["--description", "bad evidence"]) == 0
+
+    attempt_dir = tmp_path / "results" / "attempt_bad_evidence"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    metadata = json.loads((attempt_dir / "attempt_metadata.json").read_text())
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    ledger = (tmp_path / "results.tsv").read_text()
+
+    assert score["status"] == "runner_failed"
+    assert score["score"] is None
+    assert score["failure_source"] == "quant_strategies_error"
+    assert metadata["failure_source"] == "quant_strategies_error"
+    assert state["attempts_used"] == 1
+    assert state["last_decision"] == "discard"
+    assert "\tdiscard\tbad evidence" in ledger
 
 
 def test_existing_session_preserves_max_attempts_when_override_differs(

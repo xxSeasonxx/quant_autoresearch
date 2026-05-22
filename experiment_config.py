@@ -176,7 +176,7 @@ def _parse_scoring(raw_scoring: dict[str, Any]) -> ScoringConfig:
     metric = _required_str(raw_scoring, "metric", table="scoring")
     if metric != "net_return":
         raise ConfigError("scoring.metric must be net_return")
-    min_score_trades = _required_int(raw_scoring, "min_score_trades", table="scoring")
+    min_score_trades = _required_positive_int(raw_scoring, "min_score_trades", table="scoring")
     return ScoringConfig(metric=metric, min_score_trades=min_score_trades)
 
 
@@ -205,10 +205,10 @@ def _optional_str(raw: dict[str, Any], key: str) -> str | None:
     return value
 
 
-def _required_positive_int(raw: dict[str, Any], key: str) -> int:
-    value = _required_int(raw, key)
+def _required_positive_int(raw: dict[str, Any], key: str, *, table: str | None = None) -> int:
+    value = _required_int(raw, key, table=table)
     if value <= 0:
-        raise ConfigError(f"{key} must be a positive integer")
+        raise ConfigError(f"{_field_name(key, table)} must be a positive integer")
     return value
 
 

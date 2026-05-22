@@ -61,6 +61,7 @@ def build_score(
     window_start: str | None = None,
     window_end: str | None = None,
     window_days: int | None = None,
+    symbol_count: int | None = None,
 ) -> dict[str, Any]:
     if evidence is None:
         source = failure_source
@@ -81,6 +82,7 @@ def build_score(
             window_start=window_start,
             window_end=window_end,
             window_days=window_days,
+            symbol_count=symbol_count,
             passed_validation=False,
             failed_gates=[],
             failure_source=source,
@@ -129,6 +131,7 @@ def build_score(
         window_start=window_start,
         window_end=window_end,
         window_days=window_days,
+        symbol_count=symbol_count,
         passed_validation=passed_validation,
         failed_gates=failed_gates,
         failure_source=failure_source,
@@ -149,6 +152,7 @@ def _payload(
     window_start: str | None,
     window_end: str | None,
     window_days: int | None,
+    symbol_count: int | None,
     passed_validation: bool,
     failed_gates: list[str],
     failure_source: str | None,
@@ -167,6 +171,7 @@ def _payload(
         "window_start": window_start,
         "window_end": window_end,
         "window_days": window_days,
+        "symbol_count": symbol_count,
         "passed_validation": passed_validation,
         "failed_gates": failed_gates,
         "failure_source": failure_source,

@@ -21,7 +21,8 @@ experiment_config.py
 Strategy execution is delegated to `quant_strategies.runner.run_config`.
 Generated attempt artifacts live under ignored `results/`, and the append-only
 attempt ledger is ignored as `results.tsv`. The ledger is runner-owned and
-includes the evaluated window id, start, end, and day count for each attempt.
+includes the evaluated window id, start, end, day count, and symbol count for
+each attempt.
 
 Runner file contracts:
 

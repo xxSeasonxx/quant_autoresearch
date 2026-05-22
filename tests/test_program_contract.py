@@ -67,6 +67,24 @@ def test_program_allows_quant_judgment_window_changes_without_cherry_picking():
         assert phrase in text
 
 
+def test_program_allows_quant_perspective_symbol_changes_without_cherry_picking():
+    text = PROGRAM.read_text()
+
+    required = [
+        "Choose symbols from a quant research perspective",
+        "symbol universe",
+        "liquidity",
+        "data coverage",
+        "market structure",
+        "representative breadth",
+        "falsifier",
+        "Do not cherry-pick",
+        "symbols just to rescue",
+    ]
+    for phrase in required:
+        assert phrase in text
+
+
 def test_program_documents_upstream_limitation_reporting():
     text = PROGRAM.read_text()
 

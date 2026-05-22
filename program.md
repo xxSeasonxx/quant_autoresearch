@@ -44,6 +44,11 @@ Choose windows from a quant research perspective. You may change
 holdout/stress check, or a falsifier. Do not cherry-pick windows just to rescue
 the last score.
 
+Choose symbols from a quant research perspective. You may edit the configured
+symbol universe when there is a research reason: liquidity, data coverage,
+market structure, representative breadth, or a falsifier. Do not cherry-pick
+symbols just to rescue the last score.
+
 **What you CAN do:**
 
 - Modify `strategy.py`.

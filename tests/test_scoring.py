@@ -38,6 +38,7 @@ def test_build_score_returns_guarded_score_when_trade_count_is_sufficient():
         window_start="2024-01-01",
         window_end="2024-01-07",
         window_days=7,
+        symbol_count=8,
     )
 
     assert score["status"] == "scored"
@@ -47,6 +48,7 @@ def test_build_score_returns_guarded_score_when_trade_count_is_sufficient():
     assert score["window_start"] == "2024-01-01"
     assert score["window_end"] == "2024-01-07"
     assert score["window_days"] == 7
+    assert score["symbol_count"] == 8
     assert score["passed_validation"] is True
     assert score["failed_gates"] == []
     assert score["notes"] == "Loop feedback only. Not market evidence."

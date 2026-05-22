@@ -8,12 +8,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from experiment_config import ExperimentConfig, load_experiment_config, materialize_runner_toml
+from experiment_config import (
+    ConfigError,
+    ExperimentConfig,
+    load_experiment_config,
+    materialize_runner_toml,
+)
 from quant_strategies.runner import run_config
 from scoring import build_score, classify_failure_source, load_json, write_score
 
 
 ROOT = Path(__file__).resolve().parent
+CONFIG_FAILURE_MAX_ATTEMPTS = 1
+CONFIG_FAILURE_MIN_SCORE_TRADES = 1
+CONFIG_FAILURE_WINDOW_ID = "config"
 LEDGER_HEADER = [
     "attempt",
     "commit",
@@ -49,17 +57,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--simplification", action="store_true")
     args = parser.parse_args(argv)
 
-    config = load_experiment_config(_rooted_path(args.config))
+    try:
+        config = load_experiment_config(_rooted_path(args.config))
+    except ConfigError as exc:
+        return _record_config_load_failure(args, exc)
+
     results_dir = _results_dir(config)
     state_path = results_dir / "session_state.json"
-    state = load_session_state(state_path, config=config, max_attempts_override=args.max_attempts)
-    ignored_max_attempts_override = None
-    if (
-        state_path.exists()
-        and args.max_attempts is not None
-        and args.max_attempts != state.max_attempts
-    ):
-        ignored_max_attempts_override = args.max_attempts
+    state = load_session_state(
+        state_path,
+        config=config,
+        max_attempts_override=args.max_attempts,
+    )
+    ignored_max_attempts_override = _ignored_max_attempts_override(
+        state_path,
+        state=state,
+        max_attempts_override=args.max_attempts,
+    )
     if state.remaining_attempts <= 0:
         print("session exhausted")
         return 2
@@ -99,7 +113,98 @@ def main(argv: list[str] | None = None) -> int:
         failure_source=failure_source,
     )
 
-    decision = decision_for_score(score, state=state, simplification=args.simplification)
+    return _finish_attempt(
+        state_path=state_path,
+        state=state,
+        score=score,
+        attempt=attempt,
+        commit=commit,
+        window_id=window_id,
+        result_dir=result_dir,
+        description=args.description,
+        simplification=args.simplification,
+        ignored_max_attempts_override=ignored_max_attempts_override,
+    )
+
+
+def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) -> int:
+    results_dir = ROOT / "results"
+    state_path = results_dir / "session_state.json"
+    state = load_session_state(
+        state_path,
+        config=None,
+        max_attempts_override=args.max_attempts,
+        fallback_max_attempts=CONFIG_FAILURE_MAX_ATTEMPTS,
+    )
+    ignored_max_attempts_override = _ignored_max_attempts_override(
+        state_path,
+        state=state,
+        max_attempts_override=args.max_attempts,
+    )
+    if state.remaining_attempts <= 0:
+        print("session exhausted")
+        return 2
+
+    attempt = state.attempts_used + 1
+    window_id = args.window_id or CONFIG_FAILURE_WINDOW_ID
+    commit = current_commit()
+    result_dir = results_dir / f"attempt_{attempt:04d}_config_failed"
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = {"stage": "config_load", "message": str(error)}
+    (result_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    failure_source = classify_failure_source("config_load", str(error))
+    score = build_score(
+        summary=summary,
+        evidence=None,
+        min_score_trades=CONFIG_FAILURE_MIN_SCORE_TRADES,
+        window_id=window_id,
+        failure_source=failure_source,
+        complexity_note="simplification" if args.simplification else "",
+    )
+
+    write_score(result_dir / "score.json", score)
+    write_attempt_metadata(
+        result_dir / "attempt_metadata.json",
+        attempt=attempt,
+        commit=commit,
+        window_id=window_id,
+        description=args.description,
+        generated_config=_rooted_path(args.config),
+        failure_source=failure_source,
+    )
+
+    return _finish_attempt(
+        state_path=state_path,
+        state=state,
+        score=score,
+        attempt=attempt,
+        commit=commit,
+        window_id=window_id,
+        result_dir=result_dir,
+        description=args.description,
+        simplification=args.simplification,
+        ignored_max_attempts_override=ignored_max_attempts_override,
+    )
+
+
+def _finish_attempt(
+    *,
+    state_path: Path,
+    state: SessionState,
+    score: dict[str, Any],
+    attempt: int,
+    commit: str | None,
+    window_id: str,
+    result_dir: Path,
+    description: str,
+    simplification: bool,
+    ignored_max_attempts_override: int | None,
+) -> int:
+    decision = decision_for_score(score, state=state, simplification=simplification)
     next_state = update_state(state, score=score, commit=commit, decision=decision)
     save_session_state(state_path, next_state)
     append_ledger(
@@ -109,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         window_id=window_id,
         score=score,
         status=decision,
-        description=args.description,
+        description=description,
     )
     print(
         json.dumps(
@@ -132,11 +237,19 @@ def main(argv: list[str] | None = None) -> int:
 def load_session_state(
     path: Path,
     *,
-    config: ExperimentConfig,
+    config: ExperimentConfig | None,
     max_attempts_override: int | None,
+    fallback_max_attempts: int | None = None,
 ) -> SessionState:
     if not path.exists():
-        max_attempts = config.max_attempts if max_attempts_override is None else max_attempts_override
+        if max_attempts_override is not None:
+            max_attempts = max_attempts_override
+        elif config is not None:
+            max_attempts = config.max_attempts
+        elif fallback_max_attempts is not None:
+            max_attempts = fallback_max_attempts
+        else:
+            raise ValueError("missing max attempts source for new session")
         return SessionState(
             max_attempts=max_attempts,
             attempts_used=0,
@@ -154,6 +267,21 @@ def load_session_state(
         status=str(payload["status"]),
         last_decision=_optional_str(payload.get("last_decision")),
     )
+
+
+def _ignored_max_attempts_override(
+    path: Path,
+    *,
+    state: SessionState,
+    max_attempts_override: int | None,
+) -> int | None:
+    if (
+        path.exists()
+        and max_attempts_override is not None
+        and max_attempts_override != state.max_attempts
+    ):
+        return max_attempts_override
+    return None
 
 
 def save_session_state(path: Path, state: SessionState) -> None:

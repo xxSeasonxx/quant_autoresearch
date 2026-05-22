@@ -40,7 +40,11 @@ def classify_failure_source(stage: str | None, message: str | None) -> str | Non
         return "config_error"
     if normalized_stage in {"strategy_import", "signal_generation", "request_build"}:
         return "strategy_error"
-    if normalized_stage in {"data_load", "data_readiness"}:
+    if normalized_stage == "data_load":
+        return "quant_data_error"
+    if normalized_stage == "data_readiness":
+        if _looks_strategy_caused_readiness_failure(normalized_message):
+            return "strategy_error"
         return "quant_data_error"
     if normalized_stage == "engine_evaluation":
         return "quant_strategies_error"
@@ -189,3 +193,17 @@ def _as_int_or_none(value: object) -> int | None:
 
 def _as_str_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _looks_strategy_caused_readiness_failure(message: str) -> bool:
+    strategy_markers = (
+        "emitted signal",
+        "signal timing",
+        "as_of_time",
+        "as-of row",
+        "as_of row",
+        "decision time",
+        "decision timestamp",
+        "outside available",
+    )
+    return any(marker in message for marker in strategy_markers)

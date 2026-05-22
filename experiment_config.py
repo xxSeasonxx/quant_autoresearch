@@ -60,6 +60,8 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     try:
         with config_path.open("rb") as file:
             raw = tomllib.load(file)
+    except OSError as exc:
+        raise ConfigError(f"could not read {config_path}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"invalid TOML in {config_path}: {exc}") from exc
 

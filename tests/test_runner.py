@@ -223,6 +223,56 @@ def test_main_writes_failure_artifacts_when_run_config_has_no_result_dir(tmp_pat
     assert "\tdiscard\tbad config" in ledger
 
 
+def test_main_writes_failure_artifacts_for_invalid_local_config(tmp_path: Path, monkeypatch):
+    (tmp_path / "experiment.toml").write_text("max_attempts = \n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    assert main(["--description", "broken local config"]) == 0
+
+    attempt_dir = tmp_path / "results" / "attempt_0001_config_failed"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    metadata = json.loads((attempt_dir / "attempt_metadata.json").read_text())
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    ledger = (tmp_path / "results.tsv").read_text()
+
+    assert score["status"] == "runner_failed"
+    assert score["score"] is None
+    assert score["failure_source"] == "config_error"
+    assert metadata["failure_source"] == "config_error"
+    assert state["attempts_used"] == 1
+    assert state["remaining_attempts"] == 0
+    assert state["status"] == "exhausted"
+    assert state["last_decision"] == "discard"
+    assert "\tconfig\t\t\t\tdiscard\tbroken local config" in ledger
+
+
+def test_invalid_local_config_consumes_existing_session_capacity(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path, max_attempts=3)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(runner_module, "run_config", fake_success_run(tmp_path / "results", net_return=0.05))
+    assert main(["--description", "baseline"]) == 0
+
+    (tmp_path / "experiment.toml").write_text("max_attempts = \n")
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "def5678")
+
+    assert main(["--description", "broken local config"]) == 0
+
+    attempt_dir = tmp_path / "results" / "attempt_0002_config_failed"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+
+    assert score["failure_source"] == "config_error"
+    assert state["attempts_used"] == 2
+    assert state["remaining_attempts"] == 1
+    assert state["best_score"] == 0.05
+    assert state["best_commit"] == "abc1234"
+    assert state["last_decision"] == "discard"
+
+
 def test_main_writes_failure_artifacts_for_malformed_evidence_json(tmp_path: Path, monkeypatch):
     write_experiment(tmp_path)
     monkeypatch.chdir(tmp_path)

@@ -61,6 +61,12 @@ Run one deterministic attempt:
 conda run -n quant python runner.py --description "short attempt description"
 ```
 
+Commit the focused research change before each run so the reported commit
+identifies the code that was tested. If the runner reports `keep`, continue
+from that commit. If it reports `discard`, restore `strategy.py` and
+`experiment.toml` to the previous kept commit before designing the next change;
+keep generated results as the research record.
+
 The harness reports whether the session is active or exhausted. Continue making
 focused research attempts while the harness reports remaining session capacity.
 

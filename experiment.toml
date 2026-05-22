@@ -2,17 +2,47 @@ strategy_id = "crypto_perp_funding_crowding_reversal"
 strategy_path = "strategy.py"
 source_strategy_path = "/Users/Season_Yang/Personal/quant_strategies/untested/crypto_perp_funding_crowding_reversal.py"
 max_attempts = 24
-active_window_id = "primary"
+active_window_id = "research_2024_h1"
 
 [[windows]]
-id = "primary"
+id = "stress_2022_deleveraging"
+start = "2022-05-01"
+end = "2022-10-27"
+
+[[windows]]
+id = "stress_2022_ftx"
+start = "2022-08-01"
+end = "2023-01-27"
+
+[[windows]]
+id = "recovery_2023_h1"
+start = "2023-01-01"
+end = "2023-06-29"
+
+[[windows]]
+id = "research_2024_h1"
 start = "2024-01-01"
-end = "2024-01-07"
+end = "2024-06-28"
 
 [[windows]]
-id = "holdout"
-start = "2024-08-01"
-end = "2024-08-07"
+id = "research_2024_h2"
+start = "2024-07-01"
+end = "2024-12-27"
+
+[[windows]]
+id = "validation_2025_h1"
+start = "2025-01-01"
+end = "2025-06-29"
+
+[[windows]]
+id = "validation_2025_h2"
+start = "2025-07-01"
+end = "2025-12-27"
+
+[[windows]]
+id = "locked_recent_2026"
+start = "2025-10-16"
+end = "2026-04-13"
 
 [data]
 kind = "crypto_perp_funding"
@@ -54,7 +84,7 @@ slippage_bps_per_side = 0.0
 
 [scoring]
 metric = "net_return"
-min_score_trades = 20
+min_score_trades = 200
 
 [output]
 results_dir = "results"

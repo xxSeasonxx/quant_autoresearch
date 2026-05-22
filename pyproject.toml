@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-autoresearch"
+version = "0.1.0"
+description = "Local autoresearch workbench for one scratch quant strategy."
+requires-python = ">=3.12"
+dependencies = [
+    "quant-strategies",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["."]
+testpaths = ["tests"]

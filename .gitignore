@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+results/
+results.tsv
+session_state.json
+.generated/

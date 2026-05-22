@@ -49,10 +49,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--simplification", action="store_true")
     args = parser.parse_args(argv)
 
-    config = load_experiment_config(args.config)
+    config = load_experiment_config(_rooted_path(args.config))
     results_dir = _results_dir(config)
     state_path = results_dir / "session_state.json"
     state = load_session_state(state_path, config=config, max_attempts_override=args.max_attempts)
+    ignored_max_attempts_override = None
+    if (
+        state_path.exists()
+        and args.max_attempts is not None
+        and args.max_attempts != state.max_attempts
+    ):
+        ignored_max_attempts_override = args.max_attempts
     if state.remaining_attempts <= 0:
         print("session exhausted")
         return 2
@@ -65,8 +72,13 @@ def main(argv: list[str] | None = None) -> int:
 
     result = run_config(generated_config, repo_root=ROOT)
     result_dir = result.result_dir
+    if result_dir is None:
+        result_dir = results_dir / f"attempt_{attempt:04d}_config_failed"
+        result_dir.mkdir(parents=True, exist_ok=True)
     summary = load_json(result_dir / "summary.json") if result_dir is not None else None
     evidence = load_json(result_dir / "evidence.json") if result_dir is not None else None
+    if result.result_dir is None:
+        summary = {"stage": "config", "message": getattr(result, "message", None)}
     failure_source = _failure_source(summary, evidence, getattr(result, "message", None))
     score = build_score(
         summary=summary,
@@ -77,23 +89,22 @@ def main(argv: list[str] | None = None) -> int:
         complexity_note="simplification" if args.simplification else "",
     )
 
-    if result_dir is not None:
-        write_score(result_dir / "score.json", score)
-        write_attempt_metadata(
-            result_dir / "attempt_metadata.json",
-            attempt=attempt,
-            commit=commit,
-            window_id=window_id,
-            description=args.description,
-            generated_config=generated_config,
-            failure_source=failure_source,
-        )
+    write_score(result_dir / "score.json", score)
+    write_attempt_metadata(
+        result_dir / "attempt_metadata.json",
+        attempt=attempt,
+        commit=commit,
+        window_id=window_id,
+        description=args.description,
+        generated_config=generated_config,
+        failure_source=failure_source,
+    )
 
     decision = decision_for_score(score, state=state, simplification=args.simplification)
     next_state = update_state(state, score=score, commit=commit, decision=decision)
     save_session_state(state_path, next_state)
     append_ledger(
-        Path("results.tsv"),
+        ROOT / "results.tsv",
         attempt=attempt,
         commit=commit,
         window_id=window_id,
@@ -106,8 +117,10 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "attempt": attempt,
                 "decision": decision,
+                "ignored_max_attempts_override": ignored_max_attempts_override,
+                "max_attempts": next_state.max_attempts,
                 "remaining_attempts": next_state.remaining_attempts,
-                "result_dir": str(result_dir) if result_dir is not None else None,
+                "result_dir": str(result_dir),
                 "score": score["score"],
                 "status": next_state.status,
             },
@@ -220,7 +233,7 @@ def append_ledger(
                 "raw_net_return": "" if score.get("raw_net_return") is None else score["raw_net_return"],
                 "trade_count": "" if score.get("trade_count") is None else score["trade_count"],
                 "status": status,
-                "description": description,
+                "description": _single_line(description),
             }
         )
 
@@ -267,7 +280,14 @@ def _results_dir(config: ExperimentConfig) -> Path:
     configured = Path(str(config.output["results_dir"]))
     if configured.is_absolute():
         return configured
-    return Path.cwd() / configured
+    return ROOT / configured
+
+
+def _rooted_path(path: str | Path) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    return ROOT / candidate
 
 
 def _failure_source(
@@ -296,6 +316,10 @@ def _optional_float(value: Any) -> float | None:
 
 def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _single_line(value: str) -> str:
+    return value.replace("\r", " ").replace("\n", " ")
 
 
 if __name__ == "__main__":

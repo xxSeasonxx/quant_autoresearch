@@ -83,6 +83,40 @@ slippage_bps_per_side = 0.0
 metric = "net_return"
 min_score_trades = 200
 
+[research]
+mode = "explore"
+primary_window_id = "locked_recent_2026"
+confirmation_window_ids = [
+  "validation_2025_h1",
+  "validation_2025_h2",
+  "locked_recent_2026",
+]
+parallel_workers = 3
+confirm_on_explore_keep = true
+
+[confirmation_scoring]
+primary_metric = "net_return_per_day"
+dispersion_weight = 0.5
+weak_window_floor = 0.0
+weak_window_penalty = 0.001
+min_trades_per_window = 200
+low_trade_penalty = 0.001
+min_symbol_count = 4
+symbol_concentration_penalty = 0.00025
+
+[artifacts]
+profile = "research"
+keep_strategy_snapshot = true
+keep_config = true
+keep_summary = true
+keep_evidence = true
+keep_signals = true
+keep_engine_request = false
+keep_input_rows_csv = false
+keep_input_rows_jsonl = false
+compress_large_artifacts = false
+large_artifact_max_mb = 100
+
 [output]
 results_dir = "results"
 mode = "validate"

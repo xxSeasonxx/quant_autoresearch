@@ -31,18 +31,21 @@ Once setup is clear, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment evaluates one scratch strategy under the windows configured in
-`experiment.toml`. You launch one deterministic attempt simply as:
+Each experiment evaluates one scratch strategy under a research window
+configured in `experiment.toml`. This project does not use short smoke-test
+windows. Configured windows must span 120 to 180 calendar days so results have
+enough trades, funding cycles, and regime variation to be meaningful. You
+launch one deterministic exploration attempt simply as:
 
 ```bash
-conda run -n quant python runner.py --description "short attempt description"
+conda run -n quant python runner.py --explore --description "short attempt description"
 ```
 
 Choose windows from a quant research perspective. You may change
 `active_window_id`, edit configured `[[windows]]`, or run a configured
 `--window-id` when there is a research reason: regime, sample quality,
-holdout/stress check, or a falsifier. Do not cherry-pick windows just to rescue
-the last score.
+holdout/stress check, recent out-of-sample evidence, or a falsifier. Do not cherry-pick windows
+just to rescue the last score.
 
 Choose symbols from a quant research perspective. You may edit the configured
 symbol universe when there is a research reason: liquidity, data coverage,
@@ -84,9 +87,14 @@ Read-only during a research loop:
 - Set `decision_lag_minutes` to zero; decisions must be emitted after the
   as-of bar can be observed.
 
-**The goal is simple: get the highest guarded score.** The score is the guarded
-`net_return` produced by the harness, and it is valid only when the trade count
-passes the configured sample gate. Higher is better.
+**The goal is simple: get the highest confirmed candidate score.** The runner
+keeps raw `net_return` as evidence, but the guarded score is normalized by
+window days when window metadata is available. It is valid only when the trade
+count passes the configured sample gate. Higher is better, but only confirmed
+candidates can become best-so-far.
+Set the sample gate high enough for the configured 120-180 day windows; a gate
+that was acceptable for a short debugging run is not acceptable research
+evidence.
 
 Think like a quant researcher. The score is loop feedback only, not market
 evidence. Loop feedback only. Do not blindly chase the last number. Use the
@@ -102,6 +110,22 @@ improvement magnitude.
 **The first run**: Your very first run should always establish the baseline, so
 run the current `strategy.py` and `experiment.toml` as is.
 
+## Candidate confirmation
+
+A one-window result is exploration evidence only. Only confirmed candidates can
+become best-so-far.
+
+Confirmation means running the configured recent window bundle. Recent windows
+dominate the score. Older windows are diagnostic or stress evidence unless
+`experiment.toml` says otherwise.
+
+Do not prune symbols or windows because of one isolated result. If a candidate
+improves one window but weakens the recent bundle, discard it.
+
+Before changing `strategy.py` or `experiment.toml`, explain what trade evidence
+changed your belief, what causal hypothesis follows, what focused change tests
+it, and what result would falsify it.
+
 ## Output format
 
 Once the runner finishes it prints a JSON summary like this:
@@ -109,10 +133,11 @@ Once the runner finishes it prints a JSON summary like this:
 ```json
 {
   "attempt": 1,
+  "candidate_score": 0.0123,
   "decision": "keep",
   "remaining_attempts": 0,
-  "result_dir": "results/attempt_0001_example",
-  "score": 0.0123,
+  "result_dir": "results/candidate_0001_example",
+  "run_kind": "confirm",
   "status": "active"
 }
 ```
@@ -122,9 +147,12 @@ Use the printed `result_dir` to inspect the attempt artifacts:
 ```bash
 cat results/session_state.json
 cat results.tsv
-cat results/<attempt>/score.json
-cat results/<attempt>/summary.json
-cat results/<attempt>/evidence.json
+cat results/<candidate>/candidate_score.json
+cat results/<candidate>/candidate_summary.json
+cat results/<candidate>/trade_attribution.json
+cat results/<candidate>/windows/<window>/<attempt>/score.json
+cat results/<candidate>/windows/<window>/<attempt>/summary.json
+cat results/<candidate>/windows/<window>/<attempt>/evidence.json
 ```
 
 ## Logging results
@@ -143,7 +171,7 @@ write down the research reason for the next attempt:
 - hypothesis and economic rationale
 - causal timing and `as_of_time` assumptions
 - falsifier
-- guarded score movement
+- guarded score movement and raw return movement
 - raw net return, gross return, costs, and failed gates
 - trade count and sample quality
 - fill assumptions and data quality
@@ -172,18 +200,25 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
 3. Tune `strategy.py` or `experiment.toml` with one focused experimental idea.
 4. git commit the focused research change.
 5. Run the experiment:
-   `conda run -n quant python runner.py --description "short attempt description"`.
-6. Read the JSON summary, `score.json`, `summary.json`, and `evidence.json`.
+   `conda run -n quant python runner.py --explore --description "short attempt description"`.
+   If exploration does not auto-confirm but the trade evidence justifies a
+   candidate check, run
+   `conda run -n quant python runner.py --confirm --description "candidate confirmation"`.
+6. Read the JSON summary. For confirmation, inspect `candidate_score.json`,
+   `candidate_summary.json`, `trade_attribution.json`, and each window's
+   `score.json`, `summary.json`, and `evidence.json`.
 7. The runner records the results in `results.tsv`; leave it untracked by git.
-8. If the runner reports `keep`, advance from that commit.
-9. If the runner reports `discard`, restore `strategy.py` and
-   `experiment.toml` to the previous kept commit before designing the next
-   change. Keep generated results as the research record.
+8. If a confirmed candidate reports `keep`, advance from that commit.
+9. If a confirmed candidate reports `discard`, restore `strategy.py` and
+   `experiment.toml` to the previous confirmed kept commit before designing the
+   next change. Keep generated results as the research record.
+10. If the run was exploration or diagnostic only, treat it as evidence for the
+    next focused change, not as best-so-far.
 
-The idea is that you are an autonomous quant researcher trying things out. If
-they work, keep. If they don't, discard. You are advancing the strategy only
-when the guarded evidence improves or when an equal result is materially
-simpler.
+The idea is that you are an autonomous quant researcher trying things out. If a
+confirmed candidate works, keep. If it does not, discard. You are advancing the
+strategy only when confirmed evidence improves or when an equal confirmed result
+is materially simpler.
 
 **Crashes**: If a run crashes because of a typo, missing import, malformed
 config, or other local issue, fix it if it is clearly from `strategy.py` or

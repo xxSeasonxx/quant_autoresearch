@@ -273,6 +273,8 @@ def _parse_research(raw: dict[str, Any], window_ids: set[str], selected_window_i
     parallel_workers = _required_positive_int(table, "parallel_workers", table="research")
     if parallel_workers > len(confirmation_window_ids):
         parallel_workers = len(confirmation_window_ids)
+    if parallel_workers > 4:
+        raise ConfigError("research.parallel_workers must be <= 4 for compact research runs")
     confirm_on_explore_keep = _required_bool(table, "confirm_on_explore_keep", table="research")
 
     return ResearchConfig(
@@ -1219,6 +1221,7 @@ def test_session_state_tracks_best_confirmed_candidate(tmp_path: Path):
         best_score=0.01,
         best_commit="old",
         status="active",
+        best_primary_window_score=0.0015,
         best_confirmed_candidate_score=0.002,
         best_confirmed_commit="confirmed_old",
     )
@@ -1234,6 +1237,7 @@ def test_session_state_tracks_best_confirmed_candidate(tmp_path: Path):
 
     assert loaded.best_score == 0.01
     assert loaded.best_commit == "old"
+    assert loaded.best_primary_window_score == 0.0015
     assert loaded.best_confirmed_candidate_score == 0.002
     assert loaded.best_confirmed_commit == "confirmed_old"
 
@@ -1292,6 +1296,7 @@ Expected: fail because the dataclass and ledger do not yet have these fields.
 In `runner.py`, add fields:
 
 ```python
+    best_primary_window_score: float | None = None
     best_confirmed_candidate_score: float | None = None
     best_confirmed_commit: str | None = None
 ```
@@ -1299,6 +1304,7 @@ In `runner.py`, add fields:
 Update `load_session_state` creation and loading:
 
 ```python
+            best_primary_window_score=None,
             best_confirmed_candidate_score=None,
             best_confirmed_commit=None,
 ```
@@ -1306,6 +1312,7 @@ Update `load_session_state` creation and loading:
 and:
 
 ```python
+        best_primary_window_score=_optional_float(payload.get("best_primary_window_score")),
         best_confirmed_candidate_score=_optional_float(payload.get("best_confirmed_candidate_score")),
         best_confirmed_commit=_optional_str(payload.get("best_confirmed_commit")),
 ```
@@ -1313,6 +1320,7 @@ and:
 Update `save_session_state` payload:
 
 ```python
+        "best_primary_window_score": state.best_primary_window_score,
         "best_confirmed_candidate_score": state.best_confirmed_candidate_score,
         "best_confirmed_commit": state.best_confirmed_commit,
 ```
@@ -1599,6 +1607,115 @@ confirm_on_explore_keep = false
     rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
     assert rows[0]["window_id"] == "holdout"
     assert rows[0]["run_kind"] == "explore"
+
+
+def test_explore_auto_confirms_when_primary_reference_improves(tmp_path: Path, monkeypatch, capsys):
+    write_experiment(tmp_path, max_attempts=1)
+    with (tmp_path / "experiment.toml").open("a") as handle:
+        handle.write(
+            """
+[research]
+mode = "explore"
+primary_window_id = "primary"
+confirmation_window_ids = ["primary", "holdout"]
+parallel_workers = 1
+confirm_on_explore_keep = true
+
+[confirmation_scoring]
+primary_metric = "net_return_per_day"
+dispersion_weight = 0.5
+weak_window_floor = 0.0
+weak_window_penalty = 0.001
+min_trades_per_window = 2
+low_trade_penalty = 0.001
+min_symbol_count = 1
+symbol_concentration_penalty = 0.00025
+
+[artifacts]
+profile = "research"
+keep_strategy_snapshot = true
+keep_config = true
+keep_summary = true
+keep_evidence = true
+keep_signals = true
+keep_engine_request = false
+keep_input_rows_csv = false
+keep_input_rows_jsonl = false
+compress_large_artifacts = false
+large_artifact_max_mb = 100
+"""
+        )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        text = config_path.read_text()
+        net = 0.12 if 'start = "2024-01-01"' in text else 0.24
+        return fake_success_run(tmp_path / "results", net_return=net, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--description", "auto confirm"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert output["run_kind"] == "confirm"
+    assert output["auto_confirmed_from_explore"] is True
+    assert state["best_primary_window_score"] == pytest.approx(0.12 / 120)
+    assert state["best_confirmed_candidate_score"] == pytest.approx(output["candidate_score"])
+    assert rows[0]["run_kind"] == "confirm"
+
+
+def test_explore_does_not_auto_confirm_when_primary_reference_does_not_improve(
+    tmp_path: Path,
+    monkeypatch,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    with (tmp_path / "experiment.toml").open("a") as handle:
+        handle.write(
+            """
+[research]
+mode = "explore"
+primary_window_id = "primary"
+confirmation_window_ids = ["primary", "holdout"]
+parallel_workers = 1
+confirm_on_explore_keep = true
+"""
+        )
+    state_path = tmp_path / "results" / "session_state.json"
+    state_path.parent.mkdir()
+    state_path.write_text(
+        json.dumps(
+            {
+                "attempts_used": 0,
+                "best_commit": None,
+                "best_score": None,
+                "best_primary_window_score": 0.12 / 120,
+                "best_confirmed_candidate_score": None,
+                "best_confirmed_commit": None,
+                "last_decision": None,
+                "max_attempts": 1,
+                "remaining_attempts": 1,
+                "status": "active",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(runner_module, "run_config", fake_success_run(tmp_path / "results", net_return=0.06))
+
+    assert main(["--explore", "--description", "stale explore"]) == 0
+
+    state = json.loads(state_path.read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert state["best_primary_window_score"] == pytest.approx(0.12 / 120)
+    assert state["best_confirmed_candidate_score"] is None
+    assert rows[0]["run_kind"] == "explore"
 ```
 
 - [ ] **Step 2: Run tests and verify failure**
@@ -1651,7 +1768,9 @@ In `main`, compute:
     run_kind = _run_kind(args, config)
 ```
 
-If `run_kind != "confirm"`, use:
+If `run_kind == "explore"` and `config.research.confirm_on_explore_keep` is true, run the primary-window explore first. When that explore score is numeric and greater than `state.best_primary_window_score` (or no reference exists yet), update the primary-window reference and immediately run the confirmation path in the same attempt before writing session state or the ledger. The printed JSON should set `"run_kind": "confirm"` and `"auto_confirmed_from_explore": true`.
+
+If `run_kind != "confirm"` and auto-confirm does not trigger, use:
 
 ```python
     window_id = _selected_single_window(args, config, run_kind)
@@ -1689,6 +1808,9 @@ git commit -m "Add research runner modes"
 Append to `tests/test_runner.py`:
 
 ```python
+import tomllib
+
+
 def test_confirm_runs_all_confirmation_windows_and_writes_candidate_score(
     tmp_path: Path,
     monkeypatch,
@@ -1736,7 +1858,8 @@ large_artifact_max_mb = 100
     def _run_config(config_path: Path, *, repo_root: Path):
         text = config_path.read_text()
         net = 0.12 if 'start = "2024-01-01"' in text else 0.24
-        return fake_success_run(tmp_path / "results", net_return=net, trade_count=3)(config_path, repo_root=repo_root)
+        output_dir = Path(tomllib.loads(text)["output"]["results_dir"])
+        return fake_success_run(output_dir, net_return=net, trade_count=3)(config_path, repo_root=repo_root)
 
     monkeypatch.setattr(runner_module, "run_config", _run_config)
 
@@ -1749,6 +1872,14 @@ large_artifact_max_mb = 100
     assert (candidate_dir / "candidate_score.json").exists()
     assert (candidate_dir / "candidate_summary.json").exists()
     assert (candidate_dir / "trade_attribution.json").exists()
+    for window_id in ("primary", "holdout"):
+        window_root = candidate_dir / "windows" / window_id
+        assert window_root.is_dir()
+        window_attempts = list(window_root.iterdir())
+        assert len(window_attempts) == 1
+        assert (window_attempts[0] / "score.json").exists()
+        assert (window_attempts[0] / "summary.json").exists()
+        assert (window_attempts[0] / "evidence.json").exists()
 
     state = json.loads((tmp_path / "results" / "session_state.json").read_text())
     assert state["best_confirmed_candidate_score"] == pytest.approx(output["candidate_score"])
@@ -1758,6 +1889,51 @@ large_artifact_max_mb = 100
     assert rows[0]["run_kind"] == "confirm"
     assert rows[0]["candidate_score"] != ""
     assert rows[0]["passed_window_count"] == "2"
+
+
+def test_confirm_records_one_window_exception_as_failed_evidence(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path, max_attempts=1)
+    with (tmp_path / "experiment.toml").open("a") as handle:
+        handle.write(
+            """
+[research]
+mode = "explore"
+primary_window_id = "primary"
+confirmation_window_ids = ["primary", "holdout"]
+parallel_workers = 2
+confirm_on_explore_keep = false
+
+[confirmation_scoring]
+primary_metric = "net_return_per_day"
+dispersion_weight = 0.5
+weak_window_floor = 0.0
+weak_window_penalty = 0.001
+min_trades_per_window = 2
+low_trade_penalty = 0.001
+min_symbol_count = 1
+symbol_concentration_penalty = 0.00025
+"""
+        )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        text = config_path.read_text()
+        if 'start = "2024-05-01"' in text:
+            raise RuntimeError("simulated window crash")
+        return fake_success_run(tmp_path / "results", net_return=0.12, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--confirm", "--description", "partial failure"]) == 0
+
+    candidate_score = json.loads(
+        (tmp_path / "results" / "candidate_0001_demo" / "candidate_score.json").read_text()
+    )
+    assert candidate_score["status"] == "confirmation_failed"
+    assert candidate_score["candidate_score"] is None
+    assert candidate_score["failed_windows"] == ["holdout"]
 ```
 
 - [ ] **Step 2: Run confirmation test and verify failure**
@@ -1797,16 +1973,27 @@ def run_confirmation_attempt(
 
     def _run(window_id: str) -> WindowAttemptResult:
         window_results_dir = candidate_dir / "windows" / window_id
-        return run_single_window_attempt(
-            config=config,
-            attempt=attempt,
-            window_id=window_id,
-            results_dir=window_results_dir,
-            description=description,
-            commit=commit,
-            simplification=simplification,
-            artifact_profile=artifact_profile,
-        )
+        try:
+            return run_single_window_attempt(
+                config=config,
+                attempt=attempt,
+                window_id=window_id,
+                results_dir=window_results_dir,
+                description=description,
+                commit=commit,
+                simplification=simplification,
+                artifact_profile=artifact_profile,
+            )
+        except Exception as exc:
+            return failed_window_attempt_result(
+                config=config,
+                attempt=attempt,
+                window_id=window_id,
+                result_dir=window_results_dir / f"attempt_{attempt:04d}_{window_id}_failed",
+                description=description,
+                commit=commit,
+                message=f"confirmation window failed: {exc}",
+            )
 
     workers = max(1, min(config.research.parallel_workers, len(config.research.confirmation_window_ids)))
     if workers == 1:
@@ -1846,6 +2033,53 @@ def run_confirmation_attempt(
     return candidate_dir, candidate_score, window_results
 ```
 
+Add a small helper to synthesize failed window artifacts:
+
+```python
+def failed_window_attempt_result(
+    *,
+    config: ExperimentConfig,
+    attempt: int,
+    window_id: str,
+    result_dir: Path,
+    description: str,
+    commit: str | None,
+    message: str,
+) -> WindowAttemptResult:
+    result_dir.mkdir(parents=True, exist_ok=True)
+    run_metadata = _run_metadata(config, window_id)
+    summary = {"stage": "confirmation_window", "message": message}
+    failure_source = "environment_error"
+    score = build_score(
+        summary=summary,
+        evidence=None,
+        min_score_trades=config.scoring.min_score_trades,
+        window_id=window_id,
+        failure_source=failure_source,
+        **run_metadata,
+    )
+    write_score(result_dir / "score.json", score)
+    write_attempt_metadata(
+        result_dir / "attempt_metadata.json",
+        attempt=attempt,
+        commit=commit,
+        window_id=window_id,
+        description=description,
+        generated_config=result_dir / "unavailable.toml",
+        failure_source=failure_source,
+        **run_metadata,
+    )
+    return WindowAttemptResult(
+        window_id=window_id,
+        result_dir=result_dir,
+        score=score,
+        summary=summary,
+        evidence=None,
+        run_metadata=run_metadata,
+        failure_source=failure_source,
+    )
+```
+
 - [ ] **Step 4: Add confirmation finish path**
 
 Add:
@@ -1882,6 +2116,7 @@ def update_state_for_candidate(
         attempts_used=attempts_used,
         best_score=state.best_score,
         best_commit=state.best_commit,
+        best_primary_window_score=state.best_primary_window_score,
         status="exhausted" if attempts_used >= state.max_attempts else "active",
         last_decision=decision,
         best_confirmed_candidate_score=best_confirmed_candidate_score,
@@ -1988,6 +2223,47 @@ large_artifact_max_mb = 100
         "strategy_input_rows.csv",
         "strategy_input_rows.jsonl",
     ]
+
+
+def test_artifact_profile_cli_research_overrides_debug_config(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path, max_attempts=1)
+    with (tmp_path / "experiment.toml").open("a") as handle:
+        handle.write(
+            """
+[artifacts]
+profile = "debug"
+keep_strategy_snapshot = true
+keep_config = true
+keep_summary = true
+keep_evidence = true
+keep_signals = true
+keep_engine_request = true
+keep_input_rows_csv = true
+keep_input_rows_jsonl = true
+compress_large_artifacts = false
+large_artifact_max_mb = 100
+"""
+        )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        result = fake_success_run(tmp_path / "results", net_return=0.05)(config_path, repo_root=repo_root)
+        assert result.result_dir is not None
+        (result.result_dir / "strategy_input_rows.csv").write_text("big csv\n")
+        (result.result_dir / "strategy_input_rows.jsonl").write_text("big jsonl\n")
+        (result.result_dir / "engine_request.json").write_text("{}\n")
+        return result
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--artifact-profile", "research", "--description", "force compact"]) == 0
+
+    attempt_dir = tmp_path / "results" / "attempt_0_05"
+    assert not (attempt_dir / "strategy_input_rows.csv").exists()
+    assert not (attempt_dir / "strategy_input_rows.jsonl").exists()
+    assert not (attempt_dir / "engine_request.json").exists()
 ```
 
 - [ ] **Step 2: Run test and verify failure**
@@ -2001,6 +2277,13 @@ conda run -n quant pytest tests/test_runner.py::test_runner_applies_research_art
 Expected: fail because the runner does not call artifact policy.
 
 - [ ] **Step 3: Wire artifact policy into `run_single_window_attempt`**
+
+Performance note: this policy controls retained artifact size after each window
+finishes. It does not prevent `quant_strategies` from writing large
+`strategy_input_rows.*` files first, so peak disk IO and temporary disk usage can
+still scale with `parallel_workers`. Keep the research default capped at 4 and
+move pre-write artifact suppression to a future `quant_strategies` foundation
+upgrade.
 
 In `runner.py`, import:
 
@@ -2020,9 +2303,9 @@ After writing `score.json` but before `write_attempt_metadata`, add:
 Add helper:
 
 ```python
-def _artifact_config_with_profile(config: Any, profile: str) -> Any:
+def _artifact_config_with_profile(config: ArtifactConfig, profile: str) -> ArtifactConfig:
     if profile == "debug":
-        return type(config)(
+        return ArtifactConfig(
             profile="debug",
             keep_strategy_snapshot=True,
             keep_config=True,
@@ -2035,7 +2318,19 @@ def _artifact_config_with_profile(config: Any, profile: str) -> Any:
             compress_large_artifacts=config.compress_large_artifacts,
             large_artifact_max_mb=config.large_artifact_max_mb,
         )
-    return config
+    return ArtifactConfig(
+        profile="research",
+        keep_strategy_snapshot=True,
+        keep_config=True,
+        keep_summary=True,
+        keep_evidence=True,
+        keep_signals=True,
+        keep_engine_request=False,
+        keep_input_rows_csv=False,
+        keep_input_rows_jsonl=False,
+        compress_large_artifacts=config.compress_large_artifacts,
+        large_artifact_max_mb=config.large_artifact_max_mb,
+    )
 ```
 
 Extend `write_attempt_metadata` signature:
@@ -2183,3 +2478,122 @@ Do not run a live `--confirm` against real data as part of implementation verifi
 - Scope:
   - No task modifies `quant_strategies`.
   - No task adds fill, slippage, drawdown, margin, leverage, or equity-curve internals.
+
+---
+
+## Engineering Review Addendum
+
+Generated by `/plan-eng-review` on 2026-05-22.
+
+### NOT in scope
+
+- `quant_strategies` fill, slippage, drawdown, margin, leverage, and equity-curve internals - explicitly belongs in `quant_strategies` foundation upgrades.
+- Pre-write suppression of `strategy_input_rows.*` - compact retention is handled here; eliminating peak disk IO belongs upstream in `quant_strategies`.
+- UI, dashboard, production trading, paper trading, deployment, or portfolio operations - this remains a local research workbench.
+- Older-window score dominance - older windows remain diagnostic or stress evidence unless explicitly configured into confirmation.
+
+### What already exists
+
+- `runner.py` already owns single-window execution, session state, ledger migration, config-load failure artifacts, and result JSON output; the plan reuses this flow through `run_single_window_attempt`.
+- `experiment_config.py` already owns window parsing and runner TOML materialization; the plan extends it with research, confirmation scoring, and artifact config.
+- `scoring.py` already owns per-window score construction and failure classification; the plan extends it with candidate scoring and trade attribution.
+- `quant_strategies.runner.run_config` already writes runner-managed artifacts; the plan reuses it and adds post-run retention policy in this repo.
+
+### Test coverage diagram
+
+```text
+CODE PATHS                                             USER / AGENT FLOWS
+[+] experiment_config.py                               [+] Configure research lifecycle
+  ├── [★★★] parse research defaults/explicit config       ├── [★★★] invalid mode/window/workers/profile
+  ├── [★★★] reject unknown confirmation windows           └── [★★★] cap workers at 4 for compact research
+  └── [★★★] materialize per-window runner TOML
+
+[+] scoring.py                                         [+] Candidate selection
+  ├── [★★★] per-window score existing tests               ├── [★★★] mean/dispersion/weak/low-trade/narrow penalties
+  ├── [★★★] confirmation failure on missing score         └── [★★★] trade attribution by window/symbol/side/hour/month
+  └── [★★★] attribution ignores missing evidence safely
+
+[+] artifact_policy.py                                 [+] Artifact retention
+  ├── [★★★] research profile removes large debug files    ├── [★★★] debug profile keeps full files
+  └── [★★★] CLI research override compacts debug config   └── [★★★] removed artifacts recorded in metadata
+
+[+] runner.py                                          [+] Research loop
+  ├── [★★★] explore/diagnostic/confirm run kinds          ├── [★★★] diagnostic does not update confirmed best
+  ├── [★★★] auto-confirm trigger and non-trigger paths    ├── [★★★] confirmation bundle writes windows/<id> artifacts
+  ├── [★★★] one-window exception becomes failed evidence  └── [★★★] state/ledger migration preserves old rows
+  └── [★★★] session exhaustion and config failure paths
+
+[+] program.md                                        [+] Agent protocol
+  ├── [★★★] one-window evidence is exploration only       ├── [★★★] confirmed candidates control best-so-far
+  └── [★★★] strategy/config changes require trade evidence
+```
+
+Coverage: planned tests cover the new behavioral branches. No E2E/UI tests apply; this is a CLI-only Python workbench.
+
+### Failure modes
+
+| Codepath | Failure mode | Covered | Handling | User-visible result |
+|----------|--------------|---------|----------|---------------------|
+| Config parsing | Bad mode, unknown window, invalid workers/profile | yes | `ConfigError` and failure artifact | JSON/ledger discard |
+| Single-window run | `run_config` returns no result dir | existing | synthetic failed attempt dir | JSON/ledger discard |
+| Confirmation window | One window raises unexpectedly | yes | failed window score included in candidate | candidate confirmation failed |
+| Auto-confirm | Weak explore should not confirm | yes | remains explore-only | ledger `run_kind=explore` |
+| Artifact cleanup | Debug config plus research CLI override | yes | research override removes large files | metadata lists removals |
+| Candidate scoring | Missing numeric score | yes | `confirmation_failed` | no best-confirmed update |
+
+Critical silent gaps: none after accepted review changes.
+
+### Parallelization strategy
+
+| Step | Modules touched | Depends on |
+|------|-----------------|------------|
+| Config sections | root config + config tests | - |
+| Scoring and attribution | scoring + scoring tests | config types |
+| Artifact policy | artifact module + policy tests | config types |
+| Runner lifecycle | runner + runner tests | config, scoring, artifact policy |
+| Protocol/docs | program, experiment, README, contract tests | config and runner semantics |
+
+Lane A: config sections -> default experiment config.
+Lane B: scoring and attribution after config types.
+Lane C: artifact policy after config types.
+Lane D: runner lifecycle after A+B+C.
+Lane E: protocol/docs after D.
+
+Execution order: A first, then B+C in parallel, then D, then E. Conflict flag: runner tests are shared by several tasks, so runner work should be sequential or carefully rebased.
+
+### Completion summary
+
+- Step 0: Scope Challenge - scope accepted as-is, with "not a big build" constraint.
+- Architecture Review: 2 issues found and accepted.
+- Code Quality Review: 1 issue found and accepted.
+- Test Review: diagram produced, 2 gaps identified and accepted.
+- Performance Review: 1 issue found and accepted.
+- NOT in scope: written.
+- What already exists: written.
+- TODOS.md updates: 0 repo-local items proposed; upstream suppression belongs in `quant_strategies`.
+- Failure modes: 0 critical silent gaps after plan updates.
+- Outside voice: skipped.
+- Parallelization: 5 lanes, B+C parallel after config, runner sequential.
+- Lake Score: 6/6 recommendations chose the complete option.
+
+### Review decisions applied
+
+1. Keep full B workflow, including simple auto-confirm.
+2. Add `best_primary_window_score` and auto-confirm trigger/non-trigger tests.
+3. Catch per-window confirmation exceptions and record failed evidence.
+4. Make artifact profile CLI override typed and symmetric.
+5. Assert per-window confirmation artifact grouping.
+6. Document peak artifact IO limitation and cap compact research workers at 4.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | - | - |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | - |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | clean | 6 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | - |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | - |
+
+- **UNRESOLVED:** 0
+- **VERDICT:** ENG CLEARED - ready to implement.

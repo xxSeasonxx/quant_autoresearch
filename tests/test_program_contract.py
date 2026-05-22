@@ -55,11 +55,13 @@ def test_program_allows_quant_judgment_window_changes_without_cherry_picking():
 
     required = [
         "Choose windows from a quant research perspective",
+        "120 to 180 calendar days",
         "`active_window_id`",
         "`--window-id`",
         "regime",
         "sample quality",
         "holdout/stress check",
+        "recent out-of-sample evidence",
         "falsifier",
         "Do not cherry-pick windows",
     ]
@@ -91,3 +93,23 @@ def test_program_documents_upstream_limitation_reporting():
     assert "quant_strategies" in text
     assert "quant_data" in text
     assert "document the limitation" in text
+
+
+def test_program_requires_confirmed_candidate_protocol():
+    text = PROGRAM.read_text()
+    normalized = " ".join(text.split())
+
+    required = [
+        "Candidate confirmation",
+        "A one-window result is exploration evidence only",
+        "Only confirmed candidates can",
+        "become best-so-far",
+        "Confirmation means running the configured recent window bundle",
+        "Recent windows dominate the score",
+        "Do not prune symbols or windows because of one isolated result",
+        "trade evidence changed your belief",
+        "what causal hypothesis follows",
+        "what result would falsify it",
+    ]
+    for phrase in required:
+        assert phrase in normalized

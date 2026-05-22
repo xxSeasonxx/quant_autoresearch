@@ -13,6 +13,10 @@ class ConfigError(ValueError):
     pass
 
 
+MIN_RESEARCH_WINDOW_DAYS = 120
+MAX_RESEARCH_WINDOW_DAYS = 180
+
+
 @dataclass(frozen=True)
 class WindowConfig:
     id: str
@@ -31,6 +35,42 @@ class ScoringConfig:
 
 
 @dataclass(frozen=True)
+class ResearchConfig:
+    mode: str
+    primary_window_id: str
+    confirmation_window_ids: tuple[str, ...]
+    parallel_workers: int
+    confirm_on_explore_keep: bool
+
+
+@dataclass(frozen=True)
+class ConfirmationScoringConfig:
+    primary_metric: str
+    dispersion_weight: float
+    weak_window_floor: float
+    weak_window_penalty: float
+    min_trades_per_window: int
+    low_trade_penalty: float
+    min_symbol_count: int
+    symbol_concentration_penalty: float
+
+
+@dataclass(frozen=True)
+class ArtifactConfig:
+    profile: str
+    keep_strategy_snapshot: bool
+    keep_config: bool
+    keep_summary: bool
+    keep_evidence: bool
+    keep_signals: bool
+    keep_engine_request: bool
+    keep_input_rows_csv: bool
+    keep_input_rows_jsonl: bool
+    compress_large_artifacts: bool
+    large_artifact_max_mb: int
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     strategy_id: str
     strategy_path: Path
@@ -43,6 +83,9 @@ class ExperimentConfig:
     fill_model: dict[str, Any]
     cost_model: dict[str, Any]
     scoring: ScoringConfig
+    research: ResearchConfig
+    confirmation_scoring: ConfirmationScoringConfig
+    artifacts: ArtifactConfig
     output: dict[str, Any]
 
     @property
@@ -80,6 +123,7 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     window_ids = {window.id for window in windows}
     if active_window_id is not None and active_window_id not in window_ids:
         raise ConfigError(f"active_window_id does not match a configured window: {active_window_id}")
+    selected_window_id = active_window_id or windows[0].id
 
     data = _required_table(raw, "data")
     _required_str(data, "kind", table="data")
@@ -92,6 +136,9 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     _required_number(cost_model, "fee_bps_per_side", table="cost_model")
     _required_number(cost_model, "slippage_bps_per_side", table="cost_model")
     scoring = _parse_scoring(_required_table(raw, "scoring"))
+    research = _parse_research(raw, window_ids, selected_window_id)
+    confirmation_scoring = _parse_confirmation_scoring(raw)
+    artifacts = _parse_artifacts(raw)
     output = _required_table(raw, "output")
     _required_str(output, "results_dir", table="output")
     output_mode = _required_str(output, "mode", table="output")
@@ -119,6 +166,9 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
         fill_model=dict(fill_model),
         cost_model=dict(cost_model),
         scoring=scoring,
+        research=research,
+        confirmation_scoring=confirmation_scoring,
+        artifacts=artifacts,
         output=dict(output),
     )
 
@@ -172,7 +222,12 @@ def _parse_windows(raw_windows: Any) -> tuple[WindowConfig, ...]:
             start=_required_str(raw_window, "start", table=f"windows[{index}]"),
             end=_required_str(raw_window, "end", table=f"windows[{index}]"),
         )
-        _window_days(window.start, window.end, table=f"windows[{index}]")
+        days = _window_days(window.start, window.end, table=f"windows[{index}]")
+        if not MIN_RESEARCH_WINDOW_DAYS <= days <= MAX_RESEARCH_WINDOW_DAYS:
+            raise ConfigError(
+                f"windows[{index}] must span {MIN_RESEARCH_WINDOW_DAYS} to "
+                f"{MAX_RESEARCH_WINDOW_DAYS} days inclusive; got {days}"
+            )
         if window.id in seen_ids:
             raise ConfigError(f"duplicate window id: {window.id}")
         seen_ids.add(window.id)
@@ -201,6 +256,127 @@ def _parse_scoring(raw_scoring: dict[str, Any]) -> ScoringConfig:
     return ScoringConfig(metric=metric, min_score_trades=min_score_trades)
 
 
+def _parse_research(raw: dict[str, Any], window_ids: set[str], selected_window_id: str) -> ResearchConfig:
+    table = raw.get("research")
+    if table is None:
+        return ResearchConfig(
+            mode="explore",
+            primary_window_id=selected_window_id,
+            confirmation_window_ids=(selected_window_id,),
+            parallel_workers=1,
+            confirm_on_explore_keep=False,
+        )
+    if not isinstance(table, dict):
+        raise ConfigError("research must be a table")
+
+    mode = _required_str(table, "mode", table="research")
+    if mode not in {"explore", "confirm"}:
+        raise ConfigError("research.mode must be explore or confirm")
+
+    primary_window_id = _required_str(table, "primary_window_id", table="research")
+    if primary_window_id not in window_ids:
+        raise ConfigError(f"research.primary_window_id does not match a configured window: {primary_window_id}")
+
+    raw_confirmation_ids = table.get("confirmation_window_ids")
+    if not isinstance(raw_confirmation_ids, list) or not raw_confirmation_ids:
+        raise ConfigError("research.confirmation_window_ids must be a non-empty list")
+    confirmation_window_ids = tuple(_list_item_str(raw_confirmation_ids, "research.confirmation_window_ids"))
+    unknown = [window_id for window_id in confirmation_window_ids if window_id not in window_ids]
+    if unknown:
+        raise ConfigError(f"research.confirmation_window_ids contains unknown windows: {unknown}")
+    if primary_window_id not in confirmation_window_ids:
+        raise ConfigError("research.confirmation_window_ids must include research.primary_window_id")
+
+    parallel_workers = _required_positive_int(table, "parallel_workers", table="research")
+    if parallel_workers > 4:
+        raise ConfigError("research.parallel_workers must be <= 4 for compact research runs")
+    if parallel_workers > len(confirmation_window_ids):
+        parallel_workers = len(confirmation_window_ids)
+    confirm_on_explore_keep = _required_bool(table, "confirm_on_explore_keep", table="research")
+
+    return ResearchConfig(
+        mode=mode,
+        primary_window_id=primary_window_id,
+        confirmation_window_ids=confirmation_window_ids,
+        parallel_workers=parallel_workers,
+        confirm_on_explore_keep=confirm_on_explore_keep,
+    )
+
+
+def _parse_confirmation_scoring(raw: dict[str, Any]) -> ConfirmationScoringConfig:
+    table = raw.get("confirmation_scoring")
+    if table is None:
+        return ConfirmationScoringConfig(
+            primary_metric="net_return_per_day",
+            dispersion_weight=0.5,
+            weak_window_floor=0.0,
+            weak_window_penalty=0.001,
+            min_trades_per_window=200,
+            low_trade_penalty=0.001,
+            min_symbol_count=4,
+            symbol_concentration_penalty=0.00025,
+        )
+    if not isinstance(table, dict):
+        raise ConfigError("confirmation_scoring must be a table")
+
+    primary_metric = _required_str(table, "primary_metric", table="confirmation_scoring")
+    if primary_metric != "net_return_per_day":
+        raise ConfigError("confirmation_scoring.primary_metric must be net_return_per_day")
+
+    return ConfirmationScoringConfig(
+        primary_metric=primary_metric,
+        dispersion_weight=_required_non_negative_float(table, "dispersion_weight", table="confirmation_scoring"),
+        weak_window_floor=float(_required_number(table, "weak_window_floor", table="confirmation_scoring")),
+        weak_window_penalty=_required_non_negative_float(table, "weak_window_penalty", table="confirmation_scoring"),
+        min_trades_per_window=_required_positive_int(table, "min_trades_per_window", table="confirmation_scoring"),
+        low_trade_penalty=_required_non_negative_float(table, "low_trade_penalty", table="confirmation_scoring"),
+        min_symbol_count=_required_positive_int(table, "min_symbol_count", table="confirmation_scoring"),
+        symbol_concentration_penalty=_required_non_negative_float(
+            table,
+            "symbol_concentration_penalty",
+            table="confirmation_scoring",
+        ),
+    )
+
+
+def _parse_artifacts(raw: dict[str, Any]) -> ArtifactConfig:
+    table = raw.get("artifacts")
+    if table is None:
+        return ArtifactConfig(
+            profile="research",
+            keep_strategy_snapshot=True,
+            keep_config=True,
+            keep_summary=True,
+            keep_evidence=True,
+            keep_signals=True,
+            keep_engine_request=False,
+            keep_input_rows_csv=False,
+            keep_input_rows_jsonl=False,
+            compress_large_artifacts=False,
+            large_artifact_max_mb=100,
+        )
+    if not isinstance(table, dict):
+        raise ConfigError("artifacts must be a table")
+
+    profile = _required_str(table, "profile", table="artifacts")
+    if profile not in {"research", "debug"}:
+        raise ConfigError("artifacts.profile must be research or debug")
+
+    return ArtifactConfig(
+        profile=profile,
+        keep_strategy_snapshot=_required_bool(table, "keep_strategy_snapshot", table="artifacts"),
+        keep_config=_required_bool(table, "keep_config", table="artifacts"),
+        keep_summary=_required_bool(table, "keep_summary", table="artifacts"),
+        keep_evidence=_required_bool(table, "keep_evidence", table="artifacts"),
+        keep_signals=_required_bool(table, "keep_signals", table="artifacts"),
+        keep_engine_request=_required_bool(table, "keep_engine_request", table="artifacts"),
+        keep_input_rows_csv=_required_bool(table, "keep_input_rows_csv", table="artifacts"),
+        keep_input_rows_jsonl=_required_bool(table, "keep_input_rows_jsonl", table="artifacts"),
+        compress_large_artifacts=_required_bool(table, "compress_large_artifacts", table="artifacts"),
+        large_artifact_max_mb=_required_positive_int(table, "large_artifact_max_mb", table="artifacts"),
+    )
+
+
 def _required_table(raw: dict[str, Any], key: str) -> dict[str, Any]:
     value = raw.get(key)
     if not isinstance(value, dict):
@@ -226,6 +402,13 @@ def _optional_str(raw: dict[str, Any], key: str) -> str | None:
     return value
 
 
+def _required_bool(raw: dict[str, Any], key: str, *, table: str | None = None) -> bool:
+    value = raw.get(key)
+    if not isinstance(value, bool):
+        raise ConfigError(f"missing required boolean field: {_field_name(key, table)}")
+    return value
+
+
 def _required_positive_int(raw: dict[str, Any], key: str, *, table: str | None = None) -> int:
     value = _required_int(raw, key, table=table)
     if value <= 0:
@@ -247,6 +430,23 @@ def _required_number(raw: dict[str, Any], key: str, *, table: str | None = None)
     if isinstance(value, float) and not math.isfinite(value):
         raise ConfigError(f"{_field_name(key, table)} must be finite")
     return value
+
+
+def _required_non_negative_float(raw: dict[str, Any], key: str, *, table: str | None = None) -> float:
+    value = _required_number(raw, key, table=table)
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise ConfigError(f"{_field_name(key, table)} must be finite and non-negative")
+    return parsed
+
+
+def _list_item_str(values: list[Any], field_name: str) -> list[str]:
+    parsed: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or value == "":
+            raise ConfigError(f"{field_name}[{index}] must be a non-empty string")
+        parsed.append(value)
+    return parsed
 
 
 def _field_name(key: str, table: str | None) -> str:

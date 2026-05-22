@@ -252,17 +252,68 @@ def test_ledger_sanitizes_newlines_in_description(tmp_path: Path, monkeypatch):
 def test_smoke_attempt_uses_real_default_strategy_file_without_live_quant_data(
     tmp_path: Path, monkeypatch
 ):
+    import importlib.util
+    import tomllib
+    from datetime import datetime, timedelta, timezone
+
+    def _crypto_rows() -> list[dict[str, object]]:
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        rows: list[dict[str, object]] = []
+        symbols = ("BTC-PERP", "ETH-PERP", "SOL-PERP", "XRP-PERP")
+        for symbol_index, symbol in enumerate(symbols):
+            base = 100.0 + symbol_index
+            for offset in range(0, 481):
+                timestamp = start + timedelta(minutes=offset)
+                funding_event = offset in {0, 240, 480}
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "timestamp": timestamp,
+                        "open": base,
+                        "high": base,
+                        "low": base,
+                        "close": base + offset * (0.01 if symbol_index < 2 else -0.01),
+                        "funding_timestamp": timestamp if funding_event else None,
+                        "funding_rate": (0.0002 if symbol_index < 2 else -0.0002)
+                        if funding_event
+                        else None,
+                        "has_funding_event": funding_event,
+                    }
+                )
+        return rows
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        generated_config = tomllib.loads(config_path.read_text())
+        strategy_path = Path(generated_config["strategy_path"])
+        if not strategy_path.is_absolute():
+            strategy_path = repo_root / strategy_path
+        assert strategy_path == tmp_path / "strategy.py"
+
+        spec = importlib.util.spec_from_file_location("scratch_strategy_smoke", strategy_path)
+        assert spec is not None
+        assert spec.loader is not None
+        strategy_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(strategy_module)
+
+        generate_signals = getattr(strategy_module, "generate_signals", None)
+        assert callable(generate_signals)
+        signals = generate_signals(_crypto_rows(), generated_config["params"])
+        assert [(signal["symbol"], signal["side"]) for signal in signals] == [
+            ("BTC-PERP", "short"),
+            ("SOL-PERP", "long"),
+        ]
+
+        return fake_success_run(tmp_path / "results", net_return=0.02, trade_count=5)(
+            config_path, repo_root=repo_root
+        )
+
     write_experiment(tmp_path, max_attempts=1)
     source_strategy = Path(__file__).resolve().parents[1] / "strategy.py"
     (tmp_path / "strategy.py").write_text(source_strategy.read_text())
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runner_module, "ROOT", tmp_path)
     monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
-    monkeypatch.setattr(
-        runner_module,
-        "run_config",
-        fake_success_run(tmp_path / "results", net_return=0.02, trade_count=5),
-    )
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
 
     exit_code = main(["--description", "strategy compatibility smoke"])
 

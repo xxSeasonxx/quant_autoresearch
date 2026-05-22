@@ -19,8 +19,8 @@ flag for crypto perpetual bars.
 Signal rule:
 On a sparse as-of cadence, use completed prior closes and funding events at or
 before the as-of time. Emit decisions after the as-of bar can be observed. Short
-the strongest positive funding plus positive return tail, and long the
-strongest negative funding plus negative return tail.
+the strongest positive funding plus positive return tail, and optionally long
+the strongest negative funding plus negative return tail.
 
 Assumptions:
 Funding timestamps are known no later than the as-of time, market data
@@ -59,6 +59,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     min_cross_section = _positive_int(params.get("min_cross_section", 4), "min_cross_section")
     min_abs_funding_bps = _non_negative_float(params.get("min_abs_funding_bps", 1.0), "min_abs_funding_bps")
     min_abs_return_bps = _non_negative_float(params.get("min_abs_return_bps", 25.0), "min_abs_return_bps")
+    include_negative_funding_longs = _bool_param(
+        params.get("include_negative_funding_longs", True),
+        "include_negative_funding_longs",
+    )
     weight = float(params.get("weight", 1.0))
     hold_bars = int(params.get("hold_bars", params.get("hold_minutes", 480)))
 
@@ -102,11 +106,12 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             key=lambda item: (-item["funding_pressure_bps"], -item["return_extension_bps"], item["symbol"]),
         )[:top_n]:
             signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "short", weight, hold_bars))
-        for candidate in sorted(
-            negative_tail,
-            key=lambda item: (item["funding_pressure_bps"], item["return_extension_bps"], item["symbol"]),
-        )[:top_n]:
-            signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "long", weight, hold_bars))
+        if include_negative_funding_longs:
+            for candidate in sorted(
+                negative_tail,
+                key=lambda item: (item["funding_pressure_bps"], item["return_extension_bps"], item["symbol"]),
+            )[:top_n]:
+                signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "long", weight, hold_bars))
 
     return signals
 
@@ -137,6 +142,12 @@ def _non_negative_float(value: object, name: str) -> float:
     if not math.isfinite(parsed) or parsed < 0.0:
         raise ValueError(f"{name} must be finite and non-negative")
     return parsed
+
+
+def _bool_param(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be boolean")
+    return value
 
 
 def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, list[dict[str, Any]]]:

@@ -46,6 +46,28 @@ __all__ = ["generate_signals"]
 _REQUIRED_FIELDS = {"symbol", "timestamp", "close", "funding_timestamp", "funding_rate", "has_funding_event"}
 
 
+class _SymbolRows:
+    __slots__ = (
+        "timestamps",
+        "closes_by_timestamp",
+        "conflicting_close_timestamps",
+        "funding_event_rows",
+    )
+
+    def __init__(
+        self,
+        *,
+        timestamps: tuple[datetime, ...],
+        closes_by_timestamp: dict[datetime, float],
+        conflicting_close_timestamps: frozenset[datetime],
+        funding_event_rows: tuple[tuple[datetime, datetime, float], ...],
+    ) -> None:
+        self.timestamps = timestamps
+        self.closes_by_timestamp = closes_by_timestamp
+        self.conflicting_close_timestamps = conflicting_close_timestamps
+        self.funding_event_rows = funding_event_rows
+
+
 def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, object]) -> list[dict[str, object]]:
     if not bars:
         return []
@@ -69,10 +91,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     rows_by_symbol = _rows_by_symbol(bars)
     as_of_times = sorted(
         {
-            row["timestamp"]
+            timestamp
             for rows in rows_by_symbol.values()
-            for row in rows
-            if _is_decision_time(row["timestamp"], decision_interval_minutes, params)
+            for timestamp in rows.timestamps
+            if _is_decision_time(timestamp, decision_interval_minutes, params)
         }
     )
 
@@ -150,7 +172,7 @@ def _bool_param(value: object, name: str) -> bool:
     return value
 
 
-def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, list[dict[str, Any]]]:
+def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
     rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for row in bars:
         symbol = str(row["symbol"])
@@ -164,13 +186,44 @@ def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, list[dict
                 "has_funding_event": bool(row["has_funding_event"]),
             }
         )
-    for rows in rows_by_symbol.values():
+
+    indexed: dict[str, _SymbolRows] = {}
+    for symbol, rows in rows_by_symbol.items():
         rows.sort(key=lambda item: item["timestamp"])
-    return rows_by_symbol
+        timestamps: list[datetime] = []
+        closes_by_timestamp: dict[datetime, float] = {}
+        conflicting_close_timestamps: set[datetime] = set()
+        funding_event_rows: list[tuple[datetime, datetime, float]] = []
+
+        for row in rows:
+            timestamp = row["timestamp"]
+            timestamps.append(timestamp)
+
+            close = row["close"]
+            if close is not None:
+                if timestamp in closes_by_timestamp:
+                    existing_close = closes_by_timestamp[timestamp]
+                    if not math.isclose(existing_close, float(close), rel_tol=0.0, abs_tol=1e-12):
+                        conflicting_close_timestamps.add(timestamp)
+                else:
+                    closes_by_timestamp[timestamp] = float(close)
+
+            funding_time = row["funding_timestamp"]
+            funding_rate = row["funding_rate"]
+            if row["has_funding_event"] and funding_time is not None and funding_rate is not None:
+                funding_event_rows.append((timestamp, funding_time, funding_rate))
+
+        indexed[symbol] = _SymbolRows(
+            timestamps=tuple(timestamps),
+            closes_by_timestamp=closes_by_timestamp,
+            conflicting_close_timestamps=frozenset(conflicting_close_timestamps),
+            funding_event_rows=tuple(funding_event_rows),
+        )
+    return indexed
 
 
 def _decision_candidates(
-    rows_by_symbol: dict[str, list[dict[str, Any]]],
+    rows_by_symbol: dict[str, _SymbolRows],
     decision_time: datetime,
     funding_lookback_events: int,
     return_lookback_minutes: int,
@@ -201,29 +254,21 @@ def _decision_candidates(
     return candidates
 
 
-def _exact_close_at(rows: list[dict[str, Any]], timestamp: datetime) -> float | None:
-    closes = [row["close"] for row in rows if row["timestamp"] == timestamp and row["close"] is not None]
-    if not closes:
-        return None
-    first = float(closes[0])
-    if any(not math.isclose(first, float(close), rel_tol=0.0, abs_tol=1e-12) for close in closes[1:]):
+def _exact_close_at(rows: _SymbolRows, timestamp: datetime) -> float | None:
+    if timestamp in rows.conflicting_close_timestamps:
         raise ValueError(f"conflicting duplicate close rows at {timestamp.isoformat()}")
-    return first
+    return rows.closes_by_timestamp.get(timestamp)
 
 
 def _funding_pressure_bps(
-    rows: list[dict[str, Any]],
+    rows: _SymbolRows,
     decision_time: datetime,
     funding_lookback_events: int,
 ) -> float | None:
     funding_events: dict[datetime, tuple[datetime, float]] = {}
-    for row in rows:
-        if row["timestamp"] > decision_time:
+    for row_timestamp, funding_time, funding_rate in rows.funding_event_rows:
+        if row_timestamp > decision_time:
             break
-        funding_time = row["funding_timestamp"]
-        funding_rate = row["funding_rate"]
-        if not row["has_funding_event"] or funding_time is None or funding_rate is None:
-            continue
         if funding_time > decision_time:
             continue
 
@@ -232,7 +277,7 @@ def _funding_pressure_bps(
             _, existing_rate = existing
             if not math.isclose(existing_rate, funding_rate, rel_tol=0.0, abs_tol=1e-15):
                 raise ValueError(f"conflicting duplicate funding rates at {funding_time.isoformat()}")
-        funding_events[funding_time] = (row["timestamp"], funding_rate)
+        funding_events[funding_time] = (row_timestamp, funding_rate)
 
     if len(funding_events) < funding_lookback_events:
         return None

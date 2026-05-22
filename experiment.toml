@@ -47,11 +47,9 @@ end = "2026-04-13"
 [data]
 kind = "crypto_perp_funding"
 symbols = [
-  "BTC-PERP",
   "ETH-PERP",
   "SOL-PERP",
   "XRP-PERP",
-  "BNB-PERP",
   "DOGE-PERP",
   "ADA-PERP",
   "AVAX-PERP",

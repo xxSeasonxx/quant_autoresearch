@@ -98,3 +98,9 @@ def test_classify_failure_source_maps_runner_stages_and_messages():
     assert classify_failure_source("strategy_import", "strategy import failed") == "strategy_error"
     assert classify_failure_source("config", "invalid TOML") == "config_error"
     assert classify_failure_source("engine_evaluation", "engine evaluation failed") == "quant_strategies_error"
+    assert classify_failure_source("config_load", "failed to load config") == "config_error"
+    assert classify_failure_source("data_readiness", "insufficient data") == "quant_data_error"
+    assert classify_failure_source("strategy_import", "No module named 'pandas'") == "environment_error"
+    assert classify_failure_source("engine_evaluation", "conda environment failed") == "environment_error"
+    assert classify_failure_source("unexpected_stage", "unknown runner failure") == "quant_strategies_error"
+    assert classify_failure_source(None, None) is None

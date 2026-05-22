@@ -39,7 +39,7 @@ min_abs_funding_bps = 1.0
 min_abs_return_bps = 25.0
 include_negative_funding_longs = false
 weight = 0.25
-hold_bars = 720
+hold_bars = 840
 
 [fill_model]
 price = "close"

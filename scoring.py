@@ -204,6 +204,12 @@ def _looks_strategy_caused_readiness_failure(message: str) -> bool:
         "as_of row",
         "decision time",
         "decision timestamp",
-        "outside available",
     )
-    return any(marker in message for marker in strategy_markers)
+    if any(marker in message for marker in strategy_markers):
+        return True
+    if "outside available" not in message:
+        return False
+    return any(
+        context in message
+        for context in ("signal", "fill", "decision", "as_of", "as-of", "entry", "exit")
+    )

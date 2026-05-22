@@ -20,7 +20,7 @@ class FakeRunResult:
     promotion_eligible: bool = False
 
 
-def write_experiment(root: Path, *, max_attempts: int = 2) -> None:
+def write_experiment(root: Path, *, max_attempts: int = 2, results_dir: str = "results") -> None:
     (root / "experiment.toml").write_text(
         f'''
 strategy_id = "demo"
@@ -57,7 +57,7 @@ metric = "net_return"
 min_score_trades = 2
 
 [output]
-results_dir = "results"
+results_dir = "{results_dir}"
 mode = "validate"
 '''.lstrip()
     )
@@ -194,6 +194,7 @@ def test_main_resolves_relative_paths_under_root_when_invoked_elsewhere(tmp_path
 
     assert (workbench / "results" / ".generated" / "attempt_0001_primary.toml").exists()
     assert (workbench / "results" / "session_state.json").exists()
+    assert (workbench / ".autoresearch_session.json").exists()
     assert (workbench / "results.tsv").exists()
     assert not (outside / "results").exists()
     assert not (outside / "results.tsv").exists()
@@ -248,6 +249,27 @@ def test_main_writes_failure_artifacts_for_invalid_local_config(tmp_path: Path, 
     assert "\tconfig\t\t\t\tdiscard\tbroken local config" in ledger
 
 
+def test_main_writes_failure_artifacts_for_unreadable_local_config(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    assert main(["--config", "missing.toml", "--description", "missing local config"]) == 0
+
+    attempt_dir = tmp_path / "results" / "attempt_0001_config_failed"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    metadata = json.loads((attempt_dir / "attempt_metadata.json").read_text())
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    ledger = (tmp_path / "results.tsv").read_text()
+
+    assert score["status"] == "runner_failed"
+    assert score["failure_source"] == "config_error"
+    assert metadata["failure_source"] == "config_error"
+    assert state["attempts_used"] == 1
+    assert state["last_decision"] == "discard"
+    assert "\tdiscard\tmissing local config" in ledger
+
+
 def test_invalid_local_config_consumes_existing_session_capacity(tmp_path: Path, monkeypatch):
     write_experiment(tmp_path, max_attempts=3)
     monkeypatch.chdir(tmp_path)
@@ -271,6 +293,36 @@ def test_invalid_local_config_consumes_existing_session_capacity(tmp_path: Path,
     assert state["best_score"] == 0.05
     assert state["best_commit"] == "abc1234"
     assert state["last_decision"] == "discard"
+
+
+def test_invalid_local_config_consumes_custom_results_session_capacity(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path, max_attempts=3, results_dir="custom_results")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(
+        runner_module,
+        "run_config",
+        fake_success_run(tmp_path / "custom_results", net_return=0.05),
+    )
+    assert main(["--description", "baseline"]) == 0
+
+    (tmp_path / "experiment.toml").write_text("max_attempts = \n")
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "def5678")
+
+    assert main(["--description", "broken local config"]) == 0
+
+    attempt_dir = tmp_path / "custom_results" / "attempt_0002_config_failed"
+    score = json.loads((attempt_dir / "score.json").read_text())
+    state = json.loads((tmp_path / "custom_results" / "session_state.json").read_text())
+
+    assert score["failure_source"] == "config_error"
+    assert state["attempts_used"] == 2
+    assert state["remaining_attempts"] == 1
+    assert state["best_score"] == 0.05
+    assert state["best_commit"] == "abc1234"
+    assert state["last_decision"] == "discard"
+    assert not (tmp_path / "results" / "session_state.json").exists()
 
 
 def test_main_writes_failure_artifacts_for_malformed_evidence_json(tmp_path: Path, monkeypatch):

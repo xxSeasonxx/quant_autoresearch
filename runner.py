@@ -19,6 +19,7 @@ from scoring import build_score, classify_failure_source, load_json, write_score
 
 
 ROOT = Path(__file__).resolve().parent
+SESSION_POINTER_NAME = ".autoresearch_session.json"
 CONFIG_FAILURE_MAX_ATTEMPTS = 1
 CONFIG_FAILURE_MIN_SCORE_TRADES = 1
 CONFIG_FAILURE_WINDOW_ID = "config"
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         return _record_config_load_failure(args, exc)
 
     results_dir = _results_dir(config)
+    _write_results_dir_pointer(results_dir)
     state_path = results_dir / "session_state.json"
     state = load_session_state(
         state_path,
@@ -128,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _record_config_load_failure(args: argparse.Namespace, error: ConfigError) -> int:
-    results_dir = ROOT / "results"
+    results_dir = _config_failure_results_dir()
     state_path = results_dir / "session_state.json"
     state = load_session_state(
         state_path,
@@ -408,6 +410,44 @@ def _results_dir(config: ExperimentConfig) -> Path:
     if configured.is_absolute():
         return configured
     return ROOT / configured
+
+
+def _config_failure_results_dir() -> Path:
+    previous_results_dir = _read_results_dir_pointer()
+    if previous_results_dir is not None and (previous_results_dir / "session_state.json").exists():
+        return previous_results_dir
+    return ROOT / "results"
+
+
+def _write_results_dir_pointer(results_dir: Path) -> None:
+    payload = {"results_dir": str(results_dir)}
+    _session_pointer_path().write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_results_dir_pointer() -> Path | None:
+    path = _session_pointer_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    raw_results_dir = payload.get("results_dir")
+    if not isinstance(raw_results_dir, str) or raw_results_dir == "":
+        return None
+
+    results_dir = Path(raw_results_dir)
+    if results_dir.is_absolute():
+        return results_dir
+    return ROOT / results_dir
+
+
+def _session_pointer_path() -> Path:
+    return ROOT / SESSION_POINTER_NAME
 
 
 def _rooted_path(path: str | Path) -> Path:

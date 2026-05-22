@@ -162,6 +162,13 @@ def test_classify_failure_source_maps_runner_stages_and_messages():
         == "strategy_error"
     )
     assert classify_failure_source("data_readiness", "strict missing data for ETH-PERP") == "quant_data_error"
+    assert (
+        classify_failure_source(
+            "data_readiness",
+            "strict data window outside available dataset range",
+        )
+        == "quant_data_error"
+    )
     assert classify_failure_source("strategy_import", "No module named 'pandas'") == "environment_error"
     assert classify_failure_source("engine_evaluation", "conda environment failed") == "environment_error"
     assert classify_failure_source("unexpected_stage", "unknown runner failure") == "quant_strategies_error"

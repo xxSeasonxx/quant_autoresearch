@@ -116,6 +116,28 @@ low_trade_penalty = 0.001
 min_symbol_count = 4
 symbol_concentration_penalty = 0.00025
 
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = [
+  "validation_2025_h1",
+  "validation_2025_h2",
+  "locked_recent_2026",
+]
+rotating_probe_window_ids = [
+  "stress_2022_deleveraging",
+  "stress_2022_ftx",
+  "recovery_2023_h1",
+  "research_2024_h1",
+  "research_2024_h2",
+]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+
 [artifacts]
 profile = "research"
 keep_strategy_snapshot = true

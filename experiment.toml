@@ -69,7 +69,7 @@ min_abs_return_bps = 5.0
 include_negative_funding_longs = true
 require_exit_horizon = true
 weight = 1.0
-hold_bars = 480
+hold_bars = 420
 
 [fill_model]
 price = "close"

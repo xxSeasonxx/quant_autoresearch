@@ -56,8 +56,8 @@ symbols = [
 strict = true
 
 [params]
-funding_lookback_events = 3
-return_lookback_minutes = 120
+funding_lookback_events = 5
+return_lookback_minutes = 180
 decision_interval_minutes = 240
 decision_lag_minutes = 1
 session_start_hour = 4
@@ -68,7 +68,7 @@ min_abs_funding_bps = 1.0
 min_abs_return_bps = 5.0
 include_positive_funding_shorts = true
 include_negative_funding_longs = true
-min_same_sign_funding_events = 2
+min_same_sign_funding_events = 3
 min_latest_abs_funding_bps = 0.0
 volatility_lookback_minutes = 0
 min_abs_return_z = 0.0

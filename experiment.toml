@@ -88,8 +88,8 @@ entry_lag_bars = 1
 exit_lag_bars = 1
 
 [cost_model]
-fee_bps_per_side = 1.0
-slippage_bps_per_side = 1.0
+fee_bps_per_side = 2.5
+slippage_bps_per_side = 2.5
 
 [scoring]
 metric = "net_return"

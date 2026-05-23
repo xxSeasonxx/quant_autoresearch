@@ -17,6 +17,13 @@ from experiment_config import (
     load_experiment_config,
     materialize_runner_toml,
 )
+from promotion import (
+    build_cost_stress_config,
+    build_promotion_score,
+    decision_for_promotion,
+    scored_for_promotion,
+    select_rotating_probe_window_id,
+)
 from quant_strategies.runner import run_config
 from scoring import (
     build_candidate_score,
@@ -200,6 +207,37 @@ def main(argv: list[str] | None = None) -> int:
         simplification=args.simplification,
         artifact_profile=args.artifact_profile,
     )
+
+    if (
+        run_kind == "explore"
+        and config.promotion.enabled
+        and config.promotion.screen_on_scored_explore
+        and scored_for_promotion(window_result.score)
+    ):
+        promotion_dir, promotion_score, recent_results = run_promotion_screen(
+            config=config,
+            state=state,
+            attempt=attempt,
+            results_dir=results_dir,
+            description=args.description,
+            commit=commit,
+            simplification=args.simplification,
+            artifact_profile=args.artifact_profile,
+            explore_result=window_result,
+        )
+        return _finish_promotion_attempt(
+            state_path=state_path,
+            state=state,
+            promotion_dir=promotion_dir,
+            promotion_score=promotion_score,
+            recent_results=recent_results,
+            attempt=attempt,
+            commit=commit,
+            description=args.description,
+            ignored_max_attempts_override=ignored_max_attempts_override,
+            simplification=args.simplification,
+            primary_window_id=config.research.primary_window_id,
+        )
 
     if run_kind == "explore" and config.research.confirm_on_explore_keep:
         state_with_primary = update_primary_window_reference(state, score=window_result.score)
@@ -450,6 +488,123 @@ def run_confirmation_attempt(
     return candidate_dir, candidate_score, window_results
 
 
+def run_promotion_screen(
+    *,
+    config: ExperimentConfig,
+    state: SessionState,
+    attempt: int,
+    results_dir: Path,
+    description: str,
+    commit: str | None,
+    simplification: bool,
+    artifact_profile: str | None,
+    explore_result: WindowAttemptResult,
+) -> tuple[Path, dict[str, Any], list[WindowAttemptResult]]:
+    promotion_dir = results_dir / f"promotion_{attempt:04d}_{config.strategy_id}"
+    promotion_dir.mkdir(parents=True, exist_ok=True)
+
+    def _run(
+        *,
+        target_config: ExperimentConfig,
+        window_id: str,
+        result_dir: Path,
+        stage: str,
+    ) -> WindowAttemptResult:
+        try:
+            return run_single_window_attempt(
+                config=target_config,
+                attempt=attempt,
+                window_id=window_id,
+                results_dir=result_dir,
+                description=description,
+                commit=commit,
+                simplification=simplification,
+                artifact_profile=artifact_profile,
+            )
+        except Exception as exc:
+            return failed_window_attempt_result(
+                config=target_config,
+                attempt=attempt,
+                window_id=window_id,
+                result_dir=result_dir / f"attempt_{attempt:04d}_{window_id}_failed",
+                description=description,
+                commit=commit,
+                message=f"{stage} failed: {exc}",
+            )
+
+    recent_results: list[WindowAttemptResult] = []
+    for window_id in config.promotion.recent_window_ids:
+        if window_id == explore_result.window_id:
+            recent_results.append(explore_result)
+            continue
+        recent_results.append(
+            _run(
+                target_config=config,
+                window_id=window_id,
+                result_dir=promotion_dir / "windows" / window_id,
+                stage="promotion recent window",
+            )
+        )
+
+    cost_config = build_cost_stress_config(config)
+    cost_result = _run(
+        target_config=cost_config,
+        window_id=config.research.primary_window_id,
+        result_dir=promotion_dir / "cost_stress" / config.promotion.cost_stress_id,
+        stage="promotion cost stress",
+    )
+
+    probe_window_id = select_rotating_probe_window_id(config.promotion, state)
+    probe_result = _run(
+        target_config=config,
+        window_id=probe_window_id,
+        result_dir=promotion_dir / "rotating_probe" / probe_window_id,
+        stage="promotion rotating probe",
+    )
+
+    promotion_score = build_promotion_score(
+        recent_window_scores=[result.score for result in recent_results],
+        cost_stress_score=cost_result.score,
+        rotating_probe_score=probe_result.score,
+        confirmation_config=config.confirmation_scoring,
+        promotion_config=config.promotion,
+        commit=commit,
+        description=description,
+        rotating_probe_window_id=probe_window_id,
+    )
+    write_score(promotion_dir / "promotion_score.json", promotion_score)
+    (promotion_dir / "promotion_summary.json").write_text(
+        json.dumps(
+            {
+                "attempt": attempt,
+                "commit": commit,
+                "description": description,
+                "promotion_score": promotion_score["promotion_score"],
+                "eligible_for_promotion": promotion_score["eligible_for_promotion"],
+                "failed_reasons": promotion_score["failed_reasons"],
+                "recent_window_ids": list(config.promotion.recent_window_ids),
+                "source_result_dirs": {result.window_id: str(result.result_dir) for result in recent_results},
+                "cost_stress_result_dir": str(cost_result.result_dir),
+                "cost_stress_id": config.promotion.cost_stress_id,
+                "rotating_probe_window_id": probe_window_id,
+                "rotating_probe_result_dir": str(probe_result.result_dir),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence_by_window = {result.window_id: result.evidence for result in recent_results}
+    evidence_by_window[f"cost_stress:{config.promotion.cost_stress_id}"] = cost_result.evidence
+    evidence_by_window[f"rotating_probe:{probe_window_id}"] = probe_result.evidence
+    (promotion_dir / "trade_attribution.json").write_text(
+        json.dumps(build_trade_attribution(evidence_by_window), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return promotion_dir, promotion_score, recent_results
+
+
 def failed_window_attempt_result(
     *,
     config: ExperimentConfig,
@@ -597,6 +752,69 @@ def _finish_confirmation_attempt(
                 "remaining_attempts": next_state.remaining_attempts,
                 "result_dir": str(candidate_dir),
                 "run_kind": "confirm",
+                "status": next_state.status,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _finish_promotion_attempt(
+    *,
+    state_path: Path,
+    state: SessionState,
+    promotion_dir: Path,
+    promotion_score: dict[str, Any],
+    recent_results: list[WindowAttemptResult],
+    attempt: int,
+    commit: str | None,
+    description: str,
+    ignored_max_attempts_override: int | None,
+    simplification: bool,
+    primary_window_id: str,
+) -> int:
+    decision = decision_for_promotion(promotion_score, state=state, simplification=simplification)
+    next_score = {
+        **promotion_score,
+        "promotion_decision": decision,
+        "promoted_commit": commit if decision == "promote" else None,
+    }
+    write_score(promotion_dir / "promotion_score.json", next_score)
+    next_state = update_state_for_promotion(
+        state,
+        promotion_score=promotion_score,
+        commit=commit,
+        decision=decision,
+    )
+    save_session_state(state_path, next_state)
+    primary_result = _primary_window_result(recent_results, primary_window_id=primary_window_id)
+    append_ledger(
+        ROOT / "results.tsv",
+        attempt=attempt,
+        commit=commit,
+        window_id=primary_result.window_id,
+        window_start=_optional_str(primary_result.run_metadata["window_start"]),
+        window_end=_optional_str(primary_result.run_metadata["window_end"]),
+        window_days=_optional_int(primary_result.run_metadata["window_days"]),
+        symbol_count=_optional_int(primary_result.run_metadata["symbol_count"]),
+        score=primary_result.score,
+        status=decision,
+        description=description,
+        run_kind="promotion",
+        promotion_score=next_score,
+    )
+    print(
+        json.dumps(
+            {
+                "attempt": attempt,
+                "decision": decision,
+                "ignored_max_attempts_override": ignored_max_attempts_override,
+                "max_attempts": next_state.max_attempts,
+                "promotion_score": promotion_score["promotion_score"],
+                "remaining_attempts": next_state.remaining_attempts,
+                "result_dir": str(promotion_dir),
+                "run_kind": "promotion",
                 "status": next_state.status,
             },
             sort_keys=True,

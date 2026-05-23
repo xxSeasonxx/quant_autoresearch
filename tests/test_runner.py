@@ -77,6 +77,42 @@ mode = "validate"
     (root / "strategy.py").write_text("def generate_signals(bars, params):\n    return []\n")
 
 
+def append_promotion_config(root: Path) -> None:
+    with (root / "experiment.toml").open("a") as handle:
+        handle.write(
+            """
+[research]
+mode = "explore"
+primary_window_id = "primary"
+confirmation_window_ids = ["primary", "holdout"]
+parallel_workers = 1
+confirm_on_explore_keep = false
+
+[confirmation_scoring]
+primary_metric = "net_return_per_day"
+dispersion_weight = 0.0
+weak_window_floor = 0.0
+weak_window_penalty = 0.0
+min_trades_per_window = 2
+low_trade_penalty = 0.0
+min_symbol_count = 1
+symbol_concentration_penalty = 0.0
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+"""
+        )
+
+
 def fake_success_run(result_root: Path, *, net_return: float, trade_count: int = 3):
     def _run_config(config_path: Path, *, repo_root: Path):
         attempt_dir = result_root / f"attempt_{net_return}".replace(".", "_")
@@ -795,6 +831,127 @@ def test_append_ledger_writes_promotion_columns(tmp_path: Path):
     assert rows[0]["cost_stress_ratio"] == "0.58"
     assert rows[0]["rotating_probe_window_id"] == "stress_2022_ftx"
     assert rows[0]["promoted_commit"] == "abc1234"
+
+
+def test_scored_explore_runs_promotion_without_rerunning_primary(tmp_path: Path, monkeypatch, capsys):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    generated_starts: list[str] = []
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        parsed = tomllib.loads(config_path.read_text())
+        output_dir = Path(parsed["output"]["results_dir"])
+        start = parsed["data"]["start"]
+        fee = parsed["cost_model"]["fee_bps_per_side"]
+        generated_starts.append(f"{start}|fee={fee}")
+        if fee == 0.5:
+            net = 0.12
+        elif start == "2024-01-01":
+            net = 0.18
+        else:
+            net = 0.16
+        return fake_success_run(output_dir, net_return=net, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--description", "promotion screen"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert generated_starts.count("2024-01-01|fee=0.0") == 1
+    assert output["run_kind"] == "promotion"
+    assert output["decision"] == "promote"
+    assert state["best_promoted_score"] == pytest.approx(output["promotion_score"])
+    assert state["rotating_probe_index"] == 1
+    assert rows[0]["run_kind"] == "promotion"
+    assert rows[0]["promotion_decision"] == "promote"
+    promotion_score = json.loads((Path(output["result_dir"]) / "promotion_score.json").read_text())
+    promotion_summary = json.loads((Path(output["result_dir"]) / "promotion_summary.json").read_text())
+    assert promotion_score["promotion_decision"] == "promote"
+    assert promotion_score["promoted_commit"] == "abc1234"
+    assert promotion_summary["source_result_dirs"]["primary"]
+
+
+def test_non_scored_explore_does_not_run_promotion(tmp_path: Path, monkeypatch):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    monkeypatch.setattr(
+        runner_module,
+        "run_config",
+        fake_success_run(tmp_path / "results", net_return=0.20, trade_count=1),
+    )
+
+    assert main(["--explore", "--description", "too few trades"]) == 0
+
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert state["best_promoted_score"] is None
+    assert state["rotating_probe_index"] == 0
+    assert rows[0]["run_kind"] == "explore"
+    assert rows[0]["promotion_score"] == ""
+    assert not list((tmp_path / "results").glob("promotion_*"))
+
+
+def test_promotion_rejects_cost_stress_failure(tmp_path: Path, monkeypatch, capsys):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        parsed = tomllib.loads(config_path.read_text())
+        output_dir = Path(parsed["output"]["results_dir"])
+        net = 0.01 if parsed["cost_model"]["fee_bps_per_side"] == 0.5 else 0.18
+        return fake_success_run(output_dir, net_return=net, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--description", "weak costs"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    assert output["decision"] == "reject"
+    assert state["best_promoted_score"] is None
+    promotion_score = json.loads((Path(output["result_dir"]) / "promotion_score.json").read_text())
+    assert "cost_stress_ratio_below_minimum" in promotion_score["failed_reasons"]
+
+
+def test_promotion_window_exception_records_rejection_instead_of_aborting(tmp_path: Path, monkeypatch, capsys):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        parsed = tomllib.loads(config_path.read_text())
+        output_dir = Path(parsed["output"]["results_dir"])
+        is_holdout_recent = (
+            parsed["data"]["start"] == "2024-05-01"
+            and parsed["cost_model"]["fee_bps_per_side"] == 0.0
+        )
+        if is_holdout_recent:
+            raise RuntimeError("data unavailable")
+        return fake_success_run(output_dir, net_return=0.18, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--description", "subwindow crash"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    promotion_score = json.loads((Path(output["result_dir"]) / "promotion_score.json").read_text())
+    assert output["decision"] == "reject"
+    assert "recent_core_failed" in promotion_score["failed_reasons"]
+    assert (Path(output["result_dir"]) / "windows" / "holdout").exists()
 
 
 def test_run_single_window_attempt_returns_score_and_artifacts(tmp_path: Path, monkeypatch):

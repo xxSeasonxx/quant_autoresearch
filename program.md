@@ -101,6 +101,12 @@ evidence. Loop feedback only. Do not blindly chase the last number. Use the
 score to compare attempts, then use causal timing, trade count, costs, data
 quality, fill assumptions, and overfit risk to decide what to try next.
 
+Do not default to a parameter sweep. The next iteration should usually improve
+the strategy hypothesis, signal construction, risk filter, timing logic,
+universe definition, or failure mode exposed by the evidence. Parameter changes
+are valid only when you can explain why the new value better expresses that
+quant idea; do not tune numbers just because the last run moved the score.
+
 **Simplicity criterion**: All else being equal, simpler is better. A small score
 improvement that adds ugly complexity is not worth it. Conversely, removing
 something and getting equal or better results is a great outcome. When
@@ -187,6 +193,8 @@ write down the research reason for the next attempt:
 - trade count and sample quality
 - fill assumptions and data quality
 - overfit risk and whether the change adds unjustified complexity
+- if changing a parameter, the quant reason the new value should improve the
+  strategy rather than merely fitting the last run
 
 If an attempt fails, attribute the root source before changing anything:
 

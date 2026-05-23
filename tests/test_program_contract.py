@@ -50,6 +50,26 @@ def test_program_requires_quant_research_review_not_metric_chasing():
         assert phrase in text
 
 
+def test_program_rejects_blind_parameter_sweeps():
+    text = PROGRAM.read_text()
+    normalized = " ".join(text.split())
+
+    required = [
+        "Do not default to a parameter sweep",
+        "improve the strategy hypothesis",
+        "signal construction",
+        "risk filter",
+        "timing logic",
+        "Parameter changes are valid only when",
+        "better expresses that quant idea",
+        "do not tune numbers just because",
+        "the quant reason the new value should improve the",
+        "strategy rather than merely fitting the last run",
+    ]
+    for phrase in required:
+        assert phrase in normalized
+
+
 def test_program_allows_quant_judgment_window_changes_without_cherry_picking():
     text = PROGRAM.read_text()
 

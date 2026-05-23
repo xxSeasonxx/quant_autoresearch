@@ -49,8 +49,8 @@ def build_promotion_score(
     )
     promotion_score = _as_float_or_none(recent_score.get("candidate_score"))
     recent_mean_score = _as_float_or_none(recent_score.get("recent_mean_score"))
-    cost_value = _as_float_or_none(cost_stress_score.get("score"))
-    probe_value = _as_float_or_none(rotating_probe_score.get("score"))
+    cost_value = _scored_value_or_none(cost_stress_score)
+    probe_value = _scored_value_or_none(rotating_probe_score)
     failed_reasons: list[str] = []
 
     if recent_score.get("status") != "scored" or promotion_score is None:
@@ -123,6 +123,12 @@ def _failed_recent_core(window_scores: list[dict[str, Any]]) -> bool:
         if score.get("status") != "scored" or value is None or value <= 0.0:
             return True
     return False
+
+
+def _scored_value_or_none(score: dict[str, Any]) -> float | None:
+    if score.get("status") != "scored":
+        return None
+    return _as_float_or_none(score.get("score"))
 
 
 def _cost_stress_ratio(cost_value: float | None, recent_mean_score: float | None) -> float | None:

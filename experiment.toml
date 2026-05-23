@@ -104,7 +104,7 @@ confirmation_window_ids = [
   "locked_recent_2026",
 ]
 parallel_workers = 3
-confirm_on_explore_keep = true
+confirm_on_explore_keep = false
 
 [confirmation_scoring]
 primary_metric = "net_return_per_day"

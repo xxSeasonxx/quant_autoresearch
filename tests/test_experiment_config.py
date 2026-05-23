@@ -345,6 +345,33 @@ cost_stress_min_ratio = 0.5
         load_experiment_config(write_config(tmp_path, bad))
 
 
+def test_load_experiment_config_rejects_promotion_with_auto_confirm(tmp_path: Path):
+    bad = VALID_TOML + """
+
+[research]
+mode = "explore"
+primary_window_id = "primary"
+confirmation_window_ids = ["primary", "holdout"]
+parallel_workers = 1
+confirm_on_explore_keep = true
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+"""
+
+    with pytest.raises(ConfigError, match="confirm_on_explore_keep"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
 @pytest.mark.parametrize("mode", ["fast", "confirm-all", ""])
 def test_load_experiment_config_rejects_invalid_research_mode(tmp_path: Path, mode: str):
     bad = VALID_TOML + f"""

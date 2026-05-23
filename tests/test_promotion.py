@@ -151,6 +151,23 @@ def test_build_promotion_score_rejects_cost_stress_edge_destruction():
     assert "cost_stress_ratio_below_minimum" in payload["failed_reasons"]
 
 
+def test_build_promotion_score_rejects_validation_failed_cost_stress():
+    payload = build_promotion_score(
+        recent_window_scores=[window_score("primary", 0.0020), window_score("holdout", 0.0018)],
+        cost_stress_score=window_score("primary", 0.0012, status="validation_failed"),
+        rotating_probe_score=window_score("stress_a", 0.0001),
+        confirmation_config=confirmation_config(),
+        promotion_config=promotion_config(),
+        commit="abc1234",
+        description="candidate",
+        rotating_probe_window_id="stress_a",
+    )
+
+    assert payload["eligible_for_promotion"] is False
+    assert "cost_stress_failed" in payload["failed_reasons"]
+    assert payload["cost_stress_score"] is None
+
+
 def test_build_promotion_score_rejects_deep_negative_probe():
     payload = build_promotion_score(
         recent_window_scores=[window_score("primary", 0.0020), window_score("holdout", 0.0018)],
@@ -165,6 +182,23 @@ def test_build_promotion_score_rejects_deep_negative_probe():
 
     assert payload["eligible_for_promotion"] is False
     assert "rotating_probe_below_floor" in payload["failed_reasons"]
+
+
+def test_build_promotion_score_rejects_validation_failed_rotating_probe():
+    payload = build_promotion_score(
+        recent_window_scores=[window_score("primary", 0.0020), window_score("holdout", 0.0018)],
+        cost_stress_score=window_score("primary", 0.0012),
+        rotating_probe_score=window_score("stress_a", 0.0001, status="validation_failed"),
+        confirmation_config=confirmation_config(),
+        promotion_config=promotion_config(),
+        commit="abc1234",
+        description="candidate",
+        rotating_probe_window_id="stress_a",
+    )
+
+    assert payload["eligible_for_promotion"] is False
+    assert "rotating_probe_failed" in payload["failed_reasons"]
+    assert payload["rotating_probe_score"] is None
 
 
 def test_decision_for_promotion_respects_best_score_and_simplification_tolerance():

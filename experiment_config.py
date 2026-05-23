@@ -153,7 +153,12 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     scoring = _parse_scoring(_required_table(raw, "scoring"))
     research = _parse_research(raw, window_ids, selected_window_id)
     confirmation_scoring = _parse_confirmation_scoring(raw)
-    promotion = _parse_promotion(raw, window_ids, primary_window_id=research.primary_window_id)
+    promotion = _parse_promotion(
+        raw,
+        window_ids,
+        primary_window_id=research.primary_window_id,
+        confirm_on_explore_keep=research.confirm_on_explore_keep,
+    )
     artifacts = _parse_artifacts(raw)
     output = _required_table(raw, "output")
     _required_str(output, "results_dir", table="output")
@@ -361,6 +366,7 @@ def _parse_promotion(
     window_ids: set[str],
     *,
     primary_window_id: str,
+    confirm_on_explore_keep: bool,
 ) -> PromotionConfig:
     table = raw.get("promotion")
     if table is None:
@@ -409,6 +415,8 @@ def _parse_promotion(
         raise ConfigError("promotion.recent_window_ids must include research.primary_window_id")
     if enabled and screen_on_scored_explore and cost_fee_bps_per_side == 0.0 and cost_slippage_bps_per_side == 0.0:
         raise ConfigError("promotion cost stress must use nonzero fee or slippage")
+    if enabled and screen_on_scored_explore and confirm_on_explore_keep:
+        raise ConfigError("promotion auto-screening requires research.confirm_on_explore_keep = false")
 
     return PromotionConfig(
         enabled=enabled,

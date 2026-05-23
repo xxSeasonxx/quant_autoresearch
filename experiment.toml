@@ -75,7 +75,6 @@ min_abs_return_z = 0.0
 recent_return_lookback_minutes = 0
 max_recent_same_direction_return_bps = 0.0
 symbol_cooldown_minutes = 0
-max_market_same_direction_return_bps = 20.0
 min_tail_count = 1
 balance_sides = false
 selection_score = "funding"

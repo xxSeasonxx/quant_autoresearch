@@ -100,6 +100,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("min_latest_abs_funding_bps", 0.0),
         "min_latest_abs_funding_bps",
     )
+    require_latest_funding_pressure_sign = _bool_param(
+        params.get("require_latest_funding_pressure_sign", False),
+        "require_latest_funding_pressure_sign",
+    )
     volatility_lookback_minutes = _non_negative_int(
         params.get("volatility_lookback_minutes", 0),
         "volatility_lookback_minutes",
@@ -166,6 +170,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and candidate["return_extension_bps"] >= min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and _latest_confirms_pressure(candidate, require_latest_funding_pressure_sign)
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
         ]
@@ -176,6 +181,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and candidate["return_extension_bps"] <= -min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and _latest_confirms_pressure(candidate, require_latest_funding_pressure_sign)
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
         ]
@@ -445,6 +451,12 @@ def _passes_return_z(candidate: Mapping[str, Any], min_abs_return_z: float) -> b
         return True
     value = candidate.get("return_z")
     return isinstance(value, float) and abs(value) >= min_abs_return_z
+
+
+def _latest_confirms_pressure(candidate: Mapping[str, Any], required: bool) -> bool:
+    if not required:
+        return True
+    return _sign(float(candidate["latest_funding_bps"])) == _sign(float(candidate["funding_pressure_bps"]))
 
 
 def _passes_recent_cooloff(

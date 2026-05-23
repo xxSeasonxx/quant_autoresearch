@@ -117,6 +117,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("symbol_cooldown_minutes", 0),
         "symbol_cooldown_minutes",
     )
+    max_market_same_direction_return_bps = _non_negative_float(
+        params.get("max_market_same_direction_return_bps", 0.0),
+        "max_market_same_direction_return_bps",
+    )
     min_tail_count = _positive_int(params.get("min_tail_count", 1), "min_tail_count")
     balance_sides = _bool_param(params.get("balance_sides", False), "balance_sides")
     selection_score = str(params.get("selection_score", "funding"))
@@ -149,6 +153,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         )
         if len(candidates) < min_cross_section:
             continue
+        market_return_bps = sum(candidate["return_extension_bps"] for candidate in candidates) / len(candidates)
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
         candidates = _filter_exit_horizon(
             candidates,
@@ -168,6 +173,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
+            and _passes_market_trend_filter("short", market_return_bps, max_market_same_direction_return_bps)
         ]
         negative_tail = [
             candidate
@@ -178,6 +184,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
+            and _passes_market_trend_filter("long", market_return_bps, max_market_same_direction_return_bps)
         ]
         if len(positive_tail) < min_tail_count:
             positive_tail = []
@@ -460,6 +467,18 @@ def _passes_recent_cooloff(
     if side == "short":
         return value <= max_recent_same_direction_return_bps
     return value >= -max_recent_same_direction_return_bps
+
+
+def _passes_market_trend_filter(
+    side: str,
+    market_return_bps: float,
+    max_market_same_direction_return_bps: float,
+) -> bool:
+    if max_market_same_direction_return_bps <= 0.0:
+        return True
+    if side == "short":
+        return market_return_bps <= max_market_same_direction_return_bps
+    return market_return_bps >= -max_market_same_direction_return_bps
 
 
 def _selected_tail(

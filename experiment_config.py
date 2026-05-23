@@ -56,6 +56,20 @@ class ConfirmationScoringConfig:
 
 
 @dataclass(frozen=True)
+class PromotionConfig:
+    enabled: bool
+    screen_on_scored_explore: bool
+    recent_window_ids: tuple[str, ...]
+    rotating_probe_window_ids: tuple[str, ...]
+    deep_probe_floor: float
+    near_equal_score_tolerance: float
+    cost_stress_id: str
+    cost_fee_bps_per_side: float
+    cost_slippage_bps_per_side: float
+    cost_stress_min_ratio: float
+
+
+@dataclass(frozen=True)
 class ArtifactConfig:
     profile: str
     keep_strategy_snapshot: bool
@@ -85,6 +99,7 @@ class ExperimentConfig:
     scoring: ScoringConfig
     research: ResearchConfig
     confirmation_scoring: ConfirmationScoringConfig
+    promotion: PromotionConfig
     artifacts: ArtifactConfig
     output: dict[str, Any]
 
@@ -138,6 +153,7 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
     scoring = _parse_scoring(_required_table(raw, "scoring"))
     research = _parse_research(raw, window_ids, selected_window_id)
     confirmation_scoring = _parse_confirmation_scoring(raw)
+    promotion = _parse_promotion(raw, window_ids, primary_window_id=research.primary_window_id)
     artifacts = _parse_artifacts(raw)
     output = _required_table(raw, "output")
     _required_str(output, "results_dir", table="output")
@@ -168,6 +184,7 @@ def load_experiment_config(path: str | Path = "experiment.toml") -> ExperimentCo
         scoring=scoring,
         research=research,
         confirmation_scoring=confirmation_scoring,
+        promotion=promotion,
         artifacts=artifacts,
         output=dict(output),
     )
@@ -339,6 +356,74 @@ def _parse_confirmation_scoring(raw: dict[str, Any]) -> ConfirmationScoringConfi
     )
 
 
+def _parse_promotion(
+    raw: dict[str, Any],
+    window_ids: set[str],
+    *,
+    primary_window_id: str,
+) -> PromotionConfig:
+    table = raw.get("promotion")
+    if table is None:
+        return PromotionConfig(
+            enabled=False,
+            screen_on_scored_explore=False,
+            recent_window_ids=(),
+            rotating_probe_window_ids=(),
+            deep_probe_floor=0.0,
+            near_equal_score_tolerance=0.0,
+            cost_stress_id="cost_stress",
+            cost_fee_bps_per_side=0.0,
+            cost_slippage_bps_per_side=0.0,
+            cost_stress_min_ratio=0.0,
+        )
+    if not isinstance(table, dict):
+        raise ConfigError("promotion must be a table")
+
+    recent_window_ids = tuple(
+        _list_item_str(
+            _required_list(table, "recent_window_ids", table="promotion"),
+            "promotion.recent_window_ids",
+        )
+    )
+    rotating_probe_window_ids = tuple(
+        _list_item_str(
+            _required_list(table, "rotating_probe_window_ids", table="promotion"),
+            "promotion.rotating_probe_window_ids",
+        )
+    )
+    _reject_unknown_window_ids(recent_window_ids, window_ids, "promotion.recent_window_ids")
+    _reject_unknown_window_ids(rotating_probe_window_ids, window_ids, "promotion.rotating_probe_window_ids")
+
+    enabled = _required_bool(table, "enabled", table="promotion")
+    screen_on_scored_explore = _required_bool(table, "screen_on_scored_explore", table="promotion")
+    cost_fee_bps_per_side = _required_non_negative_float(table, "cost_fee_bps_per_side", table="promotion")
+    cost_slippage_bps_per_side = _required_non_negative_float(table, "cost_slippage_bps_per_side", table="promotion")
+    cost_stress_min_ratio = _required_non_negative_float(table, "cost_stress_min_ratio", table="promotion")
+    if cost_stress_min_ratio > 1.0:
+        raise ConfigError("promotion.cost_stress_min_ratio must be between 0 and 1 inclusive")
+    if enabled and screen_on_scored_explore and not recent_window_ids:
+        raise ConfigError("promotion.recent_window_ids must be non-empty when enabled")
+    if enabled and screen_on_scored_explore and not rotating_probe_window_ids:
+        raise ConfigError("promotion.rotating_probe_window_ids must be non-empty when enabled")
+    if enabled and screen_on_scored_explore and primary_window_id not in recent_window_ids:
+        raise ConfigError("promotion.recent_window_ids must include research.primary_window_id")
+    if enabled and screen_on_scored_explore and cost_fee_bps_per_side == 0.0 and cost_slippage_bps_per_side == 0.0:
+        raise ConfigError("promotion cost stress must use nonzero fee or slippage")
+
+    return PromotionConfig(
+        enabled=enabled,
+        screen_on_scored_explore=screen_on_scored_explore,
+        recent_window_ids=recent_window_ids,
+        rotating_probe_window_ids=rotating_probe_window_ids,
+        deep_probe_floor=float(_required_number(table, "deep_probe_floor", table="promotion")),
+        near_equal_score_tolerance=_required_non_negative_float(table, "near_equal_score_tolerance", table="promotion"),
+        cost_stress_id=_required_str(table, "cost_stress_id", table="promotion"),
+        cost_fee_bps_per_side=cost_fee_bps_per_side,
+        cost_slippage_bps_per_side=cost_slippage_bps_per_side,
+        cost_stress_min_ratio=cost_stress_min_ratio,
+    )
+
+
 def _parse_artifacts(raw: dict[str, Any]) -> ArtifactConfig:
     table = raw.get("artifacts")
     if table is None:
@@ -440,6 +525,13 @@ def _required_non_negative_float(raw: dict[str, Any], key: str, *, table: str | 
     return parsed
 
 
+def _required_list(raw: dict[str, Any], key: str, *, table: str | None = None) -> list[Any]:
+    value = raw.get(key)
+    if not isinstance(value, list):
+        raise ConfigError(f"missing required list field: {_field_name(key, table)}")
+    return value
+
+
 def _list_item_str(values: list[Any], field_name: str) -> list[str]:
     parsed: list[str] = []
     for index, value in enumerate(values):
@@ -447,6 +539,12 @@ def _list_item_str(values: list[Any], field_name: str) -> list[str]:
             raise ConfigError(f"{field_name}[{index}] must be a non-empty string")
         parsed.append(value)
     return parsed
+
+
+def _reject_unknown_window_ids(values: tuple[str, ...], window_ids: set[str], field_name: str) -> None:
+    unknown = [window_id for window_id in values if window_id not in window_ids]
+    if unknown:
+        raise ConfigError(f"{field_name} contains unknown windows: {unknown}")
 
 
 def _field_name(key: str, table: str | None) -> str:

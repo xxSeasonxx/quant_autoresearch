@@ -219,6 +219,132 @@ large_artifact_max_mb = 100
     assert config.artifacts.large_artifact_max_mb == 100
 
 
+def test_load_experiment_config_defaults_promotion_disabled(tmp_path: Path):
+    config = load_experiment_config(write_config(tmp_path))
+
+    assert config.promotion.enabled is False
+    assert config.promotion.screen_on_scored_explore is False
+    assert config.promotion.recent_window_ids == ()
+    assert config.promotion.rotating_probe_window_ids == ()
+    assert config.promotion.deep_probe_floor == 0.0
+    assert config.promotion.near_equal_score_tolerance == 0.0
+    assert config.promotion.cost_stress_id == "cost_stress"
+    assert config.promotion.cost_fee_bps_per_side == 0.0
+    assert config.promotion.cost_slippage_bps_per_side == 0.0
+    assert config.promotion.cost_stress_min_ratio == 0.0
+
+
+def test_load_experiment_config_parses_promotion_section(tmp_path: Path):
+    config_text = VALID_TOML + """
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+"""
+
+    config = load_experiment_config(write_config(tmp_path, config_text))
+
+    assert config.promotion.enabled is True
+    assert config.promotion.screen_on_scored_explore is True
+    assert config.promotion.recent_window_ids == ("primary", "holdout")
+    assert config.promotion.rotating_probe_window_ids == ("holdout",)
+    assert config.promotion.deep_probe_floor == pytest.approx(-0.001)
+    assert config.promotion.near_equal_score_tolerance == pytest.approx(0.0001)
+    assert config.promotion.cost_stress_id == "realistic_costs"
+    assert config.promotion.cost_fee_bps_per_side == pytest.approx(0.5)
+    assert config.promotion.cost_slippage_bps_per_side == pytest.approx(0.5)
+    assert config.promotion.cost_stress_min_ratio == pytest.approx(0.5)
+
+
+def test_load_experiment_config_rejects_unknown_promotion_window(tmp_path: Path):
+    bad = VALID_TOML + """
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "missing"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+"""
+
+    with pytest.raises(ConfigError, match="promotion.recent_window_ids"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
+def test_load_experiment_config_rejects_promotion_recent_without_primary_window(tmp_path: Path):
+    bad = VALID_TOML + """
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = 0.5
+"""
+
+    with pytest.raises(ConfigError, match="research.primary_window_id"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
+@pytest.mark.parametrize("ratio", [-0.1, 1.1])
+def test_load_experiment_config_rejects_invalid_cost_stress_ratio(tmp_path: Path, ratio: float):
+    bad = VALID_TOML + f"""
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
+cost_stress_min_ratio = {ratio}
+"""
+
+    with pytest.raises(ConfigError, match="cost_stress_min_ratio"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
+def test_load_experiment_config_rejects_enabled_zero_cost_promotion(tmp_path: Path):
+    bad = VALID_TOML + """
+
+[promotion]
+enabled = true
+screen_on_scored_explore = true
+recent_window_ids = ["primary", "holdout"]
+rotating_probe_window_ids = ["holdout"]
+deep_probe_floor = -0.001
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.0
+cost_slippage_bps_per_side = 0.0
+cost_stress_min_ratio = 0.5
+"""
+
+    with pytest.raises(ConfigError, match="nonzero fee or slippage"):
+        load_experiment_config(write_config(tmp_path, bad))
+
+
 @pytest.mark.parametrize("mode", ["fast", "confirm-all", ""])
 def test_load_experiment_config_rejects_invalid_research_mode(tmp_path: Path, mode: str):
     bad = VALID_TOML + f"""

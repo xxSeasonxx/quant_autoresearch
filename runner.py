@@ -79,6 +79,18 @@ LEDGER_HEADER = [
     "passed_window_count",
     "failed_window_count",
 ]
+CANDIDATE_LEDGER_HEADER = LEDGER_HEADER
+LEDGER_HEADER = [
+    *CANDIDATE_LEDGER_HEADER,
+    "promotion_decision",
+    "promotion_score",
+    "score_dispersion",
+    "cost_stress_score",
+    "cost_stress_ratio",
+    "rotating_probe_window_id",
+    "rotating_probe_score",
+    "promoted_commit",
+]
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,10 @@ class SessionState:
     best_primary_window_score: float | None = None
     best_confirmed_candidate_score: float | None = None
     best_confirmed_commit: str | None = None
+    best_promoted_score: float | None = None
+    best_promoted_commit: str | None = None
+    rotating_probe_index: int = 0
+    last_promotion_decision: str | None = None
 
     @property
     def remaining_attempts(self) -> int:
@@ -614,6 +630,10 @@ def load_session_state(
             best_primary_window_score=None,
             best_confirmed_candidate_score=None,
             best_confirmed_commit=None,
+            best_promoted_score=None,
+            best_promoted_commit=None,
+            rotating_probe_index=0,
+            last_promotion_decision=None,
         )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -627,6 +647,10 @@ def load_session_state(
         best_primary_window_score=_optional_float(payload.get("best_primary_window_score")),
         best_confirmed_candidate_score=_optional_float(payload.get("best_confirmed_candidate_score")),
         best_confirmed_commit=_optional_str(payload.get("best_confirmed_commit")),
+        best_promoted_score=_optional_float(payload.get("best_promoted_score")),
+        best_promoted_commit=_optional_str(payload.get("best_promoted_commit")),
+        rotating_probe_index=_optional_int(payload.get("rotating_probe_index")) or 0,
+        last_promotion_decision=_optional_str(payload.get("last_promotion_decision")),
     )
 
 
@@ -655,6 +679,10 @@ def save_session_state(path: Path, state: SessionState) -> None:
         "last_decision": state.last_decision,
         "best_confirmed_candidate_score": state.best_confirmed_candidate_score,
         "best_confirmed_commit": state.best_confirmed_commit,
+        "best_promoted_score": state.best_promoted_score,
+        "best_promoted_commit": state.best_promoted_commit,
+        "rotating_probe_index": state.rotating_probe_index,
+        "last_promotion_decision": state.last_promotion_decision,
         "max_attempts": state.max_attempts,
         "remaining_attempts": state.remaining_attempts,
         "status": state.status,
@@ -698,6 +726,10 @@ def update_state(
         best_primary_window_score=state.best_primary_window_score,
         best_confirmed_candidate_score=state.best_confirmed_candidate_score,
         best_confirmed_commit=state.best_confirmed_commit,
+        best_promoted_score=state.best_promoted_score,
+        best_promoted_commit=state.best_promoted_commit,
+        rotating_probe_index=state.rotating_probe_index,
+        last_promotion_decision=state.last_promotion_decision,
         status="exhausted" if attempts_used >= state.max_attempts else "active",
         last_decision=decision,
     )
@@ -743,6 +775,41 @@ def update_state_for_candidate(
         best_primary_window_score=state.best_primary_window_score,
         best_confirmed_candidate_score=best_confirmed_candidate_score,
         best_confirmed_commit=best_confirmed_commit,
+        best_promoted_score=state.best_promoted_score,
+        best_promoted_commit=state.best_promoted_commit,
+        rotating_probe_index=state.rotating_probe_index,
+        last_promotion_decision=state.last_promotion_decision,
+        status="exhausted" if attempts_used >= state.max_attempts else "active",
+        last_decision=decision,
+    )
+
+
+def update_state_for_promotion(
+    state: SessionState,
+    *,
+    promotion_score: dict[str, Any],
+    commit: str | None,
+    decision: str,
+) -> SessionState:
+    attempts_used = state.attempts_used + 1
+    best_promoted_score = state.best_promoted_score
+    best_promoted_commit = state.best_promoted_commit
+    value = _numeric_score(promotion_score.get("promotion_score"))
+    if decision == "promote" and value is not None:
+        best_promoted_score = value
+        best_promoted_commit = commit
+    return SessionState(
+        max_attempts=state.max_attempts,
+        attempts_used=attempts_used,
+        best_score=state.best_score,
+        best_commit=state.best_commit,
+        best_primary_window_score=state.best_primary_window_score,
+        best_confirmed_candidate_score=state.best_confirmed_candidate_score,
+        best_confirmed_commit=state.best_confirmed_commit,
+        best_promoted_score=best_promoted_score,
+        best_promoted_commit=best_promoted_commit,
+        rotating_probe_index=state.rotating_probe_index + 1,
+        last_promotion_decision=decision,
         status="exhausted" if attempts_used >= state.max_attempts else "active",
         last_decision=decision,
     )
@@ -772,6 +839,7 @@ def append_ledger(
     description: str,
     run_kind: str = "explore",
     candidate_score: dict[str, Any] | None = None,
+    promotion_score: dict[str, Any] | None = None,
 ) -> None:
     exists = _ensure_ledger_schema(path)
     with path.open("a", encoding="utf-8", newline="") as handle:
@@ -798,6 +866,14 @@ def append_ledger(
                 "worst_recent_score": _candidate_field(candidate_score, "worst_recent_score"),
                 "passed_window_count": _candidate_count(candidate_score, "passed_windows"),
                 "failed_window_count": _candidate_count(candidate_score, "failed_windows"),
+                "promotion_decision": _promotion_field(promotion_score, "promotion_decision"),
+                "promotion_score": _promotion_field(promotion_score, "promotion_score"),
+                "score_dispersion": _promotion_field(promotion_score, "score_dispersion"),
+                "cost_stress_score": _promotion_field(promotion_score, "cost_stress_score"),
+                "cost_stress_ratio": _promotion_field(promotion_score, "cost_stress_ratio"),
+                "rotating_probe_window_id": _promotion_field(promotion_score, "rotating_probe_window_id"),
+                "rotating_probe_score": _promotion_field(promotion_score, "rotating_probe_score"),
+                "promoted_commit": _promotion_field(promotion_score, "promoted_commit"),
             }
         )
 
@@ -813,7 +889,7 @@ def _ensure_ledger_schema(path: Path) -> bool:
             return True
         rows = list(reader)
 
-    if fieldnames not in (OLD_LEDGER_HEADER, WINDOW_LEDGER_HEADER, SYMBOL_LEDGER_HEADER):
+    if fieldnames not in (OLD_LEDGER_HEADER, WINDOW_LEDGER_HEADER, SYMBOL_LEDGER_HEADER, CANDIDATE_LEDGER_HEADER):
         raise ValueError(f"unexpected results.tsv header: {fieldnames}")
 
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -930,6 +1006,13 @@ def _candidate_count(candidate_score: dict[str, Any] | None, key: str) -> str:
     if not isinstance(value, list):
         return ""
     return str(len(value))
+
+
+def _promotion_field(promotion_score: dict[str, Any] | None, key: str) -> str:
+    if promotion_score is None:
+        return ""
+    value = promotion_score.get(key)
+    return "" if value is None else str(value)
 
 
 def current_commit() -> str | None:

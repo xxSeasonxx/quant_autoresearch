@@ -655,6 +655,70 @@ def test_session_state_tracks_best_confirmed_candidate(tmp_path: Path):
     assert loaded.best_confirmed_commit == "confirmed_old"
 
 
+def test_session_state_tracks_promotion_fields(tmp_path: Path):
+    state = runner_module.SessionState(
+        max_attempts=3,
+        attempts_used=0,
+        best_score=0.01,
+        best_commit="old",
+        status="active",
+        best_primary_window_score=0.0015,
+        best_confirmed_candidate_score=0.002,
+        best_confirmed_commit="confirmed_old",
+        best_promoted_score=0.003,
+        best_promoted_commit="promoted_old",
+        rotating_probe_index=2,
+        last_promotion_decision="promote",
+    )
+
+    payload_path = tmp_path / "session_state.json"
+    runner_module.save_session_state(payload_path, state)
+    loaded = runner_module.load_session_state(
+        payload_path,
+        config=None,
+        max_attempts_override=None,
+        fallback_max_attempts=3,
+    )
+
+    assert loaded.best_promoted_score == 0.003
+    assert loaded.best_promoted_commit == "promoted_old"
+    assert loaded.rotating_probe_index == 2
+    assert loaded.last_promotion_decision == "promote"
+
+
+def test_load_session_state_defaults_missing_promotion_fields(tmp_path: Path):
+    payload_path = tmp_path / "session_state.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "attempts_used": 0,
+                "best_commit": None,
+                "best_score": None,
+                "best_primary_window_score": None,
+                "best_confirmed_candidate_score": None,
+                "best_confirmed_commit": None,
+                "last_decision": None,
+                "max_attempts": 3,
+                "remaining_attempts": 3,
+                "status": "active",
+            }
+        )
+        + "\n"
+    )
+
+    loaded = runner_module.load_session_state(
+        payload_path,
+        config=None,
+        max_attempts_override=None,
+        fallback_max_attempts=3,
+    )
+
+    assert loaded.best_promoted_score is None
+    assert loaded.best_promoted_commit is None
+    assert loaded.rotating_probe_index == 0
+    assert loaded.last_promotion_decision is None
+
+
 def test_append_ledger_writes_candidate_columns(tmp_path: Path):
     score = {
         "score": 0.001,
@@ -692,6 +756,45 @@ def test_append_ledger_writes_candidate_columns(tmp_path: Path):
     assert rows[0]["worst_recent_score"] == "0.0004"
     assert rows[0]["passed_window_count"] == "2"
     assert rows[0]["failed_window_count"] == "1"
+
+
+def test_append_ledger_writes_promotion_columns(tmp_path: Path):
+    score = {"score": 0.001, "raw_net_return": 0.12, "trade_count": 250}
+    promotion_score = {
+        "promotion_decision": "promote",
+        "promotion_score": 0.0008,
+        "recent_mean_score": 0.0012,
+        "worst_recent_score": 0.0004,
+        "score_dispersion": 0.0001,
+        "cost_stress_score": 0.0007,
+        "cost_stress_ratio": 0.58,
+        "rotating_probe_window_id": "stress_2022_ftx",
+        "rotating_probe_score": -0.0002,
+        "promoted_commit": "abc1234",
+    }
+
+    runner_module.append_ledger(
+        tmp_path / "results.tsv",
+        attempt=1,
+        commit="abc1234",
+        window_id="locked_recent_2026",
+        window_start="2025-10-16",
+        window_end="2026-04-13",
+        window_days=180,
+        symbol_count=4,
+        score=score,
+        status="promote",
+        description="promotion",
+        run_kind="promotion",
+        promotion_score=promotion_score,
+    )
+
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert rows[0]["promotion_decision"] == "promote"
+    assert rows[0]["promotion_score"] == "0.0008"
+    assert rows[0]["cost_stress_ratio"] == "0.58"
+    assert rows[0]["rotating_probe_window_id"] == "stress_2022_ftx"
+    assert rows[0]["promoted_commit"] == "abc1234"
 
 
 def test_run_single_window_attempt_returns_score_and_artifacts(tmp_path: Path, monkeypatch):

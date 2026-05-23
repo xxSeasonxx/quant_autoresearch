@@ -87,7 +87,7 @@ Read-only during a research loop:
 - Set `decision_lag_minutes` to zero; decisions must be emitted after the
   as-of bar can be observed.
 
-**The goal is simple: get the highest confirmed candidate score.** The runner
+**The goal is simple: find promoted candidates for comprehensive validation.** The runner
 keeps raw `net_return` as evidence, but the guarded score is normalized by
 window days when window metadata is available. It is valid only when the trade
 count passes the configured sample gate. Higher is better, but only confirmed
@@ -125,6 +125,17 @@ improves one window but weakens the recent bundle, discard it.
 Before changing `strategy.py` or `experiment.toml`, explain what trade evidence
 changed your belief, what causal hypothesis follows, what focused change tests
 it, and what result would falsify it.
+
+## Promotion screening
+
+Promotion screening is a compact robustness filter, not final validation. Every
+scored explore enters promotion screening when promotion is enabled, even if it
+does not beat the primary window. This prevents the primary recent window from
+becoming the only optimizer target.
+
+Do not chase one-window wins. Prefer simple robust candidates over complex
+fragile candidates. A promoted candidate is ready for comprehensive validation;
+it is not validated market evidence.
 
 ## Output format
 
@@ -201,6 +212,9 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
 4. git commit the focused research change.
 5. Run the experiment:
    `conda run -n quant python runner.py --explore --description "short attempt description"`.
+   When promotion is enabled, a scored explore should auto-run promotion
+   screening; treat the promotion decision as the best-so-far gate for this
+   workbench.
    If exploration does not auto-confirm but the trade evidence justifies a
    candidate check, run
    `conda run -n quant python runner.py --confirm --description "candidate confirmation"`.

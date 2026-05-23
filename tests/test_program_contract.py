@@ -113,3 +113,24 @@ def test_program_requires_confirmed_candidate_protocol():
     ]
     for phrase in required:
         assert phrase in normalized
+
+
+def test_program_documents_promotion_screen_without_replacing_protocol():
+    text = PROGRAM.read_text()
+    normalized = " ".join(text.split())
+
+    required = [
+        "Promotion screening",
+        "compact robustness filter",
+        "not final validation",
+        "Every scored explore enters promotion screening",
+        "does not beat the primary window",
+        "Do not chase one-window wins",
+        "comprehensive validation",
+    ]
+    for phrase in required:
+        assert phrase in normalized
+
+    assert "Editable during a research loop:" in text
+    assert "Evidence review" in text
+    assert "The experiment loop" in text

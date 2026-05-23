@@ -56,7 +56,7 @@ symbols = [
 strict = true
 
 [params]
-funding_lookback_events = 7
+funding_lookback_events = 5
 return_lookback_minutes = 240
 decision_interval_minutes = 240
 decision_lag_minutes = 1

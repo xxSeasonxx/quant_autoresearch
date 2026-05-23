@@ -85,3 +85,45 @@ def test_strategy_generates_quant_strategies_signal_shape():
         assert signal["side"] in {"long", "short"}
         assert signal["weight"] == 0.25
         assert signal["hold_bars"] == 1
+
+
+def test_strategy_can_disable_positive_funding_shorts():
+    signals = strategy.generate_signals(
+        crypto_rows(),
+        {
+            "funding_lookback_events": 2,
+            "return_lookback_minutes": 240,
+            "decision_interval_minutes": 480,
+            "decision_lag_minutes": 1,
+            "top_n": 1,
+            "min_cross_section": 4,
+            "min_abs_funding_bps": 0.1,
+            "min_abs_return_bps": 1.0,
+            "include_positive_funding_shorts": False,
+            "weight": 0.25,
+            "hold_bars": 1,
+        },
+    )
+
+    assert [(signal["symbol"], signal["side"]) for signal in signals] == [("SOL-PERP", "long")]
+
+
+def test_strategy_filters_insufficient_same_sign_funding_events():
+    signals = strategy.generate_signals(
+        crypto_rows(),
+        {
+            "funding_lookback_events": 2,
+            "return_lookback_minutes": 240,
+            "decision_interval_minutes": 480,
+            "decision_lag_minutes": 1,
+            "top_n": 1,
+            "min_cross_section": 4,
+            "min_abs_funding_bps": 0.1,
+            "min_abs_return_bps": 1.0,
+            "min_same_sign_funding_events": 3,
+            "weight": 0.25,
+            "hold_bars": 1,
+        },
+    )
+
+    assert signals == []

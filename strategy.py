@@ -84,10 +84,44 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     min_cross_section = _positive_int(params.get("min_cross_section", 4), "min_cross_section")
     min_abs_funding_bps = _non_negative_float(params.get("min_abs_funding_bps", 1.0), "min_abs_funding_bps")
     min_abs_return_bps = _non_negative_float(params.get("min_abs_return_bps", 25.0), "min_abs_return_bps")
+    include_positive_funding_shorts = _bool_param(
+        params.get("include_positive_funding_shorts", True),
+        "include_positive_funding_shorts",
+    )
     include_negative_funding_longs = _bool_param(
         params.get("include_negative_funding_longs", True),
         "include_negative_funding_longs",
     )
+    min_same_sign_funding_events = _non_negative_int(
+        params.get("min_same_sign_funding_events", 0),
+        "min_same_sign_funding_events",
+    )
+    min_latest_abs_funding_bps = _non_negative_float(
+        params.get("min_latest_abs_funding_bps", 0.0),
+        "min_latest_abs_funding_bps",
+    )
+    volatility_lookback_minutes = _non_negative_int(
+        params.get("volatility_lookback_minutes", 0),
+        "volatility_lookback_minutes",
+    )
+    min_abs_return_z = _non_negative_float(params.get("min_abs_return_z", 0.0), "min_abs_return_z")
+    recent_return_lookback_minutes = _non_negative_int(
+        params.get("recent_return_lookback_minutes", 0),
+        "recent_return_lookback_minutes",
+    )
+    max_recent_same_direction_return_bps = _non_negative_float(
+        params.get("max_recent_same_direction_return_bps", 0.0),
+        "max_recent_same_direction_return_bps",
+    )
+    symbol_cooldown_minutes = _non_negative_int(
+        params.get("symbol_cooldown_minutes", 0),
+        "symbol_cooldown_minutes",
+    )
+    min_tail_count = _positive_int(params.get("min_tail_count", 1), "min_tail_count")
+    balance_sides = _bool_param(params.get("balance_sides", False), "balance_sides")
+    selection_score = str(params.get("selection_score", "funding"))
+    if selection_score not in {"funding", "return", "product"}:
+        raise ValueError("selection_score must be one of: funding, return, product")
     require_exit_horizon = _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
     weight = float(params.get("weight", 1.0))
     hold_bars = int(params.get("hold_bars", params.get("hold_minutes", 480)))
@@ -103,12 +137,15 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
 
     signals: list[dict[str, object]] = []
+    last_signal_time_by_symbol: dict[str, datetime] = {}
     for as_of_time in as_of_times:
         candidates = _decision_candidates(
             rows_by_symbol,
             as_of_time,
             funding_lookback_events,
             return_lookback_minutes,
+            volatility_lookback_minutes,
+            recent_return_lookback_minutes,
         )
         if len(candidates) < min_cross_section:
             continue
@@ -124,27 +161,50 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         positive_tail = [
             candidate
             for candidate in candidates
-            if candidate["funding_pressure_bps"] >= min_abs_funding_bps
+            if include_positive_funding_shorts
+            and candidate["funding_pressure_bps"] >= min_abs_funding_bps
             and candidate["return_extension_bps"] >= min_abs_return_bps
+            and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
+            and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and _passes_return_z(candidate, min_abs_return_z)
+            and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
         ]
         negative_tail = [
             candidate
             for candidate in candidates
             if candidate["funding_pressure_bps"] <= -min_abs_funding_bps
             and candidate["return_extension_bps"] <= -min_abs_return_bps
+            and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
+            and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and _passes_return_z(candidate, min_abs_return_z)
+            and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
         ]
+        if len(positive_tail) < min_tail_count:
+            positive_tail = []
+        if len(negative_tail) < min_tail_count:
+            negative_tail = []
 
-        for candidate in sorted(
-            positive_tail,
-            key=lambda item: (-item["funding_pressure_bps"], -item["return_extension_bps"], item["symbol"]),
-        )[:top_n]:
-            signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "short", weight, hold_bars))
+        selected_shorts = _selected_tail(positive_tail, "short", selection_score, top_n)
+        selected_longs = _selected_tail(negative_tail, "long", selection_score, top_n) if include_negative_funding_longs else []
+        if balance_sides:
+            balanced_count = min(len(selected_shorts), len(selected_longs))
+            selected_shorts = selected_shorts[:balanced_count]
+            selected_longs = selected_longs[:balanced_count]
+
+        for candidate in selected_shorts:
+            if _passes_symbol_cooldown(candidate["symbol"], decision_time, last_signal_time_by_symbol, symbol_cooldown_minutes):
+                signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "short", weight, hold_bars))
+                last_signal_time_by_symbol[candidate["symbol"]] = decision_time
         if include_negative_funding_longs:
-            for candidate in sorted(
-                negative_tail,
-                key=lambda item: (item["funding_pressure_bps"], item["return_extension_bps"], item["symbol"]),
-            )[:top_n]:
-                signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "long", weight, hold_bars))
+            for candidate in selected_longs:
+                if _passes_symbol_cooldown(
+                    candidate["symbol"],
+                    decision_time,
+                    last_signal_time_by_symbol,
+                    symbol_cooldown_minutes,
+                ):
+                    signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "long", weight, hold_bars))
+                    last_signal_time_by_symbol[candidate["symbol"]] = decision_time
 
     return signals
 
@@ -259,6 +319,8 @@ def _decision_candidates(
     decision_time: datetime,
     funding_lookback_events: int,
     return_lookback_minutes: int,
+    volatility_lookback_minutes: int,
+    recent_return_lookback_minutes: int,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     observed_time = decision_time - timedelta(minutes=1)
@@ -267,20 +329,31 @@ def _decision_candidates(
     for symbol, rows in rows_by_symbol.items():
         observed_close = _exact_close_at(rows, observed_time)
         base_close = _exact_close_at(rows, base_time)
-        funding_pressure_bps = _funding_pressure_bps(rows, decision_time, funding_lookback_events)
+        funding_stats = _funding_pressure_stats(rows, decision_time, funding_lookback_events)
         if (
             observed_close is None
             or base_close is None
             or observed_close <= 0.0
             or base_close <= 0.0
-            or funding_pressure_bps is None
+            or funding_stats is None
         ):
             continue
+        return_extension_bps = (observed_close / base_close - 1.0) * 10_000.0
         candidates.append(
             {
                 "symbol": symbol,
-                "funding_pressure_bps": funding_pressure_bps,
-                "return_extension_bps": (observed_close / base_close - 1.0) * 10_000.0,
+                "funding_pressure_bps": funding_stats["funding_pressure_bps"],
+                "funding_same_sign_events": funding_stats["funding_same_sign_events"],
+                "latest_funding_bps": funding_stats["latest_funding_bps"],
+                "return_extension_bps": return_extension_bps,
+                "return_z": _realized_return_z(
+                    rows,
+                    observed_time,
+                    return_lookback_minutes,
+                    volatility_lookback_minutes,
+                    return_extension_bps,
+                ),
+                "recent_return_bps": _recent_return_bps(rows, observed_time, recent_return_lookback_minutes),
             }
         )
     return candidates
@@ -292,11 +365,11 @@ def _exact_close_at(rows: _SymbolRows, timestamp: datetime) -> float | None:
     return rows.closes_by_timestamp.get(timestamp)
 
 
-def _funding_pressure_bps(
+def _funding_pressure_stats(
     rows: _SymbolRows,
     decision_time: datetime,
     funding_lookback_events: int,
-) -> float | None:
+) -> dict[str, float | int] | None:
     funding_events: dict[datetime, tuple[datetime, float]] = {}
     for row_timestamp, funding_time, funding_rate in rows.funding_event_rows:
         if row_timestamp > decision_time:
@@ -314,7 +387,137 @@ def _funding_pressure_bps(
     if len(funding_events) < funding_lookback_events:
         return None
     recent = sorted(funding_events.items(), key=lambda item: (item[0], item[1][0]))[-funding_lookback_events:]
-    return sum(rate for _, (_, rate) in recent) * 10_000.0
+    recent_rates = [rate for _, (_, rate) in recent]
+    funding_pressure_bps = sum(recent_rates) * 10_000.0
+    pressure_sign = _sign(funding_pressure_bps)
+    return {
+        "funding_pressure_bps": funding_pressure_bps,
+        "funding_same_sign_events": sum(1 for rate in recent_rates if _sign(rate) == pressure_sign),
+        "latest_funding_bps": recent_rates[-1] * 10_000.0,
+    }
+
+
+def _recent_return_bps(rows: _SymbolRows, observed_time: datetime, lookback_minutes: int) -> float | None:
+    if lookback_minutes <= 0:
+        return None
+    observed_close = _exact_close_at(rows, observed_time)
+    base_close = _exact_close_at(rows, observed_time - timedelta(minutes=lookback_minutes))
+    if observed_close is None or base_close is None or observed_close <= 0.0 or base_close <= 0.0:
+        return None
+    return (observed_close / base_close - 1.0) * 10_000.0
+
+
+def _realized_return_z(
+    rows: _SymbolRows,
+    observed_time: datetime,
+    return_lookback_minutes: int,
+    volatility_lookback_minutes: int,
+    return_extension_bps: float,
+) -> float | None:
+    if volatility_lookback_minutes <= 0:
+        return None
+
+    returns: list[float] = []
+    start_time = observed_time - timedelta(minutes=volatility_lookback_minutes)
+    previous_close = _exact_close_at(rows, start_time)
+    if previous_close is None or previous_close <= 0.0:
+        return None
+    for offset in range(1, volatility_lookback_minutes + 1):
+        timestamp = start_time + timedelta(minutes=offset)
+        close = _exact_close_at(rows, timestamp)
+        if close is None or close <= 0.0:
+            return None
+        returns.append(math.log(close / previous_close))
+        previous_close = close
+
+    if len(returns) < 2:
+        return None
+    mean_return = sum(returns) / len(returns)
+    variance = sum((value - mean_return) ** 2 for value in returns) / len(returns)
+    horizon_vol_bps = math.sqrt(variance) * math.sqrt(return_lookback_minutes) * 10_000.0
+    if horizon_vol_bps <= 0.0:
+        return None
+    return return_extension_bps / horizon_vol_bps
+
+
+def _passes_return_z(candidate: Mapping[str, Any], min_abs_return_z: float) -> bool:
+    if min_abs_return_z <= 0.0:
+        return True
+    value = candidate.get("return_z")
+    return isinstance(value, float) and abs(value) >= min_abs_return_z
+
+
+def _passes_recent_cooloff(
+    candidate: Mapping[str, Any],
+    side: str,
+    max_recent_same_direction_return_bps: float,
+) -> bool:
+    if max_recent_same_direction_return_bps <= 0.0:
+        return True
+    value = candidate.get("recent_return_bps")
+    if not isinstance(value, float):
+        return False
+    if side == "short":
+        return value <= max_recent_same_direction_return_bps
+    return value >= -max_recent_same_direction_return_bps
+
+
+def _selected_tail(
+    candidates: list[dict[str, Any]],
+    side: str,
+    selection_score: str,
+    top_n: int,
+) -> list[dict[str, Any]]:
+    if selection_score == "product":
+        return sorted(
+            candidates,
+            key=lambda item: (
+                -abs(item["funding_pressure_bps"] * item["return_extension_bps"]),
+                -abs(item["funding_pressure_bps"]),
+                -abs(item["return_extension_bps"]),
+                item["symbol"],
+            ),
+        )[:top_n]
+    if selection_score == "return":
+        return sorted(
+            candidates,
+            key=lambda item: (
+                -abs(item["return_extension_bps"]),
+                -abs(item["funding_pressure_bps"]),
+                item["symbol"],
+            ),
+        )[:top_n]
+    if side == "short":
+        return sorted(
+            candidates,
+            key=lambda item: (-item["funding_pressure_bps"], -item["return_extension_bps"], item["symbol"]),
+        )[:top_n]
+    return sorted(
+        candidates,
+        key=lambda item: (item["funding_pressure_bps"], item["return_extension_bps"], item["symbol"]),
+    )[:top_n]
+
+
+def _passes_symbol_cooldown(
+    symbol: str,
+    decision_time: datetime,
+    last_signal_time_by_symbol: Mapping[str, datetime],
+    symbol_cooldown_minutes: int,
+) -> bool:
+    if symbol_cooldown_minutes <= 0:
+        return True
+    last_signal_time = last_signal_time_by_symbol.get(symbol)
+    if last_signal_time is None:
+        return True
+    return decision_time - last_signal_time >= timedelta(minutes=symbol_cooldown_minutes)
+
+
+def _sign(value: float) -> int:
+    if value > 0.0:
+        return 1
+    if value < 0.0:
+        return -1
+    return 0
 
 
 def _is_decision_time(timestamp: datetime, decision_interval_minutes: int, params: Mapping[str, object]) -> bool:

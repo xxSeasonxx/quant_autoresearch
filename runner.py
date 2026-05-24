@@ -142,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     mode_group.add_argument("--window-id", default=None)
     mode_group.add_argument("--explore", action="store_true")
     mode_group.add_argument("--confirm", action="store_true")
+    mode_group.add_argument("--promote", action="store_true")
     parser.add_argument("--artifact-profile", choices=("research", "debug"), default=None)
     args = parser.parse_args(argv)
 
@@ -170,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     attempt = state.attempts_used + 1
     commit = current_commit()
     run_kind = _run_kind(args, config)
+
+    if run_kind == "promote" and not config.promotion.enabled:
+        parser.error("--promote requires promotion.enabled = true")
 
     if run_kind == "confirm":
         candidate_dir, candidate_score, window_results = run_confirmation_attempt(
@@ -207,6 +211,47 @@ def main(argv: list[str] | None = None) -> int:
         simplification=args.simplification,
         artifact_profile=args.artifact_profile,
     )
+
+    if run_kind == "promote":
+        if not scored_for_promotion(window_result.score):
+            return _finish_attempt(
+                state_path=state_path,
+                state=state,
+                score=window_result.score,
+                attempt=attempt,
+                commit=commit,
+                window_id=window_id,
+                run_metadata=window_result.run_metadata,
+                result_dir=window_result.result_dir,
+                description=args.description,
+                simplification=args.simplification,
+                ignored_max_attempts_override=ignored_max_attempts_override,
+                run_kind=run_kind,
+            )
+        promotion_dir, promotion_score, recent_results = run_promotion_screen(
+            config=config,
+            state=state,
+            attempt=attempt,
+            results_dir=results_dir,
+            description=args.description,
+            commit=commit,
+            simplification=args.simplification,
+            artifact_profile=args.artifact_profile,
+            explore_result=window_result,
+        )
+        return _finish_promotion_attempt(
+            state_path=state_path,
+            state=state,
+            promotion_dir=promotion_dir,
+            promotion_score=promotion_score,
+            recent_results=recent_results,
+            attempt=attempt,
+            commit=commit,
+            description=args.description,
+            ignored_max_attempts_override=ignored_max_attempts_override,
+            simplification=args.simplification,
+            primary_window_id=config.research.primary_window_id,
+        )
 
     if (
         run_kind == "explore"
@@ -1152,6 +1197,8 @@ def write_attempt_metadata(
 def _run_kind(args: argparse.Namespace, config: ExperimentConfig) -> str:
     if args.confirm:
         return "confirm"
+    if args.promote:
+        return "promote"
     if args.explore:
         return "explore"
     if args.window_id is not None:
@@ -1162,7 +1209,7 @@ def _run_kind(args: argparse.Namespace, config: ExperimentConfig) -> str:
 def _selected_single_window(args: argparse.Namespace, config: ExperimentConfig, run_kind: str) -> str:
     if args.window_id is not None:
         return args.window_id
-    if run_kind == "explore":
+    if run_kind in {"explore", "promote"}:
         return config.research.primary_window_id
     return config.selected_window_id
 

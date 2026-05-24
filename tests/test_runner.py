@@ -77,10 +77,17 @@ mode = "validate"
     (root / "strategy.py").write_text("def generate_signals(bars, params):\n    return []\n")
 
 
-def append_promotion_config(root: Path) -> None:
+def append_promotion_config(
+    root: Path,
+    *,
+    promotion_enabled: bool = True,
+    screen_on_scored_explore: bool = True,
+) -> None:
+    enabled_flag = "true" if promotion_enabled else "false"
+    screen_flag = "true" if screen_on_scored_explore else "false"
     with (root / "experiment.toml").open("a") as handle:
         handle.write(
-            """
+            f"""
 [research]
 mode = "explore"
 primary_window_id = "primary"
@@ -99,8 +106,8 @@ min_symbol_count = 1
 symbol_concentration_penalty = 0.0
 
 [promotion]
-enabled = true
-screen_on_scored_explore = true
+enabled = {enabled_flag}
+screen_on_scored_explore = {screen_flag}
 recent_window_ids = ["primary", "holdout"]
 rotating_probe_window_ids = ["holdout"]
 deep_probe_floor = -0.001
@@ -877,6 +884,150 @@ def test_scored_explore_runs_promotion_without_rerunning_primary(tmp_path: Path,
     assert promotion_summary["source_result_dirs"]["primary"]
 
 
+def test_scored_explore_with_auto_promotion_disabled_stays_single_window(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path, screen_on_scored_explore=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    generated_configs: list[str] = []
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        generated_configs.append(config_path.read_text())
+        output_dir = Path(tomllib.loads(config_path.read_text())["output"]["results_dir"])
+        return fake_success_run(output_dir, net_return=0.18, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--explore", "--description", "cheap explore"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert len(generated_configs) == 1
+    assert output["run_kind"] == "explore"
+    assert rows[0]["run_kind"] == "explore"
+    assert rows[0]["promotion_score"] == ""
+    assert state["best_promoted_score"] is None
+    assert state["rotating_probe_index"] == 0
+    assert not list((tmp_path / "results").glob("promotion_*"))
+
+
+def test_explicit_promote_runs_full_promotion_when_auto_promotion_is_disabled(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path, screen_on_scored_explore=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    generated_starts: list[str] = []
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        parsed = tomllib.loads(config_path.read_text())
+        output_dir = Path(parsed["output"]["results_dir"])
+        start = parsed["data"]["start"]
+        fee = parsed["cost_model"]["fee_bps_per_side"]
+        generated_starts.append(f"{start}|fee={fee}")
+        if fee == 0.5:
+            net = 0.12
+        elif start == "2024-01-01":
+            net = 0.18
+        else:
+            net = 0.16
+        return fake_success_run(output_dir, net_return=net, trade_count=3)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--promote", "--description", "deliberate promotion"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert generated_starts.count("2024-01-01|fee=0.0") == 1
+    assert output["run_kind"] == "promotion"
+    assert output["decision"] == "promote"
+    assert state["best_promoted_score"] == pytest.approx(output["promotion_score"])
+    assert state["rotating_probe_index"] == 1
+    assert rows[0]["run_kind"] == "promotion"
+    assert rows[0]["promotion_decision"] == "promote"
+    promotion_score = json.loads((Path(output["result_dir"]) / "promotion_score.json").read_text())
+    promotion_summary = json.loads((Path(output["result_dir"]) / "promotion_summary.json").read_text())
+    assert promotion_score["promotion_decision"] == "promote"
+    assert promotion_score["promoted_commit"] == "abc1234"
+    assert promotion_summary["source_result_dirs"]["primary"]
+
+
+def test_explicit_promote_requires_promotion_enabled_before_running(
+    tmp_path: Path,
+    monkeypatch,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(
+        tmp_path,
+        promotion_enabled=False,
+        screen_on_scored_explore=False,
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        raise AssertionError("disabled --promote must fail before running a window")
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--promote", "--description", "disabled promotion"])
+
+    assert exc.value.code == 2
+    assert not (tmp_path / "results.tsv").exists()
+    assert not list((tmp_path / "results").glob("promotion_*"))
+
+
+def test_explicit_promote_with_unscored_primary_does_not_run_promotion(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path, screen_on_scored_explore=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    generated_configs: list[str] = []
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        generated_configs.append(config_path.read_text())
+        output_dir = Path(tomllib.loads(config_path.read_text())["output"]["results_dir"])
+        return fake_success_run(output_dir, net_return=0.18, trade_count=1)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--promote", "--description", "unscored promotion"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert len(generated_configs) == 1
+    assert output["run_kind"] == "promote"
+    assert output["decision"] == "discard"
+    assert output["score"] is None
+    assert rows[0]["run_kind"] == "promote"
+    assert rows[0]["promotion_score"] == ""
+    assert state["best_promoted_score"] is None
+    assert state["rotating_probe_index"] == 0
+    assert not list((tmp_path / "results").glob("promotion_*"))
+
+
 def test_non_scored_explore_does_not_run_promotion(tmp_path: Path, monkeypatch):
     write_experiment(tmp_path, max_attempts=1)
     append_promotion_config(tmp_path)
@@ -1027,6 +1178,7 @@ confirm_on_explore_keep = false
     [
         ["--confirm", "--window-id", "holdout", "--description", "ambiguous"],
         ["--explore", "--window-id", "holdout", "--description", "ambiguous"],
+        ["--promote", "--window-id", "holdout", "--description", "ambiguous"],
     ],
 )
 def test_main_rejects_window_id_combined_with_research_modes(

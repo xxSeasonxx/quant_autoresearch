@@ -22,6 +22,75 @@
 
 No new module is needed. Do not add a separate “fast screen” scoring framework.
 
+## What Already Exists
+
+- `runner.py --window-id`: already runs one configured diagnostic window; reuse it for the fixed guard.
+- `run_promotion_screen()`: already runs recent windows, cost stress, and rotating probe; reuse it for `--promote`.
+- `_finish_promotion_attempt()`: already updates promotion state, artifacts, stdout, and `results.tsv`; reuse it unchanged.
+- `promotion.screen_on_scored_explore`: already controls automatic full promotion; flip the active config default instead of adding a new setting.
+- `tests/test_runner.py` promotion tests: already cover legacy auto-promotion behavior; extend them rather than creating a new test module.
+
+## NOT In Scope
+
+- New guard scoring framework: the guard is a manual diagnostic command, not another optimizer target.
+- New runner subcommands beyond `--promote`: `--window-id validation_2025_h1` already covers the fixed guard.
+- Full validation suite: promoted candidates still move to downstream comprehensive validation.
+- Parallel orchestration: the immediate goal is faster ordinary iterations, not more automation.
+- Rewriting confirmation mode: keep existing `--confirm` behavior unless a later cleanup removes it deliberately.
+
+## Control Flow
+
+```text
+runner.py --explore
+  |
+  v
+primary: locked_recent_2026
+  |
+  +-- weak or unscored -> inspect evidence, revise idea
+  |
+  v
+runner.py --window-id validation_2025_h1
+  |
+  +-- contradicts primary -> reject or diagnose with quant rationale
+  |
+  v
+runner.py --promote
+  |
+  +-- promotion disabled -> fail before running windows
+  +-- primary unscored -> finish one attempt, no promotion artifacts
+  `-- primary scored -> reuse existing full promotion screen
+```
+
+## Test Coverage Map
+
+```text
+CODE PATHS                                            USER FLOWS
+[+] runner.py CLI mode selection                      [+] Fast research loop
+  ├── [★★★ TESTED] --explore primary only               ├── [★★★ TESTED] explore does not auto-promote when disabled
+  ├── [★★★ TESTED] --window-id remains diagnostic       ├── [★★★ TESTED] fixed guard uses existing --window-id flow
+  ├── [★★★ TESTED] --promote excludes --window-id       └── [★★★ TESTED] serious candidate escalates through --promote
+  └── [★★★ TESTED] --confirm legacy path unchanged
+
+[+] runner.py --promote control flow                  [+] Failure and cheap-exit behavior
+  ├── [★★★ TESTED] promotion disabled exits before run  ├── [★★★ TESTED] no results.tsv on disabled --promote
+  ├── [★★★ TESTED] primary unscored stays one-window    ├── [★★★ TESTED] no promotion artifacts for unscored primary
+  └── [★★★ TESTED] primary scored runs promotion screen └── [★★★ TESTED] legacy auto-promotion still works when enabled
+
+Prompt/docs contract: [★★★ TESTED] program.md names fast guard, deliberate --promote, and not-final-validation posture.
+```
+
+## Failure Modes
+
+- Disabled `--promote` accidentally runs a primary window: covered by `test_explicit_promote_requires_promotion_enabled_before_running`; user sees argparse exit code 2 and no artifacts.
+- Unscored primary result starts full promotion anyway: covered by `test_explicit_promote_with_unscored_primary_does_not_run_promotion`; user gets one normal attempt result and no promotion artifacts.
+- Ordinary `--explore` keeps running full promotion: covered by `test_scored_explore_with_auto_promotion_disabled_stays_single_window`; iteration stays cheap.
+- Legacy configs relying on auto-promotion break: covered by existing `test_scored_explore_runs_promotion_without_rerunning_primary`; compatibility remains.
+- `program.md` grows into a heavy validation manual: controlled by compact wording contract in `test_program_documents_cheap_guard_and_deliberate_promotion`.
+
+## Worktree Parallelization
+
+Sequential implementation, no parallelization opportunity. The runner and docs changes are small, and both touch shared test contracts, so parallel worktrees would add merge overhead without reducing meaningful risk.
+
 ## Task 1: Add Failing Runner Tests
 
 **Files:**
@@ -32,7 +101,13 @@ No new module is needed. Do not add a separate “fast screen” scoring framewo
 Replace the whole `append_promotion_config` function in `tests/test_runner.py` with:
 
 ```python
-def append_promotion_config(root: Path, *, screen_on_scored_explore: bool = True) -> None:
+def append_promotion_config(
+    root: Path,
+    *,
+    promotion_enabled: bool = True,
+    screen_on_scored_explore: bool = True,
+) -> None:
+    enabled_flag = "true" if promotion_enabled else "false"
     screen_flag = "true" if screen_on_scored_explore else "false"
     with (root / "experiment.toml").open("a") as handle:
         handle.write(
@@ -55,7 +130,7 @@ min_symbol_count = 1
 symbol_concentration_penalty = 0.0
 
 [promotion]
-enabled = true
+enabled = {enabled_flag}
 screen_on_scored_explore = {screen_flag}
 recent_window_ids = ["primary", "holdout"]
 rotating_probe_window_ids = ["holdout"]
@@ -161,7 +236,79 @@ def test_explicit_promote_runs_full_promotion_when_auto_promotion_is_disabled(
     assert promotion_summary["source_result_dirs"]["primary"]
 ```
 
-- [ ] **Step 4: Update the CLI ambiguity test**
+- [ ] **Step 4: Add a test that disabled promotion fails before running**
+
+Append this test after the explicit-promote test:
+
+```python
+def test_explicit_promote_requires_promotion_enabled_before_running(
+    tmp_path: Path,
+    monkeypatch,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(
+        tmp_path,
+        promotion_enabled=False,
+        screen_on_scored_explore=False,
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        raise AssertionError("disabled --promote must fail before running a window")
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--promote", "--description", "disabled promotion"])
+
+    assert exc.value.code == 2
+    assert not (tmp_path / "results.tsv").exists()
+    assert not list((tmp_path / "results").glob("promotion_*"))
+```
+
+- [ ] **Step 5: Add a test that unscored promote stays single-window**
+
+Append this test after the disabled-promotion test:
+
+```python
+def test_explicit_promote_with_unscored_primary_does_not_run_promotion(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    write_experiment(tmp_path, max_attempts=1)
+    append_promotion_config(tmp_path, screen_on_scored_explore=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_module, "ROOT", tmp_path)
+    monkeypatch.setattr(runner_module, "current_commit", lambda: "abc1234")
+    generated_configs: list[str] = []
+
+    def _run_config(config_path: Path, *, repo_root: Path):
+        generated_configs.append(config_path.read_text())
+        output_dir = Path(tomllib.loads(config_path.read_text())["output"]["results_dir"])
+        return fake_success_run(output_dir, net_return=0.18, trade_count=1)(config_path, repo_root=repo_root)
+
+    monkeypatch.setattr(runner_module, "run_config", _run_config)
+
+    assert main(["--promote", "--description", "unscored promotion"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    state = json.loads((tmp_path / "results" / "session_state.json").read_text())
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+
+    assert len(generated_configs) == 1
+    assert output["run_kind"] == "promote"
+    assert output["decision"] == "discard"
+    assert output["score"] is None
+    assert rows[0]["run_kind"] == "promote"
+    assert rows[0]["promotion_score"] == ""
+    assert state["best_promoted_score"] is None
+    assert state["rotating_probe_index"] == 0
+    assert not list((tmp_path / "results").glob("promotion_*"))
+```
+
+- [ ] **Step 6: Update the CLI ambiguity test**
 
 In the `test_main_rejects_window_id_combined_with_research_modes` parameter list, add:
 
@@ -179,7 +326,7 @@ The list should become:
 ]
 ```
 
-- [ ] **Step 5: Run the focused failing tests**
+- [ ] **Step 7: Run the focused failing tests**
 
 Run:
 
@@ -187,6 +334,8 @@ Run:
 conda run -n quant pytest \
   tests/test_runner.py::test_scored_explore_with_auto_promotion_disabled_stays_single_window \
   tests/test_runner.py::test_explicit_promote_runs_full_promotion_when_auto_promotion_is_disabled \
+  tests/test_runner.py::test_explicit_promote_requires_promotion_enabled_before_running \
+  tests/test_runner.py::test_explicit_promote_with_unscored_primary_does_not_run_promotion \
   tests/test_runner.py::test_main_rejects_window_id_combined_with_research_modes \
   -q
 ```
@@ -195,6 +344,8 @@ Expected:
 
 - disabled-auto test may pass already if helper is correct,
 - explicit `--promote` fails because the parser does not know `--promote`,
+- disabled-promotion preflight fails until `--promote` exits before running,
+- unscored-promote fails until `--promote` short-circuits to a single attempt when the primary score is not promotion-eligible,
 - ambiguity test fails until `--promote` is part of the mutually exclusive group.
 
 Do not change implementation before seeing the failure.
@@ -278,14 +429,21 @@ def _selected_single_window(args: argparse.Namespace, config: ExperimentConfig, 
     return config.selected_window_id
 ```
 
-- [ ] **Step 4: Route explicit promote through the existing promotion path**
+- [ ] **Step 4: Fail fast when explicit promote is disabled**
+
+In `main`, after `run_kind = _run_kind(args, config)` and before the `if run_kind == "confirm":` block, add:
+
+```python
+    if run_kind == "promote" and not config.promotion.enabled:
+        parser.error("--promote requires promotion.enabled = true")
+```
+
+- [ ] **Step 5: Route explicit promote through the existing promotion path**
 
 In `main`, after the assignment beginning `window_result = run_single_window_attempt(` and before the existing auto-promotion block, add this block:
 
 ```python
     if run_kind == "promote":
-        if not config.promotion.enabled:
-            raise ConfigError("--promote requires promotion.enabled = true")
         if not scored_for_promotion(window_result.score):
             return _finish_attempt(
                 state_path=state_path,
@@ -329,7 +487,7 @@ In `main`, after the assignment beginning `window_result = run_single_window_att
 
 Keep the existing automatic promotion block below this. It still supports old configs where `screen_on_scored_explore = true`.
 
-- [ ] **Step 5: Run the focused runner tests**
+- [ ] **Step 6: Run the focused runner tests**
 
 Run:
 
@@ -337,6 +495,8 @@ Run:
 conda run -n quant pytest \
   tests/test_runner.py::test_scored_explore_with_auto_promotion_disabled_stays_single_window \
   tests/test_runner.py::test_explicit_promote_runs_full_promotion_when_auto_promotion_is_disabled \
+  tests/test_runner.py::test_explicit_promote_requires_promotion_enabled_before_running \
+  tests/test_runner.py::test_explicit_promote_with_unscored_primary_does_not_run_promotion \
   tests/test_runner.py::test_scored_explore_runs_promotion_without_rerunning_primary \
   tests/test_runner.py::test_non_scored_explore_does_not_run_promotion \
   tests/test_runner.py::test_main_rejects_window_id_combined_with_research_modes \
@@ -345,7 +505,7 @@ conda run -n quant pytest \
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit runner behavior**
+- [ ] **Step 7: Commit runner behavior**
 
 Run:
 
@@ -428,14 +588,14 @@ def test_program_documents_cheap_guard_and_deliberate_promotion():
     normalized = " ".join(text.split())
 
     required = [
-        "Fast research uses a cheap two-window screen",
+        "Fast guard",
         "`locked_recent_2026`",
         "`validation_2025_h1`",
-        "Do not run full promotion after every small idea",
+        "Do not run full promotion after every idea",
         "`runner.py --promote`",
-        "Treat the guard as a sanity check",
+        "guard is a sanity check",
         "not a second optimizer target",
-        "Full promotion screening is a compact robustness filter",
+        "Promotion screening remains a compact robustness filter",
         "not final validation",
         "comprehensive validation",
     ]
@@ -492,41 +652,37 @@ conda run -n quant pytest tests/test_program_contract.py tests/test_agents_contr
 
 Expected: fail because `program.md` and `AGENTS.md` still use the old promotion wording.
 
-- [ ] **Step 4: Update `program.md` promotion section**
+- [ ] **Step 4: Update `program.md` promotion section with compact wording**
 
 Replace the current `## Promotion screening` section with:
 
 ```markdown
-## Fast guard and promotion screening
+## Fast guard
 
-Fast research uses a cheap two-window screen:
+Use a cheap guard before spending time on full promotion:
 
 1. Primary explore window: `locked_recent_2026`.
-2. Fixed guard window: `validation_2025_h1`.
+2. Fixed guard diagnostic: `validation_2025_h1`.
 
-Use:
+Commands:
 
 ```bash
 conda run -n quant python runner.py --explore --description "short attempt description"
 conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"
 ```
 
-The fixed guard is a sanity check, not a second optimizer target. Do not tune
-against it repeatedly. If the primary result improves but the guard weakens
-materially, reject the idea unless there is a clear quant reason to run a
-targeted diagnostic.
+The guard is a sanity check, not a second optimizer target. If the primary
+improves but the guard weakens materially, reject the idea unless there is a
+clear quant reason to diagnose it.
 
-Do not run full promotion after every small idea. Run full promotion only when
-the primary and guard results both support the candidate and the change has a
-clear quant rationale:
+Do not run full promotion after every idea. Use it only for serious candidates:
 
 ```bash
 conda run -n quant python runner.py --promote --description "promote candidate: short description"
 ```
 
-Full promotion screening is a compact robustness filter, not final validation.
-It checks the recent bundle, cost stress, and one rotating older probe. A
-promoted candidate is ready for comprehensive validation; it is not validated
+Promotion screening remains a compact robustness filter, not final validation.
+A promoted candidate is ready for comprehensive validation; it is not validated
 market evidence.
 ```
 
@@ -550,12 +706,11 @@ replace it with:
 ```markdown
 5. Run the cheap screen:
    `conda run -n quant python runner.py --explore --description "short attempt description"`.
-   If the primary result is scored and plausible, run the fixed guard:
+   If the primary result is plausible, run the fixed guard:
    `conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"`.
-   If both windows support the candidate and the change has a clear quant
-   rationale, run:
+   If both support a serious candidate with a clear quant rationale, run:
    `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
-   Do not run full promotion after every small idea.
+   Do not run full promotion after every idea.
 ```
 
 - [ ] **Step 6: Update `AGENTS.md` target wording**
@@ -620,6 +775,8 @@ Run:
 conda run -n quant pytest \
   tests/test_runner.py::test_scored_explore_with_auto_promotion_disabled_stays_single_window \
   tests/test_runner.py::test_explicit_promote_runs_full_promotion_when_auto_promotion_is_disabled \
+  tests/test_runner.py::test_explicit_promote_requires_promotion_enabled_before_running \
+  tests/test_runner.py::test_explicit_promote_with_unscored_primary_does_not_run_promotion \
   tests/test_runner.py::test_scored_explore_runs_promotion_without_rerunning_primary \
   tests/test_runner.py::test_main_rejects_window_id_combined_with_research_modes \
   tests/test_program_contract.py \
@@ -662,3 +819,16 @@ Report:
 - `--promote` runs the existing promotion screen explicitly,
 - `program.md` now tells the LLM to use `locked_recent_2026` plus `validation_2025_h1` before promotion,
 - tests run and any residual risk.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | not run | No CEO review required for this small harness/process change |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | not run | Outside voice skipped; review stayed plan-local |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 4 | clear | 4 issues, 0 critical gaps; scope reduced to compact docs, fail-fast CLI, and full branch coverage |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | not applicable | No UI changes |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not run | CLI behavior reviewed inside Eng Review |
+
+- **UNRESOLVED:** 0
+- **VERDICT:** ENG CLEARED - ready to implement.

@@ -83,14 +83,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     top_n = _positive_int(params.get("top_n", 1), "top_n")
     min_cross_section = _positive_int(params.get("min_cross_section", 4), "min_cross_section")
     min_abs_funding_bps = _non_negative_float(params.get("min_abs_funding_bps", 1.0), "min_abs_funding_bps")
-    min_short_abs_funding_bps = _non_negative_float(
-        params.get("min_short_abs_funding_bps", min_abs_funding_bps),
-        "min_short_abs_funding_bps",
-    )
-    min_long_abs_funding_bps = _non_negative_float(
-        params.get("min_long_abs_funding_bps", min_abs_funding_bps),
-        "min_long_abs_funding_bps",
-    )
     min_abs_return_bps = _non_negative_float(params.get("min_abs_return_bps", 25.0), "min_abs_return_bps")
     include_positive_funding_shorts = _bool_param(
         params.get("include_positive_funding_shorts", True),
@@ -183,7 +175,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             candidate
             for candidate in candidates
             if include_positive_funding_shorts
-            and candidate["funding_pressure_bps"] >= min_short_abs_funding_bps
+            and candidate["funding_pressure_bps"] >= min_abs_funding_bps
             and candidate["return_extension_bps"] >= min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
@@ -194,7 +186,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         negative_tail = [
             candidate
             for candidate in candidates
-            if candidate["funding_pressure_bps"] <= -min_long_abs_funding_bps
+            if candidate["funding_pressure_bps"] <= -min_abs_funding_bps
             and candidate["return_extension_bps"] <= -min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps

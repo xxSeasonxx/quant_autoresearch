@@ -132,16 +132,34 @@ Before changing `strategy.py` or `experiment.toml`, explain what trade evidence
 changed your belief, what causal hypothesis follows, what focused change tests
 it, and what result would falsify it.
 
-## Promotion screening
+## Fast guard
 
-Promotion screening is a compact robustness filter, not final validation. Every
-scored explore enters promotion screening when promotion is enabled, even if it
-does not beat the primary window. This prevents the primary recent window from
-becoming the only optimizer target.
+Use a cheap guard before spending time on full promotion:
 
-Do not chase one-window wins. Prefer simple robust candidates over complex
-fragile candidates. A promoted candidate is ready for comprehensive validation;
-it is not validated market evidence.
+1. Primary explore window: `locked_recent_2026`.
+2. Fixed guard diagnostic: `validation_2025_h1`.
+
+Commands:
+
+```bash
+conda run -n quant python runner.py --explore --description "short attempt description"
+conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"
+```
+
+The guard is a sanity check, not a second optimizer target. If the primary
+improves but the guard weakens materially, reject the idea unless there is a
+clear quant reason to diagnose it.
+
+Do not run full promotion after every idea. Use `runner.py --promote` only for
+serious candidates:
+
+```bash
+conda run -n quant python runner.py --promote --description "promote candidate: short description"
+```
+
+Promotion screening remains a compact robustness filter, not final validation.
+A promoted candidate is ready for comprehensive validation; it is not validated
+market evidence.
 
 ## Output format
 
@@ -218,14 +236,13 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
 2. Review the latest `results/` artifacts and `results.tsv`.
 3. Tune `strategy.py` or `experiment.toml` with one focused experimental idea.
 4. git commit the focused research change.
-5. Run the experiment:
+5. Run the cheap screen:
    `conda run -n quant python runner.py --explore --description "short attempt description"`.
-   When promotion is enabled, a scored explore should auto-run promotion
-   screening; treat the promotion decision as the best-so-far gate for this
-   workbench.
-   If exploration does not auto-confirm but the trade evidence justifies a
-   candidate check, run
-   `conda run -n quant python runner.py --confirm --description "candidate confirmation"`.
+   If the primary result is plausible, run the fixed guard:
+   `conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"`.
+   If both support a serious candidate with a clear quant rationale, run:
+   `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
+   Do not run full promotion after every idea.
 6. Read the JSON summary. For confirmation, inspect `candidate_score.json`,
    `candidate_summary.json`, `trade_attribution.json`, and each window's
    `score.json`, `summary.json`, and `evidence.json`.

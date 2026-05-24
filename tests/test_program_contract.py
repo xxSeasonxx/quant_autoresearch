@@ -135,21 +135,30 @@ def test_program_requires_confirmed_candidate_protocol():
         assert phrase in normalized
 
 
-def test_program_documents_promotion_screen_without_replacing_protocol():
+def test_program_documents_cheap_guard_and_deliberate_promotion():
     text = PROGRAM.read_text()
     normalized = " ".join(text.split())
 
     required = [
-        "Promotion screening",
-        "compact robustness filter",
+        "Fast guard",
+        "`locked_recent_2026`",
+        "`validation_2025_h1`",
+        "Do not run full promotion after every idea",
+        "`runner.py --promote`",
+        "guard is a sanity check",
+        "not a second optimizer target",
+        "Promotion screening remains a compact robustness filter",
         "not final validation",
-        "Every scored explore enters promotion screening",
-        "does not beat the primary window",
-        "Do not chase one-window wins",
         "comprehensive validation",
     ]
     for phrase in required:
         assert phrase in normalized
+
+    banned = [
+        "Every scored explore enters promotion screening",
+    ]
+    for phrase in banned:
+        assert phrase not in normalized
 
     assert "Editable during a research loop:" in text
     assert "Evidence review" in text

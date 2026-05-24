@@ -4,8 +4,9 @@
 
 This repo is a fast quant candidate research workbench. It is not the final validation framework.
 
-The goal is to iterate on one scratch strategy, run compact promotion screening,
-and send only promoted candidates to comprehensive validation.
+The goal is to iterate on one scratch strategy with a cheap guard screen, run
+deliberate promotion screening only for serious candidates, and send only
+promoted candidates to comprehensive validation.
 
 ## Research Protocol
 
@@ -19,7 +20,8 @@ and send only promoted candidates to comprehensive validation.
 
 ## Quant Research Posture
 
-- Promotion screening is loop feedback, not market evidence.
+- The cheap guard screen and deliberate promotion screening are loop feedback,
+  not market evidence.
 - Prefer simple robust candidates over complex fragile ones.
 - Do not chase one-window wins.
 - Do not call a promoted candidate validated; comprehensive validation is a

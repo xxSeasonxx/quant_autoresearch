@@ -90,8 +90,8 @@ Read-only during a research loop:
 **The goal is simple: find promoted candidates for comprehensive validation.** The runner
 keeps raw `net_return` as evidence, but the guarded score is normalized by
 window days when window metadata is available. It is valid only when the trade
-count passes the configured sample gate. Higher is better, but only confirmed
-candidates can become best-so-far.
+count passes the configured sample gate. Higher is better, but only promoted
+candidates should become best-so-far for this workbench.
 Set the sample gate high enough for the configured 120-180 day windows; a gate
 that was acceptable for a short debugging run is not acceptable research
 evidence.
@@ -118,12 +118,12 @@ run the current `strategy.py` and `experiment.toml` as is.
 
 ## Candidate confirmation
 
-A one-window result is exploration evidence only. Only confirmed candidates can
-become best-so-far.
+A one-window result is exploration evidence only. `runner.py --confirm` remains
+available as a manual recent-window bundle diagnostic. The default fast loop
+escalates serious candidates with `runner.py --promote`.
 
-Confirmation means running the configured recent window bundle. Recent windows
-dominate the score. Older windows are diagnostic or stress evidence unless
-`experiment.toml` says otherwise.
+Recent windows dominate the score for confirmation and promotion. Older windows
+are diagnostic or stress evidence unless `experiment.toml` says otherwise.
 
 Do not prune symbols or windows because of one isolated result. If a candidate
 improves one window but weakens the recent bundle, discard it.
@@ -168,26 +168,26 @@ Once the runner finishes it prints a JSON summary like this:
 ```json
 {
   "attempt": 1,
-  "candidate_score": 0.0123,
   "decision": "keep",
   "remaining_attempts": 0,
-  "result_dir": "results/candidate_0001_example",
-  "run_kind": "confirm",
+  "result_dir": "results/attempt_0001_example",
+  "run_kind": "explore",
   "status": "active"
 }
 ```
 
-Use the printed `result_dir` to inspect the attempt artifacts:
+Use the printed `result_dir` to inspect the attempt artifacts. For promotion
+runs, that path is the promotion result directory:
 
 ```bash
 cat results/session_state.json
 cat results.tsv
-cat results/<candidate>/candidate_score.json
-cat results/<candidate>/candidate_summary.json
-cat results/<candidate>/trade_attribution.json
-cat results/<candidate>/windows/<window>/<attempt>/score.json
-cat results/<candidate>/windows/<window>/<attempt>/summary.json
-cat results/<candidate>/windows/<window>/<attempt>/evidence.json
+cat <result_dir>/score.json
+cat <result_dir>/summary.json
+cat <result_dir>/evidence.json
+cat <promotion_result_dir>/promotion_score.json
+cat <promotion_result_dir>/promotion_summary.json
+cat <promotion_result_dir>/trade_attribution.json
 ```
 
 ## Logging results
@@ -243,21 +243,23 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
    If both support a serious candidate with a clear quant rationale, run:
    `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
    Do not run full promotion after every idea.
-6. Read the JSON summary. For confirmation, inspect `candidate_score.json`,
-   `candidate_summary.json`, `trade_attribution.json`, and each window's
+6. Read the JSON summary. For `run_kind = "promotion"`, inspect
+   `promotion_score.json`, `promotion_summary.json`, and
+   `trade_attribution.json`. For explore or guard diagnostics, inspect
    `score.json`, `summary.json`, and `evidence.json`.
 7. The runner records the results in `results.tsv`; leave it untracked by git.
-8. If a confirmed candidate reports `keep`, advance from that commit.
-9. If a confirmed candidate reports `discard`, restore `strategy.py` and
-   `experiment.toml` to the previous confirmed kept commit before designing the
-   next change. Keep generated results as the research record.
+8. If promotion reports `promote`, advance from that commit.
+9. If promotion reports `reject` or the cheap screen fails, restore
+   `strategy.py` and `experiment.toml` to the previous promoted or baseline
+   commit before designing the next change. Keep generated results as the
+   research record.
 10. If the run was exploration or diagnostic only, treat it as evidence for the
     next focused change, not as best-so-far.
 
 The idea is that you are an autonomous quant researcher trying things out. If a
-confirmed candidate works, keep. If it does not, discard. You are advancing the
-strategy only when confirmed evidence improves or when an equal confirmed result
-is materially simpler.
+promoted candidate works, keep. If it does not promote, discard. You are
+advancing the strategy only when promotion evidence improves or when an equal
+promoted result is materially simpler.
 
 **Crashes**: If a run crashes because of a typo, missing import, malformed
 config, or other local issue, fix it if it is clearly from `strategy.py` or

@@ -407,13 +407,13 @@ def _parse_promotion(
     cost_stress_min_ratio = _required_non_negative_float(table, "cost_stress_min_ratio", table="promotion")
     if cost_stress_min_ratio > 1.0:
         raise ConfigError("promotion.cost_stress_min_ratio must be between 0 and 1 inclusive")
-    if enabled and screen_on_scored_explore and not recent_window_ids:
+    if enabled and not recent_window_ids:
         raise ConfigError("promotion.recent_window_ids must be non-empty when enabled")
-    if enabled and screen_on_scored_explore and not rotating_probe_window_ids:
+    if enabled and not rotating_probe_window_ids:
         raise ConfigError("promotion.rotating_probe_window_ids must be non-empty when enabled")
-    if enabled and screen_on_scored_explore and primary_window_id not in recent_window_ids:
+    if enabled and primary_window_id not in recent_window_ids:
         raise ConfigError("promotion.recent_window_ids must include research.primary_window_id")
-    if enabled and screen_on_scored_explore and cost_fee_bps_per_side == 0.0 and cost_slippage_bps_per_side == 0.0:
+    if enabled and cost_fee_bps_per_side == 0.0 and cost_slippage_bps_per_side == 0.0:
         raise ConfigError("promotion cost stress must use nonzero fee or slippage")
     if enabled and screen_on_scored_explore and confirm_on_explore_keep:
         raise ConfigError("promotion auto-screening requires research.confirm_on_explore_keep = false")

@@ -122,9 +122,10 @@ def test_program_requires_confirmed_candidate_protocol():
     required = [
         "Candidate confirmation",
         "A one-window result is exploration evidence only",
-        "Only confirmed candidates can",
-        "become best-so-far",
-        "Confirmation means running the configured recent window bundle",
+        "`runner.py --confirm` remains available",
+        "manual recent-window bundle diagnostic",
+        "default fast loop escalates serious candidates",
+        "`runner.py --promote`",
         "Recent windows dominate the score",
         "Do not prune symbols or windows because of one isolated result",
         "trade evidence changed your belief",
@@ -163,3 +164,29 @@ def test_program_documents_cheap_guard_and_deliberate_promotion():
     assert "Editable during a research loop:" in text
     assert "Evidence review" in text
     assert "The experiment loop" in text
+
+
+def test_program_loop_uses_promotion_artifacts_and_decisions():
+    text = PROGRAM.read_text()
+    normalized = " ".join(text.split())
+
+    required = [
+        "`promotion_score.json`",
+        "`promotion_summary.json`",
+        "If promotion reports `promote`, advance",
+        "If promotion reports `reject`",
+        "previous promoted or baseline commit",
+        "run_kind",
+        "promotion",
+    ]
+    for phrase in required:
+        assert phrase in normalized
+
+    banned = [
+        "For confirmation, inspect `candidate_score.json`",
+        "If a confirmed candidate reports `keep`",
+        "If a confirmed candidate reports `discard`",
+        "confirmed candidate works",
+    ]
+    for phrase in banned:
+        assert phrase not in normalized

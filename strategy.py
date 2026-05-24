@@ -117,6 +117,14 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("min_idiosyncratic_return_bps", 0.0),
         "min_idiosyncratic_return_bps",
     )
+    min_short_idiosyncratic_return_bps = _non_negative_float(
+        params.get("min_short_idiosyncratic_return_bps", min_idiosyncratic_return_bps),
+        "min_short_idiosyncratic_return_bps",
+    )
+    min_long_idiosyncratic_return_bps = _non_negative_float(
+        params.get("min_long_idiosyncratic_return_bps", min_idiosyncratic_return_bps),
+        "min_long_idiosyncratic_return_bps",
+    )
     symbol_cooldown_minutes = _non_negative_int(
         params.get("symbol_cooldown_minutes", 0),
         "symbol_cooldown_minutes",
@@ -173,7 +181,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
-            and _passes_idiosyncratic_return(candidate, "short", market_return_bps, min_idiosyncratic_return_bps)
+            and _passes_idiosyncratic_return(candidate, "short", market_return_bps, min_short_idiosyncratic_return_bps)
         ]
         negative_tail = [
             candidate
@@ -184,7 +192,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
-            and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_idiosyncratic_return_bps)
+            and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_long_idiosyncratic_return_bps)
         ]
         if len(positive_tail) < min_tail_count:
             positive_tail = []

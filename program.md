@@ -176,18 +176,27 @@ Once the runner finishes it prints a JSON summary like this:
 }
 ```
 
-Use the printed `result_dir` to inspect the attempt artifacts. For promotion
-runs, that path is the promotion result directory:
+Use the printed `result_dir` to inspect the attempt artifacts.
 
 ```bash
 cat results/session_state.json
 cat results.tsv
+```
+
+For explore or guard diagnostics:
+
+```bash
 cat <result_dir>/score.json
 cat <result_dir>/summary.json
 cat <result_dir>/evidence.json
-cat <promotion_result_dir>/promotion_score.json
-cat <promotion_result_dir>/promotion_summary.json
-cat <promotion_result_dir>/trade_attribution.json
+```
+
+For promotion:
+
+```bash
+cat <result_dir>/promotion_score.json
+cat <result_dir>/promotion_summary.json
+cat <result_dir>/trade_attribution.json
 ```
 
 ## Logging results

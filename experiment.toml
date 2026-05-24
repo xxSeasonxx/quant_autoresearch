@@ -120,7 +120,7 @@ symbol_concentration_penalty = 0.00025
 
 [promotion]
 enabled = true
-screen_on_scored_explore = true
+screen_on_scored_explore = false
 recent_window_ids = [
   "validation_2025_h1",
   "validation_2025_h2",

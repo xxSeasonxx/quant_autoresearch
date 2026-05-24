@@ -81,7 +81,7 @@ balance_sides = false
 selection_score = "funding"
 require_exit_horizon = true
 weight = 1.0
-hold_bars = 600
+hold_bars = 720
 
 [fill_model]
 price = "close"

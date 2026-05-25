@@ -22,19 +22,8 @@ end = "2026-04-13"
 [data]
 kind = "forex_with_quotes"
 symbols = [
-  "AUDJPY",
-  "AUDNZD",
-  "AUDUSD",
-  "CADJPY",
-  "EURAUD",
-  "EURGBP",
   "EURJPY",
   "EURUSD",
-  "GBPJPY",
-  "GBPUSD",
-  "NZDJPY",
-  "NZDUSD",
-  "USDCAD",
   "USDJPY",
 ]
 strict = true
@@ -47,6 +36,7 @@ entry_zscore = 2.5
 min_abs_residual_bps = 1.0
 attribution_bars = 5
 decision_lag_minutes = 1
+symbol_cooldown_minutes = 60
 crossing_only = true
 weight = 0.25
 hold_bars = 30
@@ -78,7 +68,7 @@ weak_window_floor = 0.0
 weak_window_penalty = 0.001
 min_trades_per_window = 200
 low_trade_penalty = 0.001
-min_symbol_count = 4
+min_symbol_count = 3
 symbol_concentration_penalty = 0.00025
 
 [promotion]

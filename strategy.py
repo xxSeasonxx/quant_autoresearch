@@ -80,6 +80,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         "attribution_bars",
     )
     decision_lag_minutes = _non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes")
+    symbol_cooldown_minutes = _non_negative_int(params.get("symbol_cooldown_minutes", 0), "symbol_cooldown_minutes")
     crossing_only = bool(params.get("crossing_only", True))
     weight = float(params.get("weight", 1.0))
     max_hold_bars = _positive_int(
@@ -109,6 +110,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         )
 
     signals: list[dict[str, object]] = []
+    last_signal_time_by_symbol: dict[str, datetime] = {}
     for symbol, as_of_time in sorted(candidates, key=lambda key: (key[1], key[0])):
         entries = candidates[(symbol, as_of_time)]
         score = sum(float(entry["signal"]) * float(entry["strength"]) for entry in entries)
@@ -117,6 +119,13 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         representative = max(entries, key=lambda entry: abs(float(entry["strength"])))
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
         if (symbol, decision_time) not in close_by_key:
+            continue
+        last_signal_time = last_signal_time_by_symbol.get(symbol)
+        if (
+            symbol_cooldown_minutes > 0
+            and last_signal_time is not None
+            and as_of_time - last_signal_time < timedelta(minutes=symbol_cooldown_minutes)
+        ):
             continue
         payload: dict[str, object] = {
             "symbol": symbol,
@@ -133,6 +142,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         }
         payload.update(exit_controls)
         signals.append(payload)
+        last_signal_time_by_symbol[symbol] = as_of_time
     return signals
 
 

@@ -91,6 +91,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
+    signal_mode = str(params.get("signal_mode", "reversion"))
+    if signal_mode not in {"reversion", "continuation"}:
+        raise ValueError("signal_mode must be 'reversion' or 'continuation'")
     crossing_only = bool(params.get("crossing_only", True))
     weight = float(params.get("weight", 1.0))
     max_hold_bars = _positive_int(
@@ -124,6 +127,8 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     for symbol, as_of_time in sorted(candidates, key=lambda key: (key[1], key[0])):
         entries = candidates[(symbol, as_of_time)]
         score = sum(float(entry["signal"]) * float(entry["strength"]) for entry in entries)
+        if signal_mode == "continuation":
+            score = -score
         if abs(score) <= 1e-12:
             continue
         representative = max(entries, key=lambda entry: abs(float(entry["strength"])))
@@ -154,6 +159,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             "residual_bps": representative["residual_bps"],
             "attribution_score": sum(float(entry["attribution_score"]) for entry in entries),
             "signal_family": "fx_triangular_residual_reversion",
+            "signal_mode": signal_mode,
         }
         payload.update(exit_controls)
         signals.append(payload)

@@ -271,6 +271,17 @@ def _copy_evidence(
             shutil.copyfile(score_path, dest)
             copied.append(_relative_posix(dest, package_dir))
 
+    for index, raw_result_dir in enumerate(variant.get("evidence_result_dirs", []), start=1):
+        result_dir = Path(str(raw_result_dir)).expanduser()
+        score_path = result_dir if result_dir.is_file() else result_dir / "score.json"
+        if not score_path.exists():
+            continue
+        dest = evidence_dir / (
+            f"promotion_source_{index:02d}_{_slug(result_dir.parent.name)}_{_slug(result_dir.name)}_score.json"
+        )
+        shutil.copyfile(score_path, dest)
+        copied.append(_relative_posix(dest, package_dir))
+
     if include_trade_attribution:
         if promotion_dir is not None:
             source = promotion_dir / "trade_attribution.json"

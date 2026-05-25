@@ -24,6 +24,11 @@ def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
     attempt_3 = write_attempt(campaign, 3, "directional_subset")
     promotion_dir = campaign / "promotion_0001_demo"
     promotion_dir.mkdir()
+    promotion_source_dir = promotion_dir / "windows" / "validation" / "run"
+    promotion_source_dir.mkdir(parents=True)
+    (promotion_source_dir / "score.json").write_text(
+        json.dumps({"status": "scored", "score": 0.026, "trade_count": 300, "window_id": "validation"}) + "\n"
+    )
     promotion_score = {
         "promotion_score": 0.025,
         "components": {"sharpe": 1.2, "drawdown": -0.08},
@@ -36,7 +41,13 @@ def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
         tmp_path,
         campaign,
         [
-            variant("variant-time", "time_only_exit", attempt_1, promotion_dir=promotion_dir),
+            variant(
+                "variant-time",
+                "time_only_exit",
+                attempt_1,
+                promotion_dir=promotion_dir,
+                evidence_result_dirs=[promotion_source_dir],
+            ),
             variant("variant-entry", "entry_filter", attempt_2),
             variant("variant-directional", "directional_subset", attempt_3),
         ],
@@ -99,6 +110,11 @@ def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
         target_repo
         / "researched/demo_strategy/families/family_01_primary_time_only_exit/variants/rank_01/evidence/"
         "trade_attribution.json"
+    ).exists()
+    assert (
+        target_repo
+        / "researched/demo_strategy/families/family_01_primary_time_only_exit/variants/rank_01/evidence/"
+        "promotion_source_01_validation_run_score.json"
     ).exists()
     assert (
         target_repo
@@ -308,6 +324,7 @@ def variant(
     attempt_dir: Path,
     *,
     promotion_dir: Path | None = None,
+    evidence_result_dirs: list[Path] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "variant_id": variant_id,
@@ -317,6 +334,7 @@ def variant(
         "promotion_score": None,
         "promotion_summary": None,
         "promotion_dir": None,
+        "evidence_result_dirs": [str(path) for path in evidence_result_dirs or []],
     }
     if promotion_dir is not None:
         payload["promotion_score"] = 0.025

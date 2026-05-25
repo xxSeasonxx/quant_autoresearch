@@ -13,14 +13,4 @@ Each note should include:
 
 ## Open Items
 
-### Stop-loss and take-profit exits
-
-- Idea: test stop-loss, take-profit, and possibly trailing-stop exits for
-  crowding-reversal trades.
-- Missing capability: the upstream engine currently exits from `hold_bars`
-  only, so it cannot scan post-entry bars for stop or take-profit triggers.
-- Current limitation: approximating stop/take-profit behavior inside
-  `strategy.py` would not change engine fills and could create misleading
-  research evidence.
-- Unlocks: compare the current best conditional time exit against real
-  threshold-based exits with explicit `exit_reason` attribution.
+No open upstream limitations currently recorded.

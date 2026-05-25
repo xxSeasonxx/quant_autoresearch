@@ -88,6 +88,8 @@ short_hold_bars = 480
 long_hold_bars = 600
 high_extension_short_return_bps = 120.0
 high_extension_short_hold_bars = 120
+take_profit_bps = 150.0
+stop_loss_bps = 100.0
 
 [fill_model]
 price = "close"

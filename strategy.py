@@ -10,7 +10,8 @@ paper replication.
 
 Market rationale:
 Recent same-direction perpetual funding pressure and price extension can mark
-crowded positioning that mean-reverts over the next fixed holding window.
+crowded positioning that mean-reverts over the next configured max holding
+window, with optional exit-policy thresholds closing trades earlier.
 
 Required observables:
 Symbol, timestamp, close, funding timestamp, funding rate, and funding-event
@@ -20,7 +21,9 @@ Signal rule:
 On a sparse as-of cadence, use completed prior closes and funding events at or
 before the as-of time. Emit decisions after the as-of bar can be observed. Short
 the strongest positive funding plus positive return tail, and optionally long
-the strongest negative funding plus negative return tail.
+the strongest negative funding plus negative return tail. Use the configured
+time hold as the max-hold fallback for optional stop-loss, take-profit, or
+trailing-stop exits.
 
 Assumptions:
 Funding timestamps are known no later than the as-of time, market data
@@ -151,6 +154,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("high_extension_short_hold_bars", short_hold_bars),
         "high_extension_short_hold_bars",
     )
+    exit_controls = _exit_controls(params)
     required_exit_horizon_bars = max(
         short_hold_bars,
         long_hold_bars,
@@ -230,7 +234,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             if _passes_symbol_cooldown(candidate["symbol"], decision_time, last_signal_time_by_symbol, symbol_cooldown_minutes):
                 signals.append(
                     _signal(
-                        candidate["symbol"],
+                        candidate,
                         decision_time,
                         as_of_time,
                         "short",
@@ -243,6 +247,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                             high_extension_short_return_bps,
                             high_extension_short_hold_bars,
                         ),
+                        exit_controls,
                     )
                 )
                 last_signal_time_by_symbol[candidate["symbol"]] = decision_time
@@ -256,7 +261,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                 ):
                     signals.append(
                         _signal(
-                            candidate["symbol"],
+                            candidate,
                             decision_time,
                             as_of_time,
                             "long",
@@ -269,6 +274,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                                 high_extension_short_return_bps,
                                 high_extension_short_hold_bars,
                             ),
+                            exit_controls,
                         )
                     )
                     last_signal_time_by_symbol[candidate["symbol"]] = decision_time
@@ -302,6 +308,24 @@ def _non_negative_float(value: object, name: str) -> float:
     if not math.isfinite(parsed) or parsed < 0.0:
         raise ValueError(f"{name} must be finite and non-negative")
     return parsed
+
+
+def _optional_positive_float(value: object, name: str) -> float | None:
+    if value is None:
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return parsed
+
+
+def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
+    controls: dict[str, object] = {}
+    for name in ("take_profit_bps", "stop_loss_bps", "trailing_stop_bps"):
+        value = _optional_positive_float(params.get(name), name)
+        if value is not None:
+            controls[name] = value
+    return controls
 
 
 def _bool_param(value: object, name: str) -> bool:
@@ -640,21 +664,28 @@ def _is_decision_time(timestamp: datetime, decision_interval_minutes: int, param
 
 
 def _signal(
-    symbol: str,
+    candidate: Mapping[str, Any],
     decision_time: datetime,
     as_of_time: datetime,
     side: str,
     weight: float,
     hold_bars: int,
+    exit_controls: Mapping[str, object],
 ) -> dict[str, object]:
-    return {
-        "symbol": symbol,
+    payload: dict[str, object] = {
+        "symbol": candidate["symbol"],
         "decision_time": decision_time,
         "as_of_time": as_of_time,
         "side": side,
         "weight": weight,
         "hold_bars": hold_bars,
+        "max_hold_bars": hold_bars,
+        "funding_pressure_bps": candidate["funding_pressure_bps"],
+        "entry_return_extension_bps": candidate["return_extension_bps"],
+        "signal_family": "crypto_perp_funding_crowding_reversal",
     }
+    payload.update(exit_controls)
+    return payload
 
 
 def _as_datetime(value: object) -> datetime:

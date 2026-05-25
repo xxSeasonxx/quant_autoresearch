@@ -35,7 +35,7 @@ before spread and slippage, reject this one-minute residual proxy before tuning.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import math
 from statistics import fmean, pstdev
 from typing import Any
@@ -83,6 +83,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
     decision_lag_minutes = _non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes")
     symbol_cooldown_minutes = _non_negative_int(params.get("symbol_cooldown_minutes", 0), "symbol_cooldown_minutes")
+    max_signals_per_symbol_per_day = _non_negative_int(
+        params.get("max_signals_per_symbol_per_day", 0),
+        "max_signals_per_symbol_per_day",
+    )
     blocked_decision_hours_utc = _optional_hour_set(
         params.get("blocked_decision_hours_utc"),
         "blocked_decision_hours_utc",
@@ -134,6 +138,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
 
     signals: list[dict[str, object]] = []
     last_signal_time_by_symbol: dict[str, datetime] = {}
+    signal_count_by_symbol_day: dict[tuple[str, date], int] = {}
     for symbol, as_of_time in sorted(candidates, key=lambda key: (key[1], key[0])):
         entries = candidates[(symbol, as_of_time)]
         score = sum(float(entry["signal"]) * float(entry["strength"]) for entry in entries)
@@ -155,6 +160,12 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and as_of_time - last_signal_time < timedelta(minutes=symbol_cooldown_minutes)
         ):
             continue
+        day_key = (symbol, decision_time.date())
+        if (
+            max_signals_per_symbol_per_day > 0
+            and signal_count_by_symbol_day.get(day_key, 0) >= max_signals_per_symbol_per_day
+        ):
+            continue
         payload: dict[str, object] = {
             "symbol": symbol,
             "decision_time": decision_time,
@@ -174,6 +185,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         payload.update(exit_controls)
         signals.append(payload)
         last_signal_time_by_symbol[symbol] = as_of_time
+        signal_count_by_symbol_day[day_key] = signal_count_by_symbol_day.get(day_key, 0) + 1
     return signals
 
 

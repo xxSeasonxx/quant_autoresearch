@@ -89,6 +89,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("allowed_decision_hours_utc"),
         "allowed_decision_hours_utc",
     )
+    allowed_trade_symbols = _optional_string_set(params.get("allowed_trade_symbols"), "allowed_trade_symbols")
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     crossing_only = bool(params.get("crossing_only", True))
@@ -116,6 +117,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             min_abs_residual_bps,
             attribution_bars,
             crossing_only,
+            allowed_trade_symbols,
             candidates,
         )
 
@@ -221,6 +223,17 @@ def _optional_hour_set(value: object, name: str) -> frozenset[int] | None:
     return frozenset(hours)
 
 
+def _optional_string_set(value: object, name: str) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{name} must be a sequence of strings")
+    parsed = {str(item) for item in value}
+    if not parsed:
+        raise ValueError(f"{name} must not be empty when provided")
+    return frozenset(parsed)
+
+
 def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
     controls: dict[str, object] = {}
     for name in ("take_profit_bps", "stop_loss_bps", "trailing_stop_bps"):
@@ -263,6 +276,7 @@ def _collect_candidates(
     min_abs_residual_bps: float,
     attribution_bars: int,
     crossing_only: bool,
+    allowed_trade_symbols: frozenset[str] | None,
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]],
 ) -> None:
     prior_extreme_sign = 0
@@ -290,6 +304,9 @@ def _collect_candidates(
             continue
 
         symbol, signal, attribution_score = selected
+        if allowed_trade_symbols is not None and symbol not in allowed_trade_symbols:
+            prior_extreme_sign = extreme_sign
+            continue
         as_of_time = point["timestamp"]
         if (symbol, as_of_time) not in close_by_key:
             prior_extreme_sign = extreme_sign

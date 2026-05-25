@@ -38,6 +38,7 @@ attribution_bars = 5
 decision_lag_minutes = 1
 symbol_cooldown_minutes = 60
 allowed_decision_hours_utc = [10, 15, 18]
+allowed_trade_symbols = ["EURJPY", "EURUSD"]
 crossing_only = true
 weight = 0.25
 hold_bars = 30

@@ -68,12 +68,23 @@ class Attempt:
 
 
 @dataclass
+class WindowResult:
+    window_id: str
+    score: dict[str, Any]
+    attempt_id: int | None = None
+    result_dir: Path | None = None
+    promotion_dir: Path | None = None
+
+
+@dataclass
 class Promotion:
     attempt_id: int
     promotion_dir: Path
     summary: dict[str, Any]
     promotion_score: float | None
     cost_stress_score: float | None
+    source_result_dirs: dict[str, Path] = field(default_factory=dict)
+    recent_window_results: list[WindowResult] = field(default_factory=list)
 
 
 @dataclass
@@ -246,17 +257,98 @@ def _load_promotions(campaign_dir: Path) -> dict[int, Promotion]:
         attempt_id = _attempt_id(summary, summary_path.parent.name)
         promotion_score = _finite_float(summary.get("promotion_score"))
         cost_stress_score = _score_from_referenced_result(summary.get("cost_stress_result_dir"))
+        source_result_dirs = _promotion_source_result_dirs(summary, summary_path.parent, campaign_dir)
         promotion = Promotion(
             attempt_id=attempt_id,
             promotion_dir=summary_path.parent,
             summary=summary,
             promotion_score=promotion_score,
             cost_stress_score=cost_stress_score,
+            source_result_dirs=source_result_dirs,
+            recent_window_results=_promotion_recent_window_results(
+                attempt_id,
+                summary_path.parent,
+                source_result_dirs,
+            ),
         )
         existing = promotions.get(attempt_id)
         if existing is None or _promotion_sort_key(promotion) < _promotion_sort_key(existing):
             promotions[attempt_id] = promotion
     return promotions
+
+
+def _promotion_source_result_dirs(
+    summary: dict[str, Any],
+    promotion_dir: Path,
+    campaign_dir: Path,
+) -> dict[str, Path]:
+    raw_source_result_dirs = summary.get("source_result_dirs")
+    if not isinstance(raw_source_result_dirs, dict):
+        return {}
+
+    source_result_dirs: dict[str, Path] = {}
+    for raw_window_id, raw_result_dir in raw_source_result_dirs.items():
+        if raw_result_dir is None:
+            continue
+        window_id = str(raw_window_id)
+        source_result_dirs[window_id] = _resolve_promotion_result_dir(
+            raw_result_dir,
+            promotion_dir,
+            campaign_dir,
+        )
+    return source_result_dirs
+
+
+def _resolve_promotion_result_dir(
+    raw_path: object,
+    promotion_dir: Path,
+    campaign_dir: Path,
+) -> Path:
+    result_path = Path(str(raw_path)).expanduser()
+    if result_path.is_absolute():
+        return result_path
+
+    promotion_relative = (promotion_dir / result_path).resolve()
+    if promotion_relative.exists():
+        return promotion_relative
+
+    campaign_relative = (campaign_dir / result_path).resolve()
+    if campaign_relative.exists():
+        return campaign_relative
+
+    return promotion_relative
+
+
+def _promotion_recent_window_results(
+    attempt_id: int,
+    promotion_dir: Path,
+    source_result_dirs: dict[str, Path],
+) -> list[WindowResult]:
+    results: list[WindowResult] = []
+    for window_id, result_dir in sorted(source_result_dirs.items()):
+        score = _read_score_result(result_dir)
+        if score is None:
+            continue
+        results.append(
+            WindowResult(
+                window_id=window_id,
+                score=score,
+                attempt_id=attempt_id,
+                result_dir=result_dir,
+                promotion_dir=promotion_dir,
+            )
+        )
+    return results
+
+
+def _read_score_result(result_dir: Path) -> dict[str, Any] | None:
+    score_path = result_dir if result_dir.is_file() else result_dir / "score.json"
+    if not score_path.exists():
+        return None
+    try:
+        return _read_json(score_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _score_from_referenced_result(raw_path: object) -> float | None:
@@ -354,9 +446,10 @@ def _score_variant(
     expected_recent_windows: set[str],
 ) -> dict[str, Any]:
     best_promotion = _best_promotion(variant.promotions)
+    recent_window_results = _variant_recent_window_results(variant)
     finite_recent_scores = [
         score
-        for score in (_finite_float(attempt.score.get("score")) for attempt in variant.attempts)
+        for score in (_finite_float(result.score.get("score")) for result in recent_window_results)
         if score is not None
     ]
     promotion_score = best_promotion.promotion_score if best_promotion is not None else None
@@ -367,11 +460,11 @@ def _score_variant(
     recent_score_stdev = (
         statistics.pstdev(finite_recent_scores) if len(finite_recent_scores) >= 2 else 0.0
     )
-    non_finite_score_count = len(variant.attempts) - len(finite_recent_scores)
-    observed_recent_windows = {attempt.window_id for attempt in variant.attempts}
+    non_finite_score_count = len(recent_window_results) - len(finite_recent_scores)
+    observed_recent_windows = {result.window_id for result in recent_window_results}
     missing_recent_windows = sorted(expected_recent_windows - observed_recent_windows)
-    min_trade_count = _min_trade_count(variant)
-    required_min_trades = _required_min_trades(variant)
+    min_trade_count = _min_trade_count(recent_window_results)
+    required_min_trades = _required_min_trades(recent_window_results)
     low_trade_ratio = 0.0
     if min_trade_count is None:
         low_trade_ratio = 1.0
@@ -400,22 +493,17 @@ def _score_variant(
         "attempt_ids": [attempt.attempt_id for attempt in sorted(variant.attempts, key=lambda item: item.attempt_id)],
         "attempt_dirs": [str(attempt.attempt_dir) for attempt in sorted(variant.attempts, key=lambda item: item.attempt_id)],
         "recent_window_scores": [
-            {
-                "attempt_id": attempt.attempt_id,
-                "window_id": attempt.window_id,
-                "score": _finite_float(attempt.score.get("score")),
-                "status": attempt.score.get("status"),
-                "trade_count": _int_or_none(attempt.score.get("trade_count")),
-            }
-            for attempt in sorted(variant.attempts, key=lambda item: (item.window_id, item.attempt_id))
+            _window_result_payload(result)
+            for result in sorted(recent_window_results, key=_window_result_sort_key)
         ],
+        "evidence_result_dirs": _promotion_evidence_result_dirs(variant.promotions),
         "missing_recent_windows": missing_recent_windows,
         "base_score": base_score,
         "promotion_score": promotion_score,
         "recent_window_score_stdev": recent_score_stdev,
         "trade_count": sum(
             count
-            for count in (_int_or_none(attempt.score.get("trade_count")) for attempt in variant.attempts)
+            for count in (_int_or_none(result.score.get("trade_count")) for result in recent_window_results)
             if count is not None
         ),
         "min_trade_count": min_trade_count,
@@ -429,40 +517,88 @@ def _score_variant(
     return _jsonable(payload)
 
 
+def _variant_recent_window_results(variant: Variant) -> list[WindowResult]:
+    results = [
+        WindowResult(
+            window_id=attempt.window_id,
+            score=attempt.score,
+            attempt_id=attempt.attempt_id,
+            result_dir=attempt.attempt_dir,
+        )
+        for attempt in variant.attempts
+    ]
+    for promotion in variant.promotions:
+        results.extend(promotion.recent_window_results)
+    return results
+
+
+def _window_result_payload(result: WindowResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "attempt_id": result.attempt_id,
+        "window_id": result.window_id,
+        "score": _finite_float(result.score.get("score")),
+        "status": result.score.get("status"),
+        "trade_count": _int_or_none(result.score.get("trade_count")),
+    }
+    if result.result_dir is not None:
+        payload["result_dir"] = str(result.result_dir)
+    if result.promotion_dir is not None:
+        payload["promotion_dir"] = str(result.promotion_dir)
+        payload["source"] = "promotion_source_result_dir"
+    else:
+        payload["source"] = "attempt"
+    return payload
+
+
+def _window_result_sort_key(result: WindowResult) -> tuple[str, int, str]:
+    attempt_id = result.attempt_id if result.attempt_id is not None else 0
+    result_dir = str(result.result_dir) if result.result_dir is not None else ""
+    return (result.window_id, attempt_id, result_dir)
+
+
+def _promotion_evidence_result_dirs(promotions: list[Promotion]) -> list[str]:
+    paths = {
+        str(result_dir)
+        for promotion in promotions
+        for result_dir in promotion.source_result_dirs.values()
+    }
+    return sorted(paths)
+
+
 def _best_promotion(promotions: list[Promotion]) -> Promotion | None:
     if not promotions:
         return None
     return min(promotions, key=_promotion_sort_key)
 
 
-def _min_trade_count(variant: Variant) -> int | None:
+def _min_trade_count(results: list[WindowResult]) -> int | None:
     trade_counts = [
         trade_count
-        for trade_count in (_int_or_none(attempt.score.get("trade_count")) for attempt in variant.attempts)
+        for trade_count in (_int_or_none(result.score.get("trade_count")) for result in results)
         if trade_count is not None
     ]
     return min(trade_counts) if trade_counts else None
 
 
-def _required_min_trades(variant: Variant) -> int:
+def _required_min_trades(results: list[WindowResult]) -> int:
     requirements = [
         min_trades
-        for min_trades in (_int_or_none(attempt.score.get("min_score_trades")) for attempt in variant.attempts)
+        for min_trades in (_int_or_none(result.score.get("min_score_trades")) for result in results)
         if min_trades is not None and min_trades > 0
     ]
     return max(requirements) if requirements else DEFAULT_MIN_TRADES
 
 
 def _classify_family(params: dict[str, Any], baseline_params: dict[str, Any]) -> str:
-    if _positive_param(params, baseline_params, "trailing_stop_bps"):
+    if _numeric_baseline_difference(params, baseline_params, "trailing_stop_bps"):
         return "trailing_exit"
-    if _positive_param(params, baseline_params, "take_profit_bps") or _positive_param(
+    if _numeric_baseline_difference(
         params,
         baseline_params,
-        "stop_loss_bps",
-    ):
+        "take_profit_bps",
+    ) or _numeric_baseline_difference(params, baseline_params, "stop_loss_bps"):
         return "price_threshold_exit"
-    if any(key in baseline_params and params.get(key) is False for key in SIDE_INCLUDE_KEYS):
+    if _any_baseline_difference(params, baseline_params, SIDE_INCLUDE_KEYS):
         return "directional_subset"
     if _any_baseline_difference(params, baseline_params, ENTRY_FILTER_KEYS):
         return "entry_filter"
@@ -473,13 +609,25 @@ def _classify_family(params: dict[str, Any], baseline_params: dict[str, Any]) ->
     return "time_only_exit"
 
 
-def _positive_param(params: dict[str, Any], baseline_params: dict[str, Any], key: str) -> bool:
+def _numeric_baseline_difference(params: dict[str, Any], baseline_params: dict[str, Any], key: str) -> bool:
     if key not in baseline_params or key not in params:
         return False
     value = params[key]
-    if isinstance(value, bool) or not isinstance(value, int | float):
+    baseline_value = baseline_params[key]
+    if (
+        isinstance(value, bool)
+        or isinstance(baseline_value, bool)
+        or not isinstance(value, int | float)
+        or not isinstance(baseline_value, int | float)
+    ):
         return False
-    return math.isfinite(float(value)) and float(value) > 0.0
+    parsed_value = float(value)
+    parsed_baseline = float(baseline_value)
+    return (
+        math.isfinite(parsed_value)
+        and math.isfinite(parsed_baseline)
+        and parsed_value != parsed_baseline
+    )
 
 
 def _any_baseline_difference(

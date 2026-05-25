@@ -82,6 +82,7 @@ def write_promotion(
     *,
     promotion_score: float = 0.020,
     cost_stress_score: float | None = None,
+    source_window_scores: dict[str, float] | None = None,
 ) -> Path:
     promotion_dir = campaign / f"promotion_{attempt:04d}_demo"
     cost_dir = promotion_dir / "cost_stress" / "realistic_costs" / "run"
@@ -90,12 +91,32 @@ def write_promotion(
         (cost_dir / "score.json").write_text(
             json.dumps({"status": "scored", "score": cost_stress_score, "trade_count": 250}) + "\n"
         )
+    source_result_dirs: dict[str, str] = {}
+    if source_window_scores is not None:
+        for window_id, score in source_window_scores.items():
+            result_dir = promotion_dir / "windows" / window_id / "run"
+            result_dir.mkdir(parents=True)
+            (result_dir / "score.json").write_text(
+                json.dumps(
+                    {
+                        "status": "scored",
+                        "score": score,
+                        "trade_count": 250,
+                        "min_score_trades": 200,
+                        "window_id": window_id,
+                    }
+                )
+                + "\n"
+            )
+            source_result_dirs[window_id] = str(result_dir.relative_to(promotion_dir))
     summary = {
         "attempt": attempt,
         "promotion_score": promotion_score,
-        "recent_window_ids": ["recent"],
+        "recent_window_ids": list(source_window_scores) if source_window_scores is not None else ["recent"],
         "cost_stress_result_dir": str(cost_dir),
     }
+    if source_result_dirs:
+        summary["source_result_dirs"] = source_result_dirs
     (promotion_dir / "promotion_summary.json").write_text(json.dumps(summary) + "\n")
     return promotion_dir
 
@@ -239,6 +260,80 @@ def test_inferred_baseline_comparison_not_hard_coded_values(tmp_path: Path):
     assert "entry_filter" not in {family["family"] for family in ranking["selected_families"]}
 
 
+def test_exit_and_directional_families_require_baseline_difference(tmp_path: Path):
+    campaign = tmp_path / "campaign"
+    write_attempt(
+        campaign,
+        1,
+        params(trailing_stop_bps=50.0, include_positive_funding_shorts=False),
+        score=0.001,
+    )
+    write_attempt(
+        campaign,
+        2,
+        params(
+            trailing_stop_bps=50.0,
+            include_positive_funding_shorts=False,
+            min_abs_funding_bps=2.0,
+        ),
+        score=0.030,
+    )
+    write_attempt(
+        campaign,
+        3,
+        params(trailing_stop_bps=75.0, include_positive_funding_shorts=False),
+        score=0.020,
+    )
+    write_attempt(
+        campaign,
+        4,
+        params(trailing_stop_bps=50.0, include_positive_funding_shorts=True),
+        score=0.010,
+    )
+
+    ranking = build_handoff_ranking(campaign)
+    variant = _variant_by_attempt(ranking, 2)
+
+    assert ranking["baseline_params"]["trailing_stop_bps"] == 50.0
+    assert ranking["baseline_params"]["include_positive_funding_shorts"] is False
+    assert variant["family"] == "entry_filter"
+
+
+def test_promotion_source_result_dirs_count_as_recent_window_evidence(tmp_path: Path):
+    campaign = tmp_path / "campaign"
+    write_attempt(campaign, 1, params(trailing_stop_bps=50.0), score=0.001, window_id="seed")
+    write_attempt(campaign, 2, params(take_profit_bps=150.0), score=0.020, window_id="seed")
+    write_attempt(
+        campaign,
+        3,
+        params(include_positive_funding_shorts=False),
+        score=0.010,
+        window_id="seed",
+    )
+    promotion_dir = write_promotion(
+        campaign,
+        1,
+        promotion_score=0.050,
+        source_window_scores={"recent_a": 0.040, "recent_b": 0.030},
+    )
+
+    ranking = build_handoff_ranking(campaign)
+    trailing = _family_variant(ranking, "trailing_exit")
+
+    assert trailing["promotion_dir"] == str(promotion_dir)
+    assert trailing["missing_recent_windows"] == []
+    assert {score["window_id"] for score in trailing["recent_window_scores"]} >= {
+        "recent_a",
+        "recent_b",
+    }
+    assert {
+        score["source"]
+        for score in trailing["recent_window_scores"]
+        if score["window_id"] in {"recent_a", "recent_b"}
+    } == {"promotion_source_result_dir"}
+    assert len(trailing["evidence_result_dirs"]) == 2
+
+
 def _selected_family(ranking: dict[str, object], family: str) -> dict[str, object]:
     families = ranking["selected_families"]
     assert isinstance(families, list)
@@ -255,3 +350,12 @@ def _family_variant(ranking: dict[str, object], family: str) -> dict[str, object
         if item["family"] == family:
             return item
     raise AssertionError(f"missing variant family: {family}")
+
+
+def _variant_by_attempt(ranking: dict[str, object], attempt_id: int) -> dict[str, object]:
+    variants = ranking["variants"]
+    assert isinstance(variants, list)
+    for item in variants:
+        if item["attempt_ids"] == [attempt_id]:
+            return item
+    raise AssertionError(f"missing variant for attempt: {attempt_id}")

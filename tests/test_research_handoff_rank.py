@@ -334,6 +334,40 @@ def test_promotion_source_result_dirs_count_as_recent_window_evidence(tmp_path: 
     assert len(trailing["evidence_result_dirs"]) == 2
 
 
+def test_promotion_expected_windows_are_scoped_to_each_variant(tmp_path: Path):
+    campaign = tmp_path / "campaign"
+    write_attempt(campaign, 1, params(trailing_stop_bps=50.0), score=0.001, window_id="seed")
+    write_attempt(campaign, 2, params(take_profit_bps=150.0), score=0.002, window_id="seed")
+    write_attempt(
+        campaign,
+        3,
+        params(include_positive_funding_shorts=False),
+        score=0.010,
+        window_id="seed",
+    )
+    write_promotion(
+        campaign,
+        1,
+        promotion_score=0.050,
+        source_window_scores={"recent_a": 0.040},
+    )
+    write_promotion(
+        campaign,
+        2,
+        promotion_score=0.045,
+        source_window_scores={"recent_b": 0.035},
+    )
+
+    ranking = build_handoff_ranking(campaign)
+    trailing = _family_variant(ranking, "trailing_exit")
+    threshold = _family_variant(ranking, "price_threshold_exit")
+
+    assert trailing["missing_recent_windows"] == []
+    assert threshold["missing_recent_windows"] == []
+    assert {score["window_id"] for score in trailing["recent_window_scores"]} >= {"recent_a"}
+    assert {score["window_id"] for score in threshold["recent_window_scores"]} >= {"recent_b"}
+
+
 def _selected_family(ranking: dict[str, object], family: str) -> dict[str, object]:
     families = ranking["selected_families"]
     assert isinstance(families, list)

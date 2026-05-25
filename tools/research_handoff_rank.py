@@ -108,9 +108,9 @@ def build_handoff_ranking(campaign_dir: str | Path) -> dict[str, Any]:
     _attach_promotions(variants, promotions)
 
     baseline_params = _infer_baseline_params(list(variants.values()))
-    expected_recent_windows = _expected_recent_windows(variants, promotions)
+    fallback_recent_windows = _observed_attempt_windows(variants)
     ranked_variants = [
-        _score_variant(variant, baseline_params, expected_recent_windows)
+        _score_variant(variant, baseline_params, fallback_recent_windows)
         for variant in variants.values()
     ]
     ranked_variants.sort(key=_variant_sort_key)
@@ -419,33 +419,35 @@ def _infer_baseline_params(variants: list[Variant]) -> dict[str, Any]:
     return baseline
 
 
-def _expected_recent_windows(
-    variants: dict[str, Variant],
-    promotions: dict[int, Promotion],
-) -> set[str]:
-    promoted_recent_windows: set[str] = set()
-    for promotion in promotions.values():
-        recent_window_ids = promotion.summary.get("recent_window_ids", [])
-        if isinstance(recent_window_ids, list):
-            promoted_recent_windows.update(str(window_id) for window_id in recent_window_ids)
-    if promoted_recent_windows:
-        return promoted_recent_windows
-
-    observed = {
+def _observed_attempt_windows(variants: dict[str, Variant]) -> set[str]:
+    return {
         attempt.window_id
         for variant in variants.values()
         for attempt in variant.attempts
         if attempt.window_id != "unknown"
     }
-    return observed
+
+
+def _expected_recent_windows_for_variant(
+    best_promotion: Promotion | None,
+    fallback_recent_windows: set[str],
+) -> set[str]:
+    if best_promotion is not None:
+        recent_window_ids = best_promotion.summary.get("recent_window_ids", [])
+        if isinstance(recent_window_ids, list) and recent_window_ids:
+            return {str(window_id) for window_id in recent_window_ids}
+        if best_promotion.source_result_dirs:
+            return set(best_promotion.source_result_dirs)
+    return fallback_recent_windows
 
 
 def _score_variant(
     variant: Variant,
     baseline_params: dict[str, Any],
-    expected_recent_windows: set[str],
+    fallback_recent_windows: set[str],
 ) -> dict[str, Any]:
     best_promotion = _best_promotion(variant.promotions)
+    expected_recent_windows = _expected_recent_windows_for_variant(best_promotion, fallback_recent_windows)
     recent_window_results = _variant_recent_window_results(variant)
     finite_recent_scores = [
         score

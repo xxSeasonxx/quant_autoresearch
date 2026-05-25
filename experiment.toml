@@ -22,9 +22,9 @@ end = "2026-04-13"
 [data]
 kind = "forex_with_quotes"
 symbols = [
-  "EURAUD",
-  "EURUSD",
-  "AUDUSD",
+  "GBPJPY",
+  "GBPUSD",
+  "USDJPY",
 ]
 strict = true
 

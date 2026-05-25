@@ -275,6 +275,14 @@ promoted candidate works, keep. If it does not promote, discard. You are
 advancing the strategy only when promotion evidence improves or when an equal
 promoted result is materially simpler.
 
+## Strategy Closeout
+
+When a campaign is complete and Season wants the bench prepared for the next
+strategy, use the `strategy-research-handoff` skill. The closeout process must
+rank variants with deterministic tooling, write the researched package into
+`quant_strategies/researched/`, verify the package, and only then reset this
+bench to a neutral placeholder state.
+
 **Crashes**: If a run crashes because of a typo, missing import, malformed
 config, or other local issue, fix it if it is clearly from `strategy.py` or
 `experiment.toml`. If the idea itself is fundamentally broken, log and move on.

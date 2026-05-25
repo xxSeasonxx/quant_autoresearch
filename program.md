@@ -234,6 +234,11 @@ If an attempt fails, attribute the root source before changing anything:
 If the error is not from `strategy.py`, document the limitation instead of
 mutating the strategy to work around it. Capture useful feedback for
 `quant_strategies` or `quant_data` when those upstream systems are the source.
+When evidence suggests a strategy approach is worth testing but blocked by
+upstream data, engine, or harness limits, note it in
+`UPSTREAM_LIMITATIONS_TODO.md` with the idea, missing capability, and validation
+it would unlock. Do not contort `strategy.py` to approximate unsupported
+behavior; leave the limitation as an explicit upstream research task.
 
 ## The experiment loop
 

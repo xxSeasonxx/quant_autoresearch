@@ -84,6 +84,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     min_cross_section = _positive_int(params.get("min_cross_section", 4), "min_cross_section")
     min_abs_funding_bps = _non_negative_float(params.get("min_abs_funding_bps", 1.0), "min_abs_funding_bps")
     min_abs_return_bps = _non_negative_float(params.get("min_abs_return_bps", 25.0), "min_abs_return_bps")
+    max_short_return_extension_bps = _non_negative_float(
+        params.get("max_short_return_extension_bps", 0.0),
+        "max_short_return_extension_bps",
+    )
     include_positive_funding_shorts = _bool_param(
         params.get("include_positive_funding_shorts", True),
         "include_positive_funding_shorts",
@@ -136,7 +140,22 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         raise ValueError("selection_score must be one of: funding, return, product")
     require_exit_horizon = _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
     weight = float(params.get("weight", 1.0))
-    hold_bars = int(params.get("hold_bars", params.get("hold_minutes", 480)))
+    hold_bars = _positive_int(params.get("hold_bars", params.get("hold_minutes", 480)), "hold_bars")
+    short_hold_bars = _positive_int(params.get("short_hold_bars", hold_bars), "short_hold_bars")
+    long_hold_bars = _positive_int(params.get("long_hold_bars", hold_bars), "long_hold_bars")
+    high_extension_short_return_bps = _non_negative_float(
+        params.get("high_extension_short_return_bps", 0.0),
+        "high_extension_short_return_bps",
+    )
+    high_extension_short_hold_bars = _positive_int(
+        params.get("high_extension_short_hold_bars", short_hold_bars),
+        "high_extension_short_hold_bars",
+    )
+    required_exit_horizon_bars = max(
+        short_hold_bars,
+        long_hold_bars,
+        high_extension_short_hold_bars if high_extension_short_return_bps > 0.0 else short_hold_bars,
+    )
 
     rows_by_symbol = _rows_by_symbol(bars)
     as_of_times = sorted(
@@ -167,7 +186,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             candidates,
             rows_by_symbol,
             decision_time,
-            hold_bars,
+            required_exit_horizon_bars,
             require_exit_horizon,
         )
 
@@ -177,6 +196,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             if include_positive_funding_shorts
             and candidate["funding_pressure_bps"] >= min_abs_funding_bps
             and candidate["return_extension_bps"] >= min_abs_return_bps
+            and _passes_max_short_return_extension(candidate, max_short_return_extension_bps)
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
@@ -208,7 +228,23 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
 
         for candidate in selected_shorts:
             if _passes_symbol_cooldown(candidate["symbol"], decision_time, last_signal_time_by_symbol, symbol_cooldown_minutes):
-                signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "short", weight, hold_bars))
+                signals.append(
+                    _signal(
+                        candidate["symbol"],
+                        decision_time,
+                        as_of_time,
+                        "short",
+                        weight,
+                        _candidate_hold_bars(
+                            candidate,
+                            "short",
+                            short_hold_bars,
+                            long_hold_bars,
+                            high_extension_short_return_bps,
+                            high_extension_short_hold_bars,
+                        ),
+                    )
+                )
                 last_signal_time_by_symbol[candidate["symbol"]] = decision_time
         if include_negative_funding_longs:
             for candidate in selected_longs:
@@ -218,7 +254,23 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                     last_signal_time_by_symbol,
                     symbol_cooldown_minutes,
                 ):
-                    signals.append(_signal(candidate["symbol"], decision_time, as_of_time, "long", weight, hold_bars))
+                    signals.append(
+                        _signal(
+                            candidate["symbol"],
+                            decision_time,
+                            as_of_time,
+                            "long",
+                            weight,
+                            _candidate_hold_bars(
+                                candidate,
+                                "long",
+                                short_hold_bars,
+                                long_hold_bars,
+                                high_extension_short_return_bps,
+                                high_extension_short_hold_bars,
+                            ),
+                        )
+                    )
                     last_signal_time_by_symbol[candidate["symbol"]] = decision_time
 
     return signals
@@ -489,6 +541,33 @@ def _passes_idiosyncratic_return(
     if side == "short":
         return idiosyncratic_return_bps >= min_idiosyncratic_return_bps
     return idiosyncratic_return_bps <= -min_idiosyncratic_return_bps
+
+
+def _passes_max_short_return_extension(
+    candidate: Mapping[str, Any],
+    max_short_return_extension_bps: float,
+) -> bool:
+    if max_short_return_extension_bps <= 0.0:
+        return True
+    return float(candidate["return_extension_bps"]) <= max_short_return_extension_bps
+
+
+def _candidate_hold_bars(
+    candidate: Mapping[str, Any],
+    side: str,
+    short_hold_bars: int,
+    long_hold_bars: int,
+    high_extension_short_return_bps: float,
+    high_extension_short_hold_bars: int,
+) -> int:
+    if side == "long":
+        return long_hold_bars
+    if (
+        high_extension_short_return_bps > 0.0
+        and float(candidate["return_extension_bps"]) >= high_extension_short_return_bps
+    ):
+        return high_extension_short_hold_bars
+    return short_hold_bars
 
 
 def _selected_tail(

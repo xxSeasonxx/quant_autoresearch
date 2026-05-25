@@ -81,6 +81,16 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
     decision_lag_minutes = _non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes")
     symbol_cooldown_minutes = _non_negative_int(params.get("symbol_cooldown_minutes", 0), "symbol_cooldown_minutes")
+    blocked_decision_hours_utc = _optional_hour_set(
+        params.get("blocked_decision_hours_utc"),
+        "blocked_decision_hours_utc",
+    )
+    allowed_decision_hours_utc = _optional_hour_set(
+        params.get("allowed_decision_hours_utc"),
+        "allowed_decision_hours_utc",
+    )
+    if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
+        raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     crossing_only = bool(params.get("crossing_only", True))
     weight = float(params.get("weight", 1.0))
     max_hold_bars = _positive_int(
@@ -119,6 +129,11 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         representative = max(entries, key=lambda entry: abs(float(entry["strength"])))
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
         if (symbol, decision_time) not in close_by_key:
+            continue
+        decision_hour = decision_time.hour
+        if allowed_decision_hours_utc is not None and decision_hour not in allowed_decision_hours_utc:
+            continue
+        if blocked_decision_hours_utc is not None and decision_hour in blocked_decision_hours_utc:
             continue
         last_signal_time = last_signal_time_by_symbol.get(symbol)
         if (
@@ -188,6 +203,22 @@ def _optional_positive_float(value: object, name: str) -> float | None:
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
     return parsed
+
+
+def _optional_hour_set(value: object, name: str) -> frozenset[int] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{name} must be a sequence of UTC hours")
+    hours: set[int] = set()
+    for raw_hour in value:
+        hour = int(raw_hour)
+        if hour < 0 or hour > 23:
+            raise ValueError(f"{name} values must be UTC hours from 0 to 23")
+        hours.add(hour)
+    if not hours:
+        raise ValueError(f"{name} must not be empty when provided")
+    return frozenset(hours)
 
 
 def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:

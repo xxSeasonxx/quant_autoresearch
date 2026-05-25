@@ -89,10 +89,14 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("allowed_decision_hours_utc"),
         "allowed_decision_hours_utc",
     )
-    allowed_trade_symbols = _optional_string_set(params.get("allowed_trade_symbols"), "allowed_trade_symbols")
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     crossing_only = bool(params.get("crossing_only", True))
+    require_residual_reversal = bool(params.get("require_residual_reversal", False))
+    min_residual_reversal_bps = _non_negative_float(
+        params.get("min_residual_reversal_bps", 0.0),
+        "min_residual_reversal_bps",
+    )
     weight = float(params.get("weight", 1.0))
     max_hold_bars = _positive_int(
         params.get("max_hold_bars", params.get("hold_bars", params.get("hold_minutes", 30))),
@@ -117,7 +121,8 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             min_abs_residual_bps,
             attribution_bars,
             crossing_only,
-            allowed_trade_symbols,
+            require_residual_reversal,
+            min_residual_reversal_bps,
             candidates,
         )
 
@@ -223,17 +228,6 @@ def _optional_hour_set(value: object, name: str) -> frozenset[int] | None:
     return frozenset(hours)
 
 
-def _optional_string_set(value: object, name: str) -> frozenset[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, str) or not isinstance(value, Sequence):
-        raise ValueError(f"{name} must be a sequence of strings")
-    parsed = {str(item) for item in value}
-    if not parsed:
-        raise ValueError(f"{name} must not be empty when provided")
-    return frozenset(parsed)
-
-
 def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
     controls: dict[str, object] = {}
     for name in ("take_profit_bps", "stop_loss_bps", "trailing_stop_bps"):
@@ -276,7 +270,8 @@ def _collect_candidates(
     min_abs_residual_bps: float,
     attribution_bars: int,
     crossing_only: bool,
-    allowed_trade_symbols: frozenset[str] | None,
+    require_residual_reversal: bool,
+    min_residual_reversal_bps: float,
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]],
 ) -> None:
     prior_extreme_sign = 0
@@ -291,12 +286,24 @@ def _collect_candidates(
             prior_extreme_sign = 0
             continue
 
-        residual_z = (point["residual"] - fmean(history)) / std
+        history_mean = fmean(history)
+        residual_z = (point["residual"] - history_mean) / std
         residual_bps = point["residual"] * 10_000.0
         extreme_sign = _extreme_sign(residual_z, residual_bps, entry_zscore, min_abs_residual_bps)
         if extreme_sign == 0:
             prior_extreme_sign = 0
             continue
+        residual_reversal_bps = 0.0
+        if require_residual_reversal:
+            if index == 0:
+                prior_extreme_sign = extreme_sign
+                continue
+            prior_gap = residuals[index - 1] - history_mean
+            current_gap = point["residual"] - history_mean
+            residual_reversal_bps = -extreme_sign * (current_gap - prior_gap) * 10_000.0
+            if extreme_sign * prior_gap <= 0.0 or residual_reversal_bps <= min_residual_reversal_bps:
+                prior_extreme_sign = extreme_sign
+                continue
 
         selected = _select_reversion_leg(triangle, points, index, extreme_sign, attribution_bars)
         if selected is None:
@@ -304,9 +311,6 @@ def _collect_candidates(
             continue
 
         symbol, signal, attribution_score = selected
-        if allowed_trade_symbols is not None and symbol not in allowed_trade_symbols:
-            prior_extreme_sign = extreme_sign
-            continue
         as_of_time = point["timestamp"]
         if (symbol, as_of_time) not in close_by_key:
             prior_extreme_sign = extreme_sign
@@ -318,6 +322,7 @@ def _collect_candidates(
                     "strength": abs(float(residual_z)),
                     "residual_zscore": float(residual_z),
                     "residual_bps": float(residual_bps),
+                    "residual_reversal_bps": residual_reversal_bps,
                     "attribution_score": attribution_score,
                 }
             )

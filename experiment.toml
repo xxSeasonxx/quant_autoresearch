@@ -22,15 +22,15 @@ end = "2026-04-13"
 [data]
 kind = "forex_with_quotes"
 symbols = [
-  "EURGBP",
-  "EURUSD",
-  "GBPUSD",
+  "AUDNZD",
+  "AUDUSD",
+  "NZDUSD",
 ]
 strict = true
 
 [params]
 triangle_set = "outside_view_8"
-residual_price_field = "mid"
+residual_price_field = "close"
 zscore_window_bars = 240
 min_zscore_observations = 120
 entry_zscore = 2.5

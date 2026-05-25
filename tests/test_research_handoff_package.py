@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -169,6 +171,52 @@ def test_destination_collision_requires_replace(tmp_path: Path):
         replace=True,
     )
     assert (rebuilt / "manifest.json").exists()
+
+
+def test_cli_runs_from_script_path(tmp_path: Path):
+    campaign = tmp_path / "campaign"
+    target_repo = tmp_path / "target"
+    target_repo.mkdir()
+    source_strategy = tmp_path / "strategy.py"
+    source_strategy.write_text("# current source\n")
+    attempts = [
+        write_attempt(campaign, 1, "time_only_exit"),
+        write_attempt(campaign, 2, "entry_filter"),
+        write_attempt(campaign, 3, "directional_subset"),
+    ]
+    ranking_path = write_ranking(
+        tmp_path,
+        campaign,
+        [
+            variant("variant-time", "time_only_exit", attempts[0]),
+            variant("variant-entry", "entry_filter", attempts[1]),
+            variant("variant-directional", "directional_subset", attempts[2]),
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/research_handoff_package.py",
+            "--campaign",
+            str(campaign),
+            "--target-repo",
+            str(target_repo),
+            "--strategy-id",
+            "demo_strategy",
+            "--ranking",
+            str(ranking_path),
+            "--source-strategy",
+            str(source_strategy),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    package_dir = target_repo / "researched" / "demo_strategy"
+    assert result.stdout.strip() == str(package_dir)
+    assert (package_dir / "manifest.json").exists()
 
 
 def write_attempt(

@@ -4,10 +4,14 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 import tomllib
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.research_handoff_rank import METHOD_VERSION, build_handoff_ranking
 

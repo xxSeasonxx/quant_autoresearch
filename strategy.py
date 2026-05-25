@@ -91,6 +91,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
+    leg_selection = str(params.get("leg_selection", "attribution"))
+    if leg_selection not in {"attribution", "direct"}:
+        raise ValueError("leg_selection must be 'attribution' or 'direct'")
     crossing_only = bool(params.get("crossing_only", True))
     require_residual_reversal = bool(params.get("require_residual_reversal", False))
     min_residual_reversal_bps = _non_negative_float(
@@ -121,6 +124,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             min_abs_residual_bps,
             attribution_bars,
             crossing_only,
+            leg_selection,
             require_residual_reversal,
             min_residual_reversal_bps,
             candidates,
@@ -159,8 +163,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             "max_hold_bars": max_hold_bars,
             "residual_zscore": representative["residual_zscore"],
             "residual_bps": representative["residual_bps"],
+            "residual_reversal_bps": representative.get("residual_reversal_bps", 0.0),
             "attribution_score": sum(float(entry["attribution_score"]) for entry in entries),
             "signal_family": "fx_triangular_residual_reversion",
+            "leg_selection": leg_selection,
         }
         payload.update(exit_controls)
         signals.append(payload)
@@ -270,6 +276,7 @@ def _collect_candidates(
     min_abs_residual_bps: float,
     attribution_bars: int,
     crossing_only: bool,
+    leg_selection: str,
     require_residual_reversal: bool,
     min_residual_reversal_bps: float,
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]],
@@ -305,7 +312,10 @@ def _collect_candidates(
                 prior_extreme_sign = extreme_sign
                 continue
 
-        selected = _select_reversion_leg(triangle, points, index, extreme_sign, attribution_bars)
+        if leg_selection == "direct":
+            selected = (triangle[0], -extreme_sign, abs(float(residual_bps)))
+        else:
+            selected = _select_reversion_leg(triangle, points, index, extreme_sign, attribution_bars)
         if selected is None:
             prior_extreme_sign = extreme_sign
             continue

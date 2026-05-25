@@ -45,7 +45,6 @@ __all__ = ["generate_signals"]
 
 _Triangle = tuple[str, str, int, str, int]
 
-_REQUIRED_FIELDS = {"symbol", "timestamp", "close"}
 _OUTSIDE_VIEW_8_TRIANGLES: tuple[_Triangle, ...] = (
     ("EURJPY", "EURUSD", 1, "USDJPY", 1),
     ("GBPJPY", "GBPUSD", 1, "USDJPY", 1),
@@ -66,8 +65,11 @@ _ADDITIONAL_AVAILABLE_TRIANGLES: tuple[_Triangle, ...] = (
 def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, object]) -> list[dict[str, object]]:
     if not bars:
         return []
-    _require_fields(bars, _REQUIRED_FIELDS)
 
+    residual_price_field = str(params.get("residual_price_field", "close"))
+    if residual_price_field not in {"close", "mid"}:
+        raise ValueError("residual_price_field must be 'close' or 'mid'")
+    _require_fields(bars, {"symbol", "timestamp", residual_price_field})
     zscore_window_bars = _positive_int(
         params.get("zscore_window_bars", params.get("zscore_window_minutes", 240)),
         "zscore_window_bars",
@@ -107,7 +109,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     )
     exit_controls = _exit_controls(params)
 
-    close_by_key, timestamps, symbols = _close_table(bars)
+    close_by_key, timestamps, symbols = _close_table(bars, residual_price_field)
 
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]] = {}
     for triangle in _triangles_for(str(params.get("triangle_set", "outside_view_8"))):
@@ -167,6 +169,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             "attribution_score": sum(float(entry["attribution_score"]) for entry in entries),
             "signal_family": "fx_triangular_residual_reversion",
             "leg_selection": leg_selection,
+            "residual_price_field": residual_price_field,
         }
         payload.update(exit_controls)
         signals.append(payload)
@@ -245,6 +248,7 @@ def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
 
 def _close_table(
     bars: Sequence[Mapping[str, object]],
+    price_field: str = "close",
 ) -> tuple[dict[tuple[str, datetime], float], list[datetime], set[str]]:
     close_by_key: dict[tuple[str, datetime], float] = {}
     timestamps: set[datetime] = set()
@@ -253,7 +257,7 @@ def _close_table(
     for row in bars:
         symbol = str(row["symbol"])
         timestamp = _as_datetime(row["timestamp"])
-        close = _positive_finite_float(row["close"])
+        close = _positive_finite_float(row[price_field])
         if close is None:
             continue
         key = (symbol, timestamp)

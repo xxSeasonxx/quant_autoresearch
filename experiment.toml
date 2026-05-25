@@ -30,6 +30,7 @@ strict = true
 
 [params]
 triangle_set = "outside_view_8"
+residual_price_field = "mid"
 zscore_window_bars = 240
 min_zscore_observations = 120
 entry_zscore = 2.5

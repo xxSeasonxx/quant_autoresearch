@@ -43,5 +43,14 @@ the next strategy.
    Preserve generic docs, skills, tools, and `UPSTREAM_LIMITATIONS_TODO.md`
    unless adding or retaining a real upstream limitation discovered during the
    research.
-8. Never describe the strategy as market validated. It is researched and ready
+8. Remove generated campaign state from `quant_autoresearch` after the package
+   is verified:
+   - `results/`
+   - `results.tsv`
+   - `.autoresearch_session.json`
+
+   Do not delete local tooling directories such as `.codegraph/`, `.cursor/`,
+   `.claude/`, `.venv/`, or `openspec/` unless Season explicitly asks for a
+   broader local workspace cleanup.
+9. Never describe the strategy as market validated. It is researched and ready
    for a separate validation process.

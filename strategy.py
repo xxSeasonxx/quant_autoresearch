@@ -77,10 +77,16 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     min_zscore_observations = _positive_int(params.get("min_zscore_observations", 120), "min_zscore_observations")
     entry_zscore = _positive_float(params.get("entry_zscore", 2.5), "entry_zscore")
     min_abs_residual_bps = _non_negative_float(params.get("min_abs_residual_bps", 1.0), "min_abs_residual_bps")
+    max_entry_spread_bps = _optional_positive_float(params.get("max_entry_spread_bps"), "max_entry_spread_bps")
+    min_residual_spread_ratio = _optional_positive_float(
+        params.get("min_residual_spread_ratio"),
+        "min_residual_spread_ratio",
+    )
     attribution_bars = _positive_int(
         params.get("attribution_bars", params.get("attribution_minutes", 5)),
         "attribution_bars",
     )
+    min_attribution_score = _non_negative_float(params.get("min_attribution_score", 0.0), "min_attribution_score")
     decision_lag_minutes = _non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes")
     symbol_cooldown_minutes = _non_negative_int(params.get("symbol_cooldown_minutes", 0), "symbol_cooldown_minutes")
     max_signals_per_symbol_per_day = _non_negative_int(
@@ -95,11 +101,15 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("allowed_decision_hours_utc"),
         "allowed_decision_hours_utc",
     )
+    allowed_trade_symbols = _optional_string_set(params.get("allowed_trade_symbols"), "allowed_trade_symbols")
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     leg_selection = str(params.get("leg_selection", "attribution"))
     if leg_selection not in {"attribution", "direct", "basket"}:
         raise ValueError("leg_selection must be 'attribution', 'direct', or 'basket'")
+    residual_sign_filter = str(params.get("residual_sign_filter", "both"))
+    if residual_sign_filter not in {"both", "positive", "negative"}:
+        raise ValueError("residual_sign_filter must be 'both', 'positive', or 'negative'")
     crossing_only = bool(params.get("crossing_only", True))
     require_residual_reversal = bool(params.get("require_residual_reversal", False))
     min_residual_reversal_bps = _non_negative_float(
@@ -114,6 +124,8 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     exit_controls = _exit_controls(params)
 
     close_by_key, timestamps, symbols = _close_table(bars, residual_price_field)
+    use_spread_filter = max_entry_spread_bps is not None or min_residual_spread_ratio is not None
+    spread_by_key = _spread_table(bars) if use_spread_filter else {}
 
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]] = {}
     for triangle in _triangles_for(str(params.get("triangle_set", "outside_view_8"))):
@@ -128,11 +140,17 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             min_zscore_observations,
             entry_zscore,
             min_abs_residual_bps,
+            max_entry_spread_bps,
+            min_residual_spread_ratio,
             attribution_bars,
+            min_attribution_score,
             crossing_only,
             leg_selection,
+            residual_sign_filter,
             require_residual_reversal,
             min_residual_reversal_bps,
+            allowed_trade_symbols,
+            spread_by_key,
             candidates,
         )
 
@@ -177,10 +195,12 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             "residual_zscore": representative["residual_zscore"],
             "residual_bps": representative["residual_bps"],
             "residual_reversal_bps": representative.get("residual_reversal_bps", 0.0),
+            "entry_spread_bps": representative.get("entry_spread_bps"),
             "attribution_score": sum(float(entry["attribution_score"]) for entry in entries),
             "signal_family": "fx_triangular_residual_reversion",
             "leg_selection": leg_selection,
             "residual_price_field": residual_price_field,
+            "residual_sign_filter": residual_sign_filter,
         }
         payload.update(exit_controls)
         signals.append(payload)
@@ -249,6 +269,17 @@ def _optional_hour_set(value: object, name: str) -> frozenset[int] | None:
     return frozenset(hours)
 
 
+def _optional_string_set(value: object, name: str) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{name} must be a sequence of strings")
+    parsed = {str(item) for item in value}
+    if not parsed:
+        raise ValueError(f"{name} must not be empty when provided")
+    return frozenset(parsed)
+
+
 def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
     controls: dict[str, object] = {}
     for name in ("take_profit_bps", "stop_loss_bps", "trailing_stop_bps"):
@@ -282,6 +313,24 @@ def _close_table(
     return close_by_key, sorted(timestamps), symbols
 
 
+def _spread_table(bars: Sequence[Mapping[str, object]]) -> dict[tuple[str, datetime], float]:
+    spread_by_key: dict[tuple[str, datetime], float] = {}
+    for row in bars:
+        if "bid" not in row or "ask" not in row:
+            continue
+        bid = _positive_finite_float(row["bid"])
+        ask = _positive_finite_float(row["ask"])
+        if bid is None or ask is None or ask < bid:
+            continue
+        midpoint = _positive_finite_float(row.get("mid"))
+        if midpoint is None:
+            midpoint = (bid + ask) / 2.0
+        symbol = str(row["symbol"])
+        timestamp = _as_datetime(row["timestamp"])
+        spread_by_key[(symbol, timestamp)] = (ask - bid) / midpoint * 10_000.0
+    return spread_by_key
+
+
 def _collect_candidates(
     triangle: _Triangle,
     points: list[dict[str, Any]],
@@ -290,11 +339,17 @@ def _collect_candidates(
     min_zscore_observations: int,
     entry_zscore: float,
     min_abs_residual_bps: float,
+    max_entry_spread_bps: float | None,
+    min_residual_spread_ratio: float | None,
     attribution_bars: int,
+    min_attribution_score: float,
     crossing_only: bool,
     leg_selection: str,
+    residual_sign_filter: str,
     require_residual_reversal: bool,
     min_residual_reversal_bps: float,
+    allowed_trade_symbols: frozenset[str] | None,
+    spread_by_key: dict[tuple[str, datetime], float],
     candidates: dict[tuple[str, datetime], list[dict[str, float | int]]],
 ) -> None:
     prior_extreme_sign = 0
@@ -314,6 +369,12 @@ def _collect_candidates(
         residual_bps = point["residual"] * 10_000.0
         extreme_sign = _extreme_sign(residual_z, residual_bps, entry_zscore, min_abs_residual_bps)
         if extreme_sign == 0:
+            prior_extreme_sign = 0
+            continue
+        if residual_sign_filter == "positive" and extreme_sign < 0:
+            prior_extreme_sign = 0
+            continue
+        if residual_sign_filter == "negative" and extreme_sign > 0:
             prior_extreme_sign = 0
             continue
         residual_reversal_bps = 0.0
@@ -345,8 +406,23 @@ def _collect_candidates(
 
         as_of_time = point["timestamp"]
         for symbol, signal, attribution_score in selected_entries:
+            if attribution_score < min_attribution_score:
+                continue
+            if allowed_trade_symbols is not None and symbol not in allowed_trade_symbols:
+                continue
             if (symbol, as_of_time) not in close_by_key:
                 continue
+            entry_spread_bps = spread_by_key.get((symbol, as_of_time))
+            if max_entry_spread_bps is not None or min_residual_spread_ratio is not None:
+                if entry_spread_bps is None:
+                    continue
+                if max_entry_spread_bps is not None and entry_spread_bps > max_entry_spread_bps:
+                    continue
+                if (
+                    min_residual_spread_ratio is not None
+                    and abs(float(residual_bps)) < entry_spread_bps * min_residual_spread_ratio
+                ):
+                    continue
             candidates.setdefault((symbol, as_of_time), []).append(
                 {
                     "signal": signal,
@@ -355,6 +431,7 @@ def _collect_candidates(
                     "residual_bps": float(residual_bps),
                     "residual_reversal_bps": residual_reversal_bps,
                     "attribution_score": attribution_score,
+                    "entry_spread_bps": entry_spread_bps,
                 }
             )
         prior_extreme_sign = extreme_sign

@@ -22,6 +22,12 @@ def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
     attempt_3 = write_attempt(campaign, 3, "directional_subset")
     promotion_dir = campaign / "promotion_0001_demo"
     promotion_dir.mkdir()
+    promotion_score = {
+        "promotion_score": 0.025,
+        "components": {"sharpe": 1.2, "drawdown": -0.08},
+        "extra_authoritative_field": "preserved",
+    }
+    (promotion_dir / "promotion_score.json").write_text(json.dumps(promotion_score, indent=2) + "\n")
     (promotion_dir / "trade_attribution.json").write_text(json.dumps({"trades": 3}) + "\n")
 
     ranking_path = write_ranking(
@@ -79,6 +85,14 @@ def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
         / "researched/demo_strategy/families/family_01_primary_time_only_exit/variants/rank_01/evidence/"
         "promotion_summary.json"
     ).exists()
+    copied_promotion_score = json.loads(
+        (
+            target_repo
+            / "researched/demo_strategy/families/family_01_primary_time_only_exit/variants/rank_01/evidence/"
+            "promotion_score.json"
+        ).read_text()
+    )
+    assert copied_promotion_score == promotion_score
     assert (
         target_repo
         / "researched/demo_strategy/families/family_01_primary_time_only_exit/variants/rank_01/evidence/"

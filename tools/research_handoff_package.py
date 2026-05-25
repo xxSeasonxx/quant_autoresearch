@@ -233,17 +233,28 @@ def _copy_evidence(
     evidence_dir.mkdir()
     copied: list[str] = []
 
-    promotion_summary = variant.get("promotion_summary")
-    if promotion_summary is not None:
-        path = evidence_dir / "promotion_summary.json"
-        _write_json(path, promotion_summary)
-        copied.append(_relative_posix(path, package_dir))
+    raw_promotion_dir = variant.get("promotion_dir")
+    promotion_dir = Path(str(raw_promotion_dir)).expanduser() if raw_promotion_dir else None
 
-    promotion_score = variant.get("promotion_score")
-    if promotion_score is not None:
-        path = evidence_dir / "promotion_score.json"
-        _write_json(path, {"promotion_score": promotion_score})
-        copied.append(_relative_posix(path, package_dir))
+    summary_dest = evidence_dir / "promotion_summary.json"
+    if promotion_dir is not None and (promotion_dir / "promotion_summary.json").exists():
+        shutil.copyfile(promotion_dir / "promotion_summary.json", summary_dest)
+        copied.append(_relative_posix(summary_dest, package_dir))
+    else:
+        promotion_summary = variant.get("promotion_summary")
+        if promotion_summary is not None:
+            _write_json(summary_dest, promotion_summary)
+            copied.append(_relative_posix(summary_dest, package_dir))
+
+    score_dest = evidence_dir / "promotion_score.json"
+    if promotion_dir is not None and (promotion_dir / "promotion_score.json").exists():
+        shutil.copyfile(promotion_dir / "promotion_score.json", score_dest)
+        copied.append(_relative_posix(score_dest, package_dir))
+    else:
+        promotion_score = variant.get("promotion_score")
+        if promotion_score is not None:
+            _write_json(score_dest, {"promotion_score": promotion_score})
+            copied.append(_relative_posix(score_dest, package_dir))
 
     for attempt_dir in attempt_dirs:
         score_path = attempt_dir / "score.json"
@@ -257,9 +268,8 @@ def _copy_evidence(
             copied.append(_relative_posix(dest, package_dir))
 
     if include_trade_attribution:
-        promotion_dir = variant.get("promotion_dir")
-        if promotion_dir:
-            source = Path(str(promotion_dir)).expanduser() / "trade_attribution.json"
+        if promotion_dir is not None:
+            source = promotion_dir / "trade_attribution.json"
             if source.exists():
                 dest = evidence_dir / "trade_attribution.json"
                 shutil.copyfile(source, dest)

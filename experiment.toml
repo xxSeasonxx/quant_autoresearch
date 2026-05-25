@@ -1,26 +1,58 @@
-strategy_id = "awaiting_next_candidate"
+strategy_id = "fx_triangular_residual_reversion"
 strategy_path = "strategy.py"
-source_strategy_path = "/Users/Season_Yang/Personal/quant_strategies/untested/awaiting_next_candidate.py"
+source_strategy_path = "/Users/Season_Yang/Personal/quant_strategies/untested/fx_triangular_residual_reversion.py"
 max_attempts = 100
-active_window_id = "placeholder_120d"
+active_window_id = "locked_recent_2026"
 
 [[windows]]
-id = "placeholder_120d"
-start = "2024-01-01"
-end = "2024-04-29"
+id = "validation_2025_h1"
+start = "2025-01-02"
+end = "2025-06-30"
+
+[[windows]]
+id = "validation_2025_h2"
+start = "2025-07-05"
+end = "2025-12-31"
+
+[[windows]]
+id = "locked_recent_2026"
+start = "2025-10-16"
+end = "2026-04-13"
 
 [data]
-kind = "bars"
-dataset = "equity_1min"
-symbols = ["SPY"]
+kind = "forex_with_quotes"
+symbols = [
+  "AUDJPY",
+  "AUDNZD",
+  "AUDUSD",
+  "CADJPY",
+  "EURAUD",
+  "EURGBP",
+  "EURJPY",
+  "EURUSD",
+  "GBPJPY",
+  "GBPUSD",
+  "NZDJPY",
+  "NZDUSD",
+  "USDCAD",
+  "USDJPY",
+]
 strict = true
 
 [params]
-weight = 1.0
-hold_bars = 1
+triangle_set = "outside_view_8"
+zscore_window_bars = 240
+min_zscore_observations = 120
+entry_zscore = 2.5
+min_abs_residual_bps = 1.0
+attribution_bars = 5
+decision_lag_minutes = 1
+crossing_only = true
+weight = 0.25
+hold_bars = 30
 
 [fill_model]
-price = "close"
+price = "quote"
 entry_lag_bars = 1
 exit_lag_bars = 0
 
@@ -30,8 +62,37 @@ slippage_bps_per_side = 0.0
 
 [scoring]
 metric = "net_return"
-min_score_trades = 1
+min_score_trades = 200
+
+[research]
+mode = "explore"
+primary_window_id = "locked_recent_2026"
+confirmation_window_ids = ["validation_2025_h1", "validation_2025_h2", "locked_recent_2026"]
+parallel_workers = 3
+confirm_on_explore_keep = false
+
+[confirmation_scoring]
+primary_metric = "net_return_per_day"
+dispersion_weight = 0.5
+weak_window_floor = 0.0
+weak_window_penalty = 0.001
+min_trades_per_window = 200
+low_trade_penalty = 0.001
+min_symbol_count = 4
+symbol_concentration_penalty = 0.00025
+
+[promotion]
+enabled = true
+screen_on_scored_explore = false
+recent_window_ids = ["validation_2025_h1", "locked_recent_2026"]
+rotating_probe_window_ids = ["validation_2025_h2"]
+deep_probe_floor = -0.0005
+near_equal_score_tolerance = 0.0001
+cost_stress_id = "realistic_fx_costs"
+cost_fee_bps_per_side = 0.0
+cost_slippage_bps_per_side = 0.25
+cost_stress_min_ratio = 0.5
 
 [output]
-results_dir = "results/next_strategy"
+results_dir = "results/fx_triangular_residual_reversion"
 mode = "validate"

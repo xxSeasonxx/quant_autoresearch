@@ -39,7 +39,7 @@ decision_lag_minutes = 1
 symbol_cooldown_minutes = 60
 crossing_only = true
 weight = 0.25
-hold_bars = 30
+hold_bars = 5
 
 [fill_model]
 price = "quote"

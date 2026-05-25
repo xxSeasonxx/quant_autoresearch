@@ -98,8 +98,8 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     leg_selection = str(params.get("leg_selection", "attribution"))
-    if leg_selection not in {"attribution", "direct"}:
-        raise ValueError("leg_selection must be 'attribution' or 'direct'")
+    if leg_selection not in {"attribution", "direct", "basket"}:
+        raise ValueError("leg_selection must be 'attribution', 'direct', or 'basket'")
     crossing_only = bool(params.get("crossing_only", True))
     require_residual_reversal = bool(params.get("require_residual_reversal", False))
     min_residual_reversal_bps = _non_negative_float(
@@ -328,20 +328,25 @@ def _collect_candidates(
                 prior_extreme_sign = extreme_sign
                 continue
 
-        if leg_selection == "direct":
-            selected = (triangle[0], -extreme_sign, abs(float(residual_bps)))
+        if leg_selection == "basket":
+            selected_entries = _basket_reversion_legs(triangle, extreme_sign, abs(float(residual_bps)))
+        elif leg_selection == "direct":
+            selected_entries = ((triangle[0], -extreme_sign, abs(float(residual_bps))),)
         else:
             selected = _select_reversion_leg(triangle, points, index, extreme_sign, attribution_bars)
-        if selected is None:
+            selected_entries = () if selected is None else (selected,)
+        if not selected_entries:
             prior_extreme_sign = extreme_sign
             continue
 
-        symbol, signal, attribution_score = selected
-        as_of_time = point["timestamp"]
-        if (symbol, as_of_time) not in close_by_key:
+        if crossing_only and prior_extreme_sign == extreme_sign:
             prior_extreme_sign = extreme_sign
             continue
-        if not (crossing_only and prior_extreme_sign == extreme_sign):
+
+        as_of_time = point["timestamp"]
+        for symbol, signal, attribution_score in selected_entries:
+            if (symbol, as_of_time) not in close_by_key:
+                continue
             candidates.setdefault((symbol, as_of_time), []).append(
                 {
                     "signal": signal,
@@ -409,6 +414,19 @@ def _select_reversion_leg(
     if leg_type == "direct":
         return symbol, -residual_sign, attribution_score
     return symbol, residual_sign * synthetic_sign, attribution_score
+
+
+def _basket_reversion_legs(
+    triangle: _Triangle,
+    residual_sign: int,
+    attribution_score: float,
+) -> tuple[tuple[str, int, float], ...]:
+    direct, leg_a, leg_a_sign, leg_b, leg_b_sign = triangle
+    return (
+        (direct, -residual_sign, attribution_score),
+        (leg_a, residual_sign * leg_a_sign, attribution_score),
+        (leg_b, residual_sign * leg_b_sign, attribution_score),
+    )
 
 
 def _extreme_sign(

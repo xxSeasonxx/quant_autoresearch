@@ -31,17 +31,17 @@ strict = true
 [params]
 triangle_set = "outside_view_8"
 residual_price_field = "close"
-zscore_window_bars = 1440
-min_zscore_observations = 720
+zscore_window_bars = 240
+min_zscore_observations = 120
 entry_zscore = 2.5
 min_abs_residual_bps = 1.0
 attribution_bars = 5
 decision_lag_minutes = 1
 symbol_cooldown_minutes = 60
-allowed_decision_hours_utc = [6, 15, 18]
-leg_selection = "attribution"
+blocked_decision_hours_utc = [21, 22, 23, 0, 1]
+leg_selection = "basket"
 crossing_only = true
-weight = 0.25
+weight = 0.08333333333333333
 hold_bars = 30
 
 [fill_model]

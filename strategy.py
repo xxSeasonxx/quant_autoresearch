@@ -116,6 +116,8 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             continue
         representative = max(entries, key=lambda entry: abs(float(entry["strength"])))
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
+        if (symbol, decision_time) not in close_by_key:
+            continue
         payload: dict[str, object] = {
             "symbol": symbol,
             "decision_time": decision_time,

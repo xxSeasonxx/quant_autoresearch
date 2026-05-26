@@ -67,7 +67,7 @@ hold_bars = 600
 short_hold_bars = 480
 long_hold_bars = 960
 high_extension_short_return_bps = 120.0
-high_extension_short_hold_bars = 120
+high_extension_short_hold_bars = 240
 state_mode = "suppress_until_exit"
 overlap_exit_buffer_bars = 2
 

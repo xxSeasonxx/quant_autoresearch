@@ -137,10 +137,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("min_long_idiosyncratic_return_bps", min_idiosyncratic_return_bps),
         "min_long_idiosyncratic_return_bps",
     )
-    max_abs_market_return_bps = _non_negative_float(
-        params.get("max_abs_market_return_bps", 0.0),
-        "max_abs_market_return_bps",
-    )
     symbol_cooldown_minutes = _non_negative_int(
         params.get("symbol_cooldown_minutes", 0),
         "symbol_cooldown_minutes",
@@ -202,8 +198,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         if len(candidates) < min_cross_section:
             continue
         market_return_bps = sum(candidate["return_extension_bps"] for candidate in candidates) / len(candidates)
-        if max_abs_market_return_bps > 0.0 and abs(market_return_bps) > max_abs_market_return_bps:
-            continue
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
         candidates = _filter_exit_horizon(
             candidates,

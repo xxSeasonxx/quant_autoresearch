@@ -58,6 +58,7 @@ min_idiosyncratic_return_bps = 2.5
 min_short_idiosyncratic_return_bps = 2.5
 min_long_idiosyncratic_return_bps = 0.0
 symbol_cooldown_minutes = 0
+max_active_short_symbols = 3
 min_tail_count = 1
 balance_sides = false
 selection_score = "funding"

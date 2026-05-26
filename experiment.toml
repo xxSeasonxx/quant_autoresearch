@@ -1,7 +1,7 @@
 strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 strategy_path = "strategy.py"
 source_strategy_path = "results/researched/crypto_perp_funding_crowding_reversal/families/family_03_exploratory_time_only_exit/variants/rank_03/strategy.py"
-max_attempts = 50
+max_attempts = 100
 active_window_id = "locked_recent_2026"
 
 [[windows]]
@@ -127,5 +127,5 @@ compress_large_artifacts = false
 large_artifact_max_mb = 100
 
 [output]
-results_dir = "results/stateful_rebalance_50"
+results_dir = "results/stateful_rebalance_bold_100"
 mode = "validate"

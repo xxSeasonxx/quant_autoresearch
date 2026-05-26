@@ -102,6 +102,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         "allowed_decision_hours_utc",
     )
     allowed_trade_symbols = _optional_string_set(params.get("allowed_trade_symbols"), "allowed_trade_symbols")
+    allowed_trade_sides = _optional_string_set(params.get("allowed_trade_sides"), "allowed_trade_sides")
+    if allowed_trade_sides is not None and not allowed_trade_sides.issubset({"long", "short"}):
+        raise ValueError("allowed_trade_sides values must be 'long' or 'short'")
     if blocked_decision_hours_utc is not None and allowed_decision_hours_utc is not None:
         raise ValueError("blocked_decision_hours_utc and allowed_decision_hours_utc are mutually exclusive")
     leg_selection = str(params.get("leg_selection", "attribution"))
@@ -163,6 +166,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         if abs(score) <= 1e-12:
             continue
         representative = max(entries, key=lambda entry: abs(float(entry["strength"])))
+        side = "long" if score > 0.0 else "short"
+        if allowed_trade_sides is not None and side not in allowed_trade_sides:
+            continue
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
         if (symbol, decision_time) not in close_by_key:
             continue
@@ -188,7 +194,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             "symbol": symbol,
             "decision_time": decision_time,
             "as_of_time": as_of_time,
-            "side": "long" if score > 0.0 else "short",
+            "side": side,
             "weight": weight,
             "hold_bars": max_hold_bars,
             "max_hold_bars": max_hold_bars,

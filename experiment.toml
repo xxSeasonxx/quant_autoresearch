@@ -33,11 +33,11 @@ strict = true
 
 [params]
 triangle_set = "outside_view_8"
-residual_price_field = "mid"
+residual_price_field = "close"
 zscore_window_bars = 240
 min_zscore_observations = 120
-entry_zscore = 3.5
-min_abs_residual_bps = 1.0
+entry_zscore = 3.3
+min_abs_residual_bps = 1.5
 attribution_bars = 5
 decision_lag_minutes = 1
 symbol_cooldown_minutes = 30

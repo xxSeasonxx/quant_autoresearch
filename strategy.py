@@ -141,14 +141,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("symbol_cooldown_minutes", 0),
         "symbol_cooldown_minutes",
     )
-    max_active_short_symbols = _non_negative_int(
-        params.get("max_active_short_symbols", 0),
-        "max_active_short_symbols",
-    )
-    max_active_long_symbols = _non_negative_int(
-        params.get("max_active_long_symbols", 0),
-        "max_active_long_symbols",
-    )
     min_tail_count = _positive_int(params.get("min_tail_count", 1), "min_tail_count")
     balance_sides = _bool_param(params.get("balance_sides", False), "balance_sides")
     selection_score = str(params.get("selection_score", "funding"))
@@ -194,7 +186,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
     signals: list[dict[str, object]] = []
     last_signal_time_by_symbol: dict[str, datetime] = {}
     active_until_by_symbol: dict[str, datetime] = {}
-    active_side_by_symbol: dict[str, str] = {}
     for as_of_time in as_of_times:
         candidates = _decision_candidates(
             rows_by_symbol,
@@ -271,12 +262,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                 decision_time,
                 active_until_by_symbol,
                 state_mode,
-            ) and _passes_active_side_limit(
-                "short",
-                decision_time,
-                active_until_by_symbol,
-                active_side_by_symbol,
-                max_active_short_symbols,
             ):
                 signals.append(
                     _signal(
@@ -294,11 +279,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                 _record_active_window(
                     candidate["symbol"],
                     decision_time,
-                    "short",
                     hold,
                     overlap_exit_buffer_bars,
                     active_until_by_symbol,
-                    active_side_by_symbol,
                     state_mode,
                 )
         if include_negative_funding_longs:
@@ -321,12 +304,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                     decision_time,
                     active_until_by_symbol,
                     state_mode,
-                ) and _passes_active_side_limit(
-                    "long",
-                    decision_time,
-                    active_until_by_symbol,
-                    active_side_by_symbol,
-                    max_active_long_symbols,
                 ):
                     signals.append(
                         _signal(
@@ -344,11 +321,9 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
                     _record_active_window(
                         candidate["symbol"],
                         decision_time,
-                        "long",
                         hold,
                         overlap_exit_buffer_bars,
                         active_until_by_symbol,
-                        active_side_by_symbol,
                         state_mode,
                     )
 
@@ -767,37 +742,17 @@ def _passes_state_gate(
     return active_until is None or decision_time > active_until
 
 
-def _passes_active_side_limit(
-    side: str,
-    decision_time: datetime,
-    active_until_by_symbol: Mapping[str, datetime],
-    active_side_by_symbol: Mapping[str, str],
-    max_active_symbols: int,
-) -> bool:
-    if max_active_symbols <= 0:
-        return True
-    active_count = sum(
-        1
-        for symbol, active_until in active_until_by_symbol.items()
-        if decision_time <= active_until and active_side_by_symbol.get(symbol) == side
-    )
-    return active_count < max_active_symbols
-
-
 def _record_active_window(
     symbol: str,
     decision_time: datetime,
-    side: str,
     hold_bars: int,
     overlap_exit_buffer_bars: int,
     active_until_by_symbol: dict[str, datetime],
-    active_side_by_symbol: dict[str, str],
     state_mode: str,
 ) -> None:
     if state_mode == "off":
         return
     active_until_by_symbol[symbol] = decision_time + timedelta(minutes=hold_bars + overlap_exit_buffer_bars)
-    active_side_by_symbol[symbol] = side
 
 
 def _sign(value: float) -> int:

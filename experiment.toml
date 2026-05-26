@@ -36,19 +36,19 @@ triangle_set = "outside_view_8"
 residual_price_field = "close"
 zscore_window_bars = 240
 min_zscore_observations = 120
-entry_zscore = 3.5
+entry_zscore = 2.5
 min_abs_residual_bps = 1.0
 attribution_bars = 5
 decision_lag_minutes = 1
 symbol_cooldown_minutes = 30
 allowed_decision_hours_utc = [10, 15]
-allowed_trade_symbols = ["EURJPY", "EURUSD", "GBPUSD"]
+allowed_trade_symbols = ["EURJPY", "EURUSD"]
+allowed_trade_sides = ["long"]
 leg_selection = "attribution"
 crossing_only = true
 weight = 0.25
 hold_bars = 30
 take_profit_bps = 8.0
-stop_loss_bps = 8.0
 
 [fill_model]
 price = "quote"

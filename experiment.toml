@@ -31,7 +31,7 @@ end = "2023-06-29"
 
 [data]
 kind = "crypto_perp_funding"
-symbols = ["ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
+symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 strict = true
 
 [params]

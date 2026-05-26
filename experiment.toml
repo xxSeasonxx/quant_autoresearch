@@ -70,7 +70,6 @@ high_extension_short_return_bps = 120.0
 high_extension_short_hold_bars = 120
 state_mode = "suppress_until_exit"
 overlap_exit_buffer_bars = 2
-stop_loss_bps = 300.0
 
 [fill_model]
 price = "close"

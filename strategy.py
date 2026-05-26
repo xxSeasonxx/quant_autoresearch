@@ -104,8 +104,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("include_negative_funding_longs", True),
         "include_negative_funding_longs",
     )
-    short_symbols = _optional_symbol_set(params.get("short_symbols"), "short_symbols")
-    long_symbols = _optional_symbol_set(params.get("long_symbols"), "long_symbols")
     min_same_sign_funding_events = _non_negative_int(
         params.get("min_same_sign_funding_events", 0),
         "min_same_sign_funding_events",
@@ -213,7 +211,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             candidate
             for candidate in candidates
             if include_positive_funding_shorts
-            and _passes_symbol_filter(candidate, short_symbols)
             and candidate["funding_pressure_bps"] >= min_abs_funding_bps
             and candidate["return_extension_bps"] >= min_abs_return_bps
             and _passes_max_short_return_extension(candidate, max_short_return_extension_bps)
@@ -227,7 +224,6 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             candidate
             for candidate in candidates
             if candidate["funding_pressure_bps"] <= -min_abs_funding_bps
-            and _passes_symbol_filter(candidate, long_symbols)
             and candidate["return_extension_bps"] <= -min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
@@ -418,22 +414,6 @@ def _bool_param(value: object, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be boolean")
     return value
-
-
-def _optional_symbol_set(value: object, name: str) -> frozenset[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        symbols = [value]
-    else:
-        try:
-            symbols = list(value)  # type: ignore[arg-type]
-        except TypeError as exc:
-            raise ValueError(f"{name} must be a symbol or sequence of symbols") from exc
-    parsed = frozenset(str(symbol).strip() for symbol in symbols if str(symbol).strip())
-    if not parsed:
-        raise ValueError(f"{name} must contain at least one symbol")
-    return parsed
 
 
 def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
@@ -642,10 +622,6 @@ def _passes_return_z(candidate: Mapping[str, Any], min_abs_return_z: float) -> b
         return True
     value = candidate.get("return_z")
     return isinstance(value, float) and abs(value) >= min_abs_return_z
-
-
-def _passes_symbol_filter(candidate: Mapping[str, Any], allowed_symbols: frozenset[str] | None) -> bool:
-    return allowed_symbols is None or str(candidate["symbol"]) in allowed_symbols
 
 
 def _passes_recent_cooloff(

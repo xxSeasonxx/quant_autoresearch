@@ -48,6 +48,7 @@ min_abs_return_bps = 5.0
 max_short_return_extension_bps = 250.0
 include_positive_funding_shorts = true
 include_negative_funding_longs = true
+short_symbols = ["DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 min_same_sign_funding_events = 3
 min_latest_abs_funding_bps = 0.0
 volatility_lookback_minutes = 0

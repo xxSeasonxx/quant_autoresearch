@@ -1,59 +1,80 @@
-strategy_id = "fx_triangular_residual_reversion"
+strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 strategy_path = "strategy.py"
-source_strategy_path = "/Users/Season_Yang/Personal/quant_strategies/untested/fx_triangular_residual_reversion.py"
-max_attempts = 100
+source_strategy_path = "results/researched/crypto_perp_funding_crowding_reversal/families/family_03_exploratory_time_only_exit/variants/rank_03/strategy.py"
+max_attempts = 50
 active_window_id = "locked_recent_2026"
-
-[[windows]]
-id = "validation_2025_h1"
-start = "2025-01-02"
-end = "2025-06-30"
-
-[[windows]]
-id = "validation_2025_h2"
-start = "2025-07-05"
-end = "2025-12-31"
 
 [[windows]]
 id = "locked_recent_2026"
 start = "2025-10-16"
 end = "2026-04-13"
 
+[[windows]]
+id = "validation_2025_h1"
+start = "2025-01-01"
+end = "2025-06-29"
+
+[[windows]]
+id = "validation_2025_h2"
+start = "2025-07-01"
+end = "2025-12-27"
+
+[[windows]]
+id = "stress_2022_ftx"
+start = "2022-07-15"
+end = "2023-01-10"
+
+[[windows]]
+id = "recovery_2023_h1"
+start = "2023-01-01"
+end = "2023-06-29"
+
 [data]
-kind = "forex_with_quotes"
-symbols = [
-  "EURJPY",
-  "EURGBP",
-  "EURUSD",
-  "GBPJPY",
-  "GBPUSD",
-  "USDJPY",
-]
+kind = "crypto_perp_funding"
+symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 strict = true
 
 [params]
-triangle_set = "outside_view_8"
-residual_price_field = "close"
-zscore_window_bars = 240
-min_zscore_observations = 120
-entry_zscore = 2.5
-min_abs_residual_bps = 1.0
-attribution_bars = 5
+funding_lookback_events = 5
+return_lookback_minutes = 120
+decision_interval_minutes = 240
 decision_lag_minutes = 1
-symbol_cooldown_minutes = 30
-allowed_decision_hours_utc = [10, 15]
-allowed_trade_symbols = ["EURJPY", "EURUSD", "GBPUSD"]
-leg_selection = "attribution"
-residual_sign_filter = "positive"
-crossing_only = true
-weight = 0.25
-hold_bars = 30
-take_profit_bps = 8.0
+session_start_hour = 4
+session_end_hour = 20
+top_n = 5
+min_cross_section = 4
+min_abs_funding_bps = 1.0
+min_abs_return_bps = 5.0
+max_short_return_extension_bps = 250.0
+include_positive_funding_shorts = true
+include_negative_funding_longs = true
+min_same_sign_funding_events = 3
+min_latest_abs_funding_bps = 0.0
+volatility_lookback_minutes = 0
+min_abs_return_z = 0.0
+recent_return_lookback_minutes = 0
+max_recent_same_direction_return_bps = 0.0
+min_idiosyncratic_return_bps = 2.5
+min_short_idiosyncratic_return_bps = 2.5
+min_long_idiosyncratic_return_bps = 0.0
+symbol_cooldown_minutes = 0
+min_tail_count = 1
+balance_sides = false
+selection_score = "funding"
+require_exit_horizon = true
+weight = 0.2
+hold_bars = 600
+short_hold_bars = 480
+long_hold_bars = 960
+high_extension_short_return_bps = 120.0
+high_extension_short_hold_bars = 120
+state_mode = "suppress_until_exit"
+overlap_exit_buffer_bars = 2
 
 [fill_model]
-price = "quote"
+price = "close"
 entry_lag_bars = 1
-exit_lag_bars = 0
+exit_lag_bars = 1
 
 [cost_model]
 fee_bps_per_side = 0.0
@@ -61,12 +82,12 @@ slippage_bps_per_side = 0.0
 
 [scoring]
 metric = "net_return"
-min_score_trades = 200
+min_score_trades = 80
 
 [research]
 mode = "explore"
 primary_window_id = "locked_recent_2026"
-confirmation_window_ids = ["validation_2025_h1", "validation_2025_h2", "locked_recent_2026"]
+confirmation_window_ids = ["locked_recent_2026", "validation_2025_h1", "validation_2025_h2"]
 parallel_workers = 3
 confirm_on_explore_keep = false
 
@@ -75,23 +96,36 @@ primary_metric = "net_return_per_day"
 dispersion_weight = 0.5
 weak_window_floor = 0.0
 weak_window_penalty = 0.001
-min_trades_per_window = 200
+min_trades_per_window = 80
 low_trade_penalty = 0.001
-min_symbol_count = 3
+min_symbol_count = 4
 symbol_concentration_penalty = 0.00025
 
 [promotion]
 enabled = true
 screen_on_scored_explore = false
-recent_window_ids = ["validation_2025_h1", "locked_recent_2026"]
-rotating_probe_window_ids = ["validation_2025_h2"]
-deep_probe_floor = -0.0005
+recent_window_ids = ["validation_2025_h1", "validation_2025_h2", "locked_recent_2026"]
+rotating_probe_window_ids = ["stress_2022_ftx", "recovery_2023_h1"]
+deep_probe_floor = -0.001
 near_equal_score_tolerance = 0.0001
-cost_stress_id = "realistic_fx_costs"
-cost_fee_bps_per_side = 0.0
-cost_slippage_bps_per_side = 0.25
+cost_stress_id = "realistic_costs"
+cost_fee_bps_per_side = 0.5
+cost_slippage_bps_per_side = 0.5
 cost_stress_min_ratio = 0.5
 
+[artifacts]
+profile = "research"
+keep_strategy_snapshot = true
+keep_config = true
+keep_summary = true
+keep_evidence = true
+keep_signals = true
+keep_engine_request = false
+keep_input_rows_csv = false
+keep_input_rows_jsonl = false
+compress_large_artifacts = false
+large_artifact_max_mb = 100
+
 [output]
-results_dir = "results/fx_triangular_residual_reversion"
+results_dir = "results/stateful_rebalance_50"
 mode = "validate"

@@ -112,6 +112,10 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
         params.get("min_latest_abs_funding_bps", 0.0),
         "min_latest_abs_funding_bps",
     )
+    min_funding_acceleration_bps = _non_negative_float(
+        params.get("min_funding_acceleration_bps", 0.0),
+        "min_funding_acceleration_bps",
+    )
     volatility_lookback_minutes = _non_negative_int(
         params.get("volatility_lookback_minutes", 0),
         "volatility_lookback_minutes",
@@ -216,6 +220,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and _passes_max_short_return_extension(candidate, max_short_return_extension_bps)
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and candidate["funding_acceleration_bps"] >= min_funding_acceleration_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
             and _passes_idiosyncratic_return(candidate, "short", market_return_bps, min_short_idiosyncratic_return_bps)
@@ -227,6 +232,7 @@ def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, 
             and candidate["return_extension_bps"] <= -min_abs_return_bps
             and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+            and candidate["funding_acceleration_bps"] <= -min_funding_acceleration_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
             and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_long_idiosyncratic_return_bps)
@@ -522,6 +528,7 @@ def _decision_candidates(
                 "funding_pressure_bps": funding_stats["funding_pressure_bps"],
                 "funding_same_sign_events": funding_stats["funding_same_sign_events"],
                 "latest_funding_bps": funding_stats["latest_funding_bps"],
+                "funding_acceleration_bps": funding_stats["funding_acceleration_bps"],
                 "return_extension_bps": return_extension_bps,
                 "return_z": _realized_return_z(
                     rows,
@@ -566,11 +573,14 @@ def _funding_pressure_stats(
     recent = sorted(funding_events.items(), key=lambda item: (item[0], item[1][0]))[-funding_lookback_events:]
     recent_rates = [rate for _, (_, rate) in recent]
     funding_pressure_bps = sum(recent_rates) * 10_000.0
+    previous_rates = recent_rates[:-1]
+    previous_average = sum(previous_rates) / len(previous_rates) if previous_rates else recent_rates[-1]
     pressure_sign = _sign(funding_pressure_bps)
     return {
         "funding_pressure_bps": funding_pressure_bps,
         "funding_same_sign_events": sum(1 for rate in recent_rates if _sign(rate) == pressure_sign),
         "latest_funding_bps": recent_rates[-1] * 10_000.0,
+        "funding_acceleration_bps": (recent_rates[-1] - previous_average) * 10_000.0,
     }
 
 

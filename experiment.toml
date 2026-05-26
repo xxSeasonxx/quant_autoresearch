@@ -35,7 +35,7 @@ symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 strict = true
 
 [params]
-funding_lookback_events = 4
+funding_lookback_events = 5
 return_lookback_minutes = 120
 decision_interval_minutes = 240
 decision_lag_minutes = 1

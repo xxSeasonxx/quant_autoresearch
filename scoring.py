@@ -10,6 +10,12 @@ from experiment_config import ConfirmationScoringConfig
 
 
 NOTES = "Loop feedback only. Not market evidence."
+SMOKE_SCORE_FIELDS = {
+    "raw_net_return": "sum_weighted_trade_net_return",
+    "gross_return": "sum_weighted_trade_gross_return",
+    "funding_return": "sum_weighted_trade_funding_return",
+    "cost_return": "sum_weighted_trade_cost_return",
+}
 
 
 def load_json(path: str | Path) -> dict[str, Any] | None:
@@ -30,6 +36,38 @@ def write_score(path: str | Path, payload: dict[str, Any]) -> None:
     score_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _screening_result_from_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    validation_report = evidence.get("validation_report")
+    if isinstance(validation_report, dict):
+        screening_result = validation_report.get("screening_result")
+        if isinstance(screening_result, dict):
+            return screening_result
+    screening_result = evidence.get("screening_result")
+    return screening_result if isinstance(screening_result, dict) else {}
+
+
+def _v2_returns_from_screening_result(
+    screening_result: dict[str, Any],
+) -> tuple[float | None, float | None, float | None, float | None, str | None]:
+    smoke_score = screening_result.get("smoke_score")
+    if not isinstance(smoke_score, dict):
+        return None, None, None, None, "missing screening_result.smoke_score.sum_weighted_trade_net_return"
+
+    values: dict[str, float | None] = {}
+    for payload_key, field_name in SMOKE_SCORE_FIELDS.items():
+        values[payload_key] = _as_float_or_none(smoke_score.get(field_name))
+        if values[payload_key] is None:
+            return None, None, None, None, f"missing screening_result.smoke_score.{field_name}"
+
+    return (
+        values["raw_net_return"],
+        values["gross_return"],
+        values["funding_return"],
+        values["cost_return"],
+        None,
+    )
+
+
 def classify_failure_source(stage: str | None, message: str | None) -> str | None:
     if not stage:
         return None
@@ -41,7 +79,7 @@ def classify_failure_source(stage: str | None, message: str | None) -> str | Non
         return "environment_error"
     if normalized_stage in {"config", "config_load"} or "invalid toml" in normalized_message:
         return "config_error"
-    if normalized_stage in {"strategy_import", "signal_generation", "request_build"}:
+    if normalized_stage in {"strategy_import", "signal_generation", "decision_generation", "param_validation", "request_build"}:
         return "strategy_error"
     if normalized_stage == "data_load":
         return "quant_data_error"
@@ -78,6 +116,7 @@ def build_score(
             score=None,
             raw_net_return=None,
             gross_return=None,
+            funding_return=None,
             cost_return=None,
             trade_count=None,
             min_score_trades=min_score_trades,
@@ -89,6 +128,7 @@ def build_score(
             passed_validation=False,
             failed_gates=[],
             failure_source=source,
+            failure_message=None,
             complexity_note=complexity_note,
         )
 
@@ -96,24 +136,22 @@ def build_score(
     if not isinstance(validation_report, dict):
         validation_report = {}
 
-    screening_result = validation_report.get("screening_result")
-    if not isinstance(screening_result, dict):
-        screening_result = evidence.get("screening_result")
-    if not isinstance(screening_result, dict):
-        screening_result = {}
-
+    screening_result = _screening_result_from_evidence(evidence)
     trade_count = _as_int_or_none(screening_result.get("trade_count"))
-    raw_net_return = _as_float_or_none(screening_result.get("net_return"))
-    gross_return = _as_float_or_none(screening_result.get("gross_return"))
-    cost_return = _as_float_or_none(screening_result.get("cost_return"))
+    raw_net_return, gross_return, funding_return, cost_return, smoke_score_error = _v2_returns_from_screening_result(
+        screening_result
+    )
     passed_validation = validation_report.get("passed") is True
     failed_gates = _failed_gate_names(validation_report.get("gates"))
 
-    if trade_count is None or trade_count < min_score_trades:
-        status = "insufficient_sample"
-        score = None
-    elif raw_net_return is None:
+    failure_message = None
+    if smoke_score_error is not None:
         status = "runner_failed"
+        score = None
+        failure_source = failure_source or "quant_strategies_error"
+        failure_message = smoke_score_error
+    elif trade_count is None or trade_count < min_score_trades:
+        status = "insufficient_sample"
         score = None
     elif not passed_validation:
         status = "validation_failed"
@@ -127,6 +165,7 @@ def build_score(
         score=score,
         raw_net_return=raw_net_return,
         gross_return=gross_return,
+        funding_return=funding_return,
         cost_return=cost_return,
         trade_count=trade_count,
         min_score_trades=min_score_trades,
@@ -138,6 +177,7 @@ def build_score(
         passed_validation=passed_validation,
         failed_gates=failed_gates,
         failure_source=failure_source,
+        failure_message=failure_message,
         complexity_note=complexity_note,
     )
 
@@ -285,6 +325,7 @@ def _payload(
     score: float | None,
     raw_net_return: float | None,
     gross_return: float | None,
+    funding_return: float | None,
     cost_return: float | None,
     trade_count: int | None,
     min_score_trades: int,
@@ -296,6 +337,7 @@ def _payload(
     passed_validation: bool,
     failed_gates: list[str],
     failure_source: str | None,
+    failure_message: str | None,
     complexity_note: str,
 ) -> dict[str, Any]:
     return {
@@ -305,6 +347,7 @@ def _payload(
         "score_basis": "net_return_per_day" if _has_positive_window_days(window_days) else "net_return",
         "raw_net_return": raw_net_return,
         "gross_return": gross_return,
+        "funding_return": funding_return,
         "cost_return": cost_return,
         "trade_count": trade_count,
         "min_score_trades": min_score_trades,
@@ -316,6 +359,7 @@ def _payload(
         "passed_validation": passed_validation,
         "failed_gates": failed_gates,
         "failure_source": failure_source,
+        "failure_message": failure_message,
         "complexity_note": complexity_note,
         "notes": NOTES,
     }
@@ -363,12 +407,7 @@ def _candidate_payload(
 def _trades_from_evidence(evidence: dict[str, Any] | None) -> list[dict[str, Any]]:
     if evidence is None:
         return []
-    validation_report = evidence.get("validation_report")
-    if not isinstance(validation_report, dict):
-        return []
-    screening_result = validation_report.get("screening_result")
-    if not isinstance(screening_result, dict):
-        return []
+    screening_result = _screening_result_from_evidence(evidence)
     trades = screening_result.get("trades")
     if not isinstance(trades, list):
         return []

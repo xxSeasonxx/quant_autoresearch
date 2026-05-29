@@ -63,7 +63,7 @@ WINDOW_LEDGER_HEADER = [
     "status",
     "description",
 ]
-SYMBOL_LEDGER_HEADER = [
+LEGACY_SYMBOL_LEDGER_HEADER = [
     "attempt",
     "commit",
     "window_id",
@@ -77,6 +77,30 @@ SYMBOL_LEDGER_HEADER = [
     "status",
     "description",
 ]
+SYMBOL_LEDGER_HEADER = [
+    "attempt",
+    "commit",
+    "window_id",
+    "result_dir",
+    "window_start",
+    "window_end",
+    "window_days",
+    "symbol_count",
+    "score",
+    "raw_net_return",
+    "trade_count",
+    "status",
+    "description",
+]
+LEGACY_CANDIDATE_LEDGER_HEADER = [
+    *LEGACY_SYMBOL_LEDGER_HEADER,
+    "run_kind",
+    "candidate_score",
+    "recent_mean_score",
+    "worst_recent_score",
+    "passed_window_count",
+    "failed_window_count",
+]
 LEDGER_HEADER = [
     *SYMBOL_LEDGER_HEADER,
     "run_kind",
@@ -87,6 +111,17 @@ LEDGER_HEADER = [
     "failed_window_count",
 ]
 CANDIDATE_LEDGER_HEADER = LEDGER_HEADER
+LEGACY_LEDGER_HEADER = [
+    *LEGACY_CANDIDATE_LEDGER_HEADER,
+    "promotion_decision",
+    "promotion_score",
+    "score_dispersion",
+    "cost_stress_score",
+    "cost_stress_ratio",
+    "rotating_probe_window_id",
+    "rotating_probe_score",
+    "promoted_commit",
+]
 LEDGER_HEADER = [
     *CANDIDATE_LEDGER_HEADER,
     "promotion_decision",
@@ -721,6 +756,7 @@ def _finish_attempt(
         attempt=attempt,
         commit=commit,
         window_id=window_id,
+        result_dir=result_dir,
         window_start=_optional_str(run_metadata["window_start"]),
         window_end=_optional_str(run_metadata["window_end"]),
         window_days=_optional_int(run_metadata["window_days"]),
@@ -775,6 +811,7 @@ def _finish_confirmation_attempt(
         attempt=attempt,
         commit=commit,
         window_id=primary_result.window_id,
+        result_dir=candidate_dir,
         window_start=_optional_str(primary_result.run_metadata["window_start"]),
         window_end=_optional_str(primary_result.run_metadata["window_end"]),
         window_days=_optional_int(primary_result.run_metadata["window_days"]),
@@ -839,6 +876,7 @@ def _finish_promotion_attempt(
         attempt=attempt,
         commit=commit,
         window_id=primary_result.window_id,
+        result_dir=promotion_dir,
         window_start=_optional_str(primary_result.run_metadata["window_start"]),
         window_end=_optional_str(primary_result.run_metadata["window_end"]),
         window_days=_optional_int(primary_result.run_metadata["window_days"]),
@@ -1093,6 +1131,7 @@ def append_ledger(
     attempt: int,
     commit: str | None,
     window_id: str,
+    result_dir: Path | str,
     window_start: str | None,
     window_end: str | None,
     window_days: int | None,
@@ -1114,6 +1153,7 @@ def append_ledger(
                 "attempt": attempt,
                 "commit": commit or "",
                 "window_id": window_id,
+                "result_dir": str(result_dir),
                 "window_start": window_start or "",
                 "window_end": window_end or "",
                 "window_days": "" if window_days is None else window_days,
@@ -1152,7 +1192,15 @@ def _ensure_ledger_schema(path: Path) -> bool:
             return True
         rows = list(reader)
 
-    if fieldnames not in (OLD_LEDGER_HEADER, WINDOW_LEDGER_HEADER, SYMBOL_LEDGER_HEADER, CANDIDATE_LEDGER_HEADER):
+    if fieldnames not in (
+        OLD_LEDGER_HEADER,
+        WINDOW_LEDGER_HEADER,
+        LEGACY_SYMBOL_LEDGER_HEADER,
+        SYMBOL_LEDGER_HEADER,
+        LEGACY_CANDIDATE_LEDGER_HEADER,
+        CANDIDATE_LEDGER_HEADER,
+        LEGACY_LEDGER_HEADER,
+    ):
         raise ValueError(f"unexpected results.tsv header: {fieldnames}")
 
     with path.open("w", encoding="utf-8", newline="") as handle:

@@ -74,7 +74,7 @@ results_dir = "{results_dir}"
 mode = "validate"
 '''.lstrip()
     )
-    (root / "strategy.py").write_text("def generate_signals(bars, params):\n    return []\n")
+    (root / "strategy.py").write_text("def generate_decisions(rows, params):\n    return []\n")
 
 
 def append_promotion_config(
@@ -127,19 +127,28 @@ def fake_success_run(result_root: Path, *, net_return: float, trade_count: int =
         (attempt_dir / "summary.json").write_text(
             json.dumps({"stage": "completed", "assessment_status": "smoke_passed"}) + "\n"
         )
+        screening_result = {
+            "trade_count": trade_count,
+            "smoke_score": {
+                "sum_weighted_trade_net_return": net_return,
+                "sum_weighted_trade_gross_return": net_return,
+                "sum_weighted_trade_funding_return": 0.0,
+                "sum_weighted_trade_cost_return": 0.0,
+            },
+        }
         (attempt_dir / "evidence.json").write_text(
             json.dumps(
                 {
+                    "schema_version": "quant_strategies.engine.evidence/v2",
+                    "mode": "validate",
+                    "strategy_id": "demo",
+                    "screening_result": screening_result,
                     "validation_report": {
+                        "mode": "validate",
                         "passed": True,
                         "gates": [],
-                        "screening_result": {
-                            "trade_count": trade_count,
-                            "net_return": net_return,
-                            "gross_return": net_return,
-                            "cost_return": 0.0,
-                        },
-                    }
+                        "screening_result": screening_result,
+                    },
                 }
             )
             + "\n"
@@ -614,9 +623,9 @@ def test_smoke_attempt_uses_real_default_strategy_file_without_live_quant_data(
         strategy_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(strategy_module)
 
-        generate_signals = getattr(strategy_module, "generate_signals", None)
-        assert callable(generate_signals)
-        assert generate_signals([], generated_config["params"]) == []
+        generate_decisions = getattr(strategy_module, "generate_decisions", None)
+        assert callable(generate_decisions)
+        assert generate_decisions([], generated_config["params"]) == []
 
         return fake_success_run(tmp_path / "results", net_return=0.02, trade_count=5)(
             config_path, repo_root=repo_root
@@ -750,6 +759,7 @@ def test_append_ledger_writes_candidate_columns(tmp_path: Path):
         attempt=1,
         commit="abc1234",
         window_id="locked_recent_2026",
+        result_dir=Path("results/candidate"),
         window_start="2025-10-16",
         window_end="2026-04-13",
         window_days=180,
@@ -762,6 +772,7 @@ def test_append_ledger_writes_candidate_columns(tmp_path: Path):
     )
 
     rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert rows[0]["result_dir"] == "results/candidate"
     assert rows[0]["run_kind"] == "confirm"
     assert rows[0]["candidate_score"] == "0.0008"
     assert rows[0]["recent_mean_score"] == "0.0012"
@@ -790,6 +801,7 @@ def test_append_ledger_writes_promotion_columns(tmp_path: Path):
         attempt=1,
         commit="abc1234",
         window_id="locked_recent_2026",
+        result_dir=Path("results/promotion"),
         window_start="2025-10-16",
         window_end="2026-04-13",
         window_days=180,
@@ -802,6 +814,7 @@ def test_append_ledger_writes_promotion_columns(tmp_path: Path):
     )
 
     rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert rows[0]["result_dir"] == "results/promotion"
     assert rows[0]["promotion_decision"] == "promote"
     assert rows[0]["promotion_score"] == "0.0008"
     assert rows[0]["cost_stress_ratio"] == "0.58"

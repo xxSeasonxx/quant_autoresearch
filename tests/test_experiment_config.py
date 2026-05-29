@@ -559,4 +559,8 @@ def test_materialize_runner_toml_uses_selected_window_dates(tmp_path: Path):
     assert parsed["cost_model"]["fee_bps_per_side"] == 1.0
     assert parsed["cost_model"]["slippage_bps_per_side"] == 2.0
     assert parsed["output"]["results_dir"] == "results"
-    assert parsed["output"]["mode"] == "validate"
+    assert parsed["output"]["mode"] == "screen"
+    assert parsed["output"]["artifact_profile"] == "full"
+    assert 'artifact_profile = "full"' in text
+    assert 'artifact_profile = "research"' not in text
+    assert 'artifact_profile = "debug"' not in text

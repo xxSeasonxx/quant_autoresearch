@@ -1,7 +1,6 @@
-strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
+strategy_id = "crypto_perp_autoresearch_ensemble"
 strategy_path = "strategy.py"
-source_strategy_path = "results/researched/crypto_perp_funding_crowding_reversal/families/family_03_exploratory_time_only_exit/variants/rank_03/strategy.py"
-max_attempts = 100
+max_attempts = 50
 active_window_id = "locked_recent_2026"
 
 [[windows]]
@@ -10,66 +9,56 @@ start = "2025-10-16"
 end = "2026-04-13"
 
 [[windows]]
-id = "validation_2025_h1"
-start = "2025-01-01"
-end = "2025-06-29"
-
-[[windows]]
 id = "validation_2025_h2"
 start = "2025-07-01"
 end = "2025-12-27"
 
 [[windows]]
-id = "stress_2022_ftx"
-start = "2022-07-15"
-end = "2023-01-10"
-
-[[windows]]
-id = "recovery_2023_h1"
-start = "2023-01-01"
-end = "2023-06-29"
+id = "validation_2025_h1"
+start = "2025-01-01"
+end = "2025-06-29"
 
 [data]
 kind = "crypto_perp_funding"
-symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
+symbols = [
+  "ADA-PERP",
+  "XRP-PERP",
+  "AVAX-PERP",
+]
 strict = true
 
 [params]
-funding_lookback_events = 5
-return_lookback_minutes = 120
-decision_interval_minutes = 240
-decision_lag_minutes = 1
-session_start_hour = 4
-session_end_hour = 24
-top_n = 5
-min_cross_section = 4
-min_abs_funding_bps = 1.0
-min_abs_return_bps = 0.0
-max_short_return_extension_bps = 275.0
-include_positive_funding_shorts = true
-include_negative_funding_longs = true
-min_same_sign_funding_events = 3
-min_latest_abs_funding_bps = 0.0
-volatility_lookback_minutes = 0
-min_abs_return_z = 0.0
-recent_return_lookback_minutes = 60
-max_recent_same_direction_return_bps = 250.0
-min_idiosyncratic_return_bps = 2.5
-min_short_idiosyncratic_return_bps = 2.5
-min_long_idiosyncratic_return_bps = 0.0
-symbol_cooldown_minutes = 0
-min_tail_count = 1
-balance_sides = false
-selection_score = "funding"
-require_exit_horizon = true
-weight = 0.2
-hold_bars = 600
-short_hold_bars = 480
-long_hold_bars = 720
-high_extension_short_return_bps = 120.0
-high_extension_short_hold_bars = 120
-state_mode = "suppress_until_exit"
-overlap_exit_buffer_bars = 2
+symbols = [
+  "ADA-PERP",
+  "XRP-PERP",
+  "AVAX-PERP",
+]
+side_mode = "short_only"
+excluded_decision_hours = [1, 2, 3, 4, 14, 20]
+symbol_weight_fractions = [0.95, 0.025, 0.025]
+use_full_indicator_history = false
+use_trailing_stop = true
+base_position_pct = 0.20
+atr_stop_mult = 5.5
+min_votes = 4
+cooldown_bars = 2
+rsi_period = 8
+rsi_long_exit_threshold = 69.0
+rsi_short_exit_threshold = 31.0
+use_rsi_exhaustion_filter = false
+ema_fast_span = 12
+ema_slow_span = 26
+macd_fast_span = 12
+macd_slow_span = 26
+macd_signal_span = 9
+bb_window_hours = 10
+bb_percentile_threshold = 85.0
+base_momentum_threshold = 0.012
+vol_lookback_hours = 48
+vshort_threshold_mult = 0.5
+dynamic_threshold_vol_weight = 0.5
+dynamic_threshold_floor = 0.006
+dynamic_threshold_ceiling = 0.025
 
 [fill_model]
 price = "close"
@@ -87,8 +76,8 @@ min_score_trades = 80
 [research]
 mode = "explore"
 primary_window_id = "locked_recent_2026"
-confirmation_window_ids = ["locked_recent_2026", "validation_2025_h1", "validation_2025_h2"]
-parallel_workers = 3
+confirmation_window_ids = ["locked_recent_2026", "validation_2025_h2"]
+parallel_workers = 1
 confirm_on_explore_keep = false
 
 [confirmation_scoring]
@@ -98,14 +87,14 @@ weak_window_floor = 0.0
 weak_window_penalty = 0.001
 min_trades_per_window = 80
 low_trade_penalty = 0.001
-min_symbol_count = 4
+min_symbol_count = 3
 symbol_concentration_penalty = 0.00025
 
 [promotion]
 enabled = true
 screen_on_scored_explore = false
-recent_window_ids = ["validation_2025_h1", "validation_2025_h2", "locked_recent_2026"]
-rotating_probe_window_ids = ["stress_2022_ftx", "recovery_2023_h1"]
+recent_window_ids = ["locked_recent_2026", "validation_2025_h2"]
+rotating_probe_window_ids = ["validation_2025_h1"]
 deep_probe_floor = -0.001
 near_equal_score_tolerance = 0.0001
 cost_stress_id = "realistic_costs"
@@ -119,7 +108,7 @@ keep_strategy_snapshot = true
 keep_config = true
 keep_summary = true
 keep_evidence = true
-keep_signals = true
+keep_signals = false
 keep_engine_request = false
 keep_input_rows_csv = false
 keep_input_rows_jsonl = false
@@ -127,5 +116,6 @@ compress_large_artifacts = false
 large_artifact_max_mb = 100
 
 [output]
-results_dir = "results/stateful_rebalance_bold_100"
-mode = "validate"
+results_dir = "results/next50_crypto_perp_autoresearch_ensemble"
+mode = "screen"
+artifact_profile = "summary"

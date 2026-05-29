@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import subprocess
 import sys
@@ -9,7 +10,15 @@ from pathlib import Path
 import pytest
 from quant_strategies.runner.config import load_config
 
-from tools.research_handoff_package import build_researched_package
+import tools.research_handoff_package as handoff_package
+from tools.research_handoff_package import (
+    build_researched_package,
+    build_researched_package_from_selected_results,
+    build_selected_results_package,
+    cleanup_results_root_after_selected_package,
+    verify_researched_package,
+    verify_selected_results_package,
+)
 
 
 def test_builds_three_family_package_and_rewrites_configs(tmp_path: Path):
@@ -235,6 +244,224 @@ def test_cli_runs_from_script_path(tmp_path: Path):
     assert (package_dir / "manifest.json").exists()
 
 
+def test_builds_selected_15_package_rebuilds_ledger_and_cleans_results(tmp_path: Path):
+    results_root = tmp_path / "results"
+    campaign = results_root / "campaign"
+    source_strategy = tmp_path / "strategy.py"
+    source_strategy.write_text("def generate_decisions(rows, params):\n    return []\n")
+    old_result = results_root / "old_campaign"
+    old_result.mkdir(parents=True)
+
+    variants: list[dict[str, object]] = []
+    attempt_id = 1
+    for family_index, family in enumerate(("time_only_exit", "entry_filter", "selection_or_breadth")):
+        for rank in range(1, 6):
+            attempt = write_attempt(campaign, attempt_id, family)
+            variants.append(
+                variant(
+                    f"{family}-{rank}",
+                    family,
+                    attempt,
+                    blended_score=0.10 - family_index * 0.01 - rank * 0.001,
+                    trade_count=300 + attempt_id,
+                )
+            )
+            attempt_id += 1
+    ranking_path = write_selected_ranking(tmp_path, campaign, variants)
+
+    selected_dir = build_selected_results_package(
+        results_root=results_root,
+        strategy_id="demo",
+        ranking_path=ranking_path,
+        strategy_template_path=source_strategy,
+        replace=True,
+    )
+
+    manifest = json.loads((selected_dir / "selection_manifest.json").read_text())
+    assert manifest["variant_count"] == 15
+    assert [family["family"] for family in manifest["families"]] == [
+        "time_only_exit",
+        "entry_filter",
+        "selection_or_breadth",
+    ]
+    config_path = selected_dir / "family_01_primary_time_only_exit" / "rank_01" / "config.toml"
+    config = config_path.read_text()
+    assert 'strategy_path = "results/selected_15/family_01_primary_time_only_exit/rank_01/strategy.py"' in config
+    assert 'results_dir = "results/new_15/family_01_primary_time_only_exit/rank_01"' in config
+    assert 'artifact_profile = "full"' in config
+    assert (selected_dir / "family_01_primary_time_only_exit" / "rank_01" / "source_summary.json").exists()
+    assert (results_root / "new_15").is_dir()
+
+    verified = verify_selected_results_package(results_root)
+    assert verified["variant_count"] == 15
+
+    rows = list(csv.DictReader((tmp_path / "results.tsv").read_text().splitlines(), delimiter="\t"))
+    assert len(rows) == 15
+    assert {row["run_kind"] for row in rows} == {"selected_legacy"}
+    assert {row["status"] for row in rows} == {"selected"}
+    assert all(row["result_dir"].startswith("results/selected_15/") for row in rows)
+
+    removed = cleanup_results_root_after_selected_package(results_root)
+    assert "campaign" in removed
+    assert "old_campaign" in removed
+    assert sorted(path.name for path in results_root.iterdir()) == ["new_15", "selected_15"]
+
+
+def test_builds_researched_package_from_selected_results_and_new_15(tmp_path: Path):
+    results_root = tmp_path / "results"
+    target_repo = tmp_path / "quant_strategies"
+    target_repo.mkdir()
+    campaign = results_root / "campaign"
+    source_strategy = tmp_path / "strategy.py"
+    source_strategy.write_text("def generate_decisions(rows, params):\n    return []\n")
+
+    variants: list[dict[str, object]] = []
+    attempt_id = 1
+    for family_index, family in enumerate(("time_only_exit", "entry_filter", "selection_or_breadth")):
+        for rank in range(1, 6):
+            attempt = write_attempt(campaign, attempt_id, family)
+            variants.append(
+                variant(
+                    f"{family}-{rank}",
+                    family,
+                    attempt,
+                    blended_score=0.10 - family_index * 0.01 - rank * 0.001,
+                    trade_count=300 + attempt_id,
+                )
+            )
+            attempt_id += 1
+    ranking_path = write_selected_ranking(tmp_path, campaign, variants)
+    selected_dir = build_selected_results_package(
+        results_root=results_root,
+        strategy_id="demo",
+        ranking_path=ranking_path,
+        strategy_template_path=source_strategy,
+        replace=True,
+    )
+    selected_manifest = json.loads((selected_dir / "selection_manifest.json").read_text())
+    for selected_variant in selected_manifest["variants"]:
+        write_new_15_run(tmp_path, selected_variant)
+
+    package_dir = build_researched_package_from_selected_results(
+        results_root=results_root,
+        target_repo=target_repo,
+        strategy_id="demo",
+    )
+
+    manifest = verify_researched_package(package_dir, target_repo, expected_variant_count=15)
+    assert manifest["variant_count"] == 15
+    first = manifest["variants"][0]
+    variant_dir = package_dir / first["directory"]
+    config = (variant_dir / "config.toml").read_text()
+    assert 'strategy_path = "researched/demo/families/' in config
+    assert 'results_dir = "results/researched/demo/' in config
+    assert first["rerun_score"] == 0.02
+    assert (variant_dir / "evidence" / "new_15_locked_recent_2026" / "score.json").exists()
+    assert (variant_dir / "evidence" / "new_15_locked_recent_2026" / "decision_records.jsonl").exists()
+    assert not (variant_dir / "evidence" / "new_15_locked_recent_2026" / "engine_request.json").exists()
+
+
+def test_selected_15_replace_preserves_existing_package_when_new_build_fails(tmp_path: Path):
+    results_root = tmp_path / "results"
+    existing_selected = results_root / "selected_15"
+    existing_selected.mkdir(parents=True)
+    (existing_selected / "selection_manifest.json").write_text('{"keep": true}\n')
+    source_strategy = tmp_path / "strategy.py"
+    source_strategy.write_text("def generate_decisions(rows, params):\n    return []\n")
+    bad_ranking = tmp_path / "bad_ranking.json"
+    bad_ranking.write_text(
+        json.dumps(
+            {
+                "method_version": "research_handoff_rank_v1",
+                "campaign_dir": str(results_root / "missing_campaign"),
+                "selected_families": [
+                    {"family": "time_only_exit", "best_variant_id": "missing", "variant_count": 1},
+                ],
+                "variants": [],
+            }
+        )
+        + "\n"
+    )
+
+    with pytest.raises(ValueError):
+        build_selected_results_package(
+            results_root=results_root,
+            strategy_id="demo",
+            ranking_path=bad_ranking,
+            strategy_template_path=source_strategy,
+            replace=True,
+        )
+
+    assert (existing_selected / "selection_manifest.json").read_text() == '{"keep": true}\n'
+
+
+def test_selected_15_replace_restores_backup_when_final_move_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    results_root = tmp_path / "results"
+    selected_dir = results_root / "selected_15"
+    staged_dir = tmp_path / "staged" / "selected_15"
+    selected_dir.mkdir(parents=True)
+    staged_dir.mkdir(parents=True)
+    (selected_dir / "selection_manifest.json").write_text('{"old": true}\n')
+    (staged_dir / "selection_manifest.json").write_text('{"new": true}\n')
+    real_move = handoff_package.shutil.move
+
+    def flaky_move(src: str, dst: str):
+        if Path(src) == staged_dir:
+            raise OSError("simulated final move failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(handoff_package.shutil, "move", flaky_move)
+
+    with pytest.raises(OSError, match="simulated final move failure"):
+        handoff_package._replace_selected_dir(selected_dir, staged_dir, results_root)
+
+    assert (selected_dir / "selection_manifest.json").read_text() == '{"old": true}\n'
+    assert not list(results_root.glob(".selected_15_backup_*"))
+
+
+def test_verify_selected_15_rejects_ledger_that_does_not_match_manifest(tmp_path: Path):
+    results_root = tmp_path / "results"
+    campaign = results_root / "campaign"
+    source_strategy = tmp_path / "strategy.py"
+    source_strategy.write_text("def generate_decisions(rows, params):\n    return []\n")
+    variants: list[dict[str, object]] = []
+    attempt_id = 1
+    for family_index, family in enumerate(("time_only_exit", "entry_filter", "selection_or_breadth")):
+        for rank in range(1, 6):
+            attempt = write_attempt(campaign, attempt_id, family)
+            variants.append(
+                variant(
+                    f"{family}-{rank}",
+                    family,
+                    attempt,
+                    blended_score=0.10 - family_index * 0.01 - rank * 0.001,
+                    trade_count=300 + attempt_id,
+                )
+            )
+            attempt_id += 1
+    ranking_path = write_selected_ranking(tmp_path, campaign, variants)
+
+    build_selected_results_package(
+        results_root=results_root,
+        strategy_id="demo",
+        ranking_path=ranking_path,
+        strategy_template_path=source_strategy,
+        replace=True,
+    )
+    lines = (tmp_path / "results.tsv").read_text().splitlines()
+    columns = lines[1].split("\t")
+    result_dir_index = lines[0].split("\t").index("result_dir")
+    columns[result_dir_index] = "results/selected_15/wrong"
+    lines[1] = "\t".join(columns)
+    (tmp_path / "results.tsv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="selection manifest"):
+        cleanup_results_root_after_selected_package(results_root)
+
+
 def write_attempt(
     campaign: Path,
     attempt_id: int,
@@ -264,6 +491,34 @@ def write_attempt(
         json.dumps({"status": "scored", "score": 0.01 * attempt_id, "trade_count": 250}) + "\n"
     )
     return attempt_dir
+
+
+def write_new_15_run(repo_root: Path, selected_variant: dict[str, object]) -> Path:
+    rank_dir = repo_root / str(selected_variant["new_result_dir"])
+    run_dir = rank_dir / "2026-05-27T000000Z-demo"
+    run_dir.mkdir(parents=True)
+    score = {
+        "status": "scored",
+        "score": 0.02,
+        "raw_net_return": 2.4,
+        "trade_count": 321,
+        "window_id": "locked_recent_2026",
+    }
+    for name, payload in {
+        "score.json": score,
+        "summary.json": {"status": "ok"},
+        "evidence.json": {"validation_report": {"passed": True}},
+        "data_manifest.json": {"rows": 10},
+        "run_manifest.json": {"run": "demo"},
+        "new_15_metadata.json": {"attempt": 16},
+    }.items():
+        (run_dir / name).write_text(json.dumps(payload) + "\n")
+    (run_dir / "notes.md").write_text("notes\n")
+    (run_dir / "signals.csv").write_text("timestamp,symbol\n")
+    (run_dir / "decision_records.jsonl").write_text("{}\n")
+    (run_dir / "strategy_snapshot.py").write_text("def generate_decisions(rows, params):\n    return []\n")
+    (run_dir / "engine_request.json").write_text("{}\n")
+    return run_dir
 
 
 def valid_runner_toml() -> str:
@@ -318,6 +573,27 @@ def write_ranking(tmp_path: Path, campaign: Path, variants: list[dict[str, objec
     return path
 
 
+def write_selected_ranking(tmp_path: Path, campaign: Path, variants: list[dict[str, object]]) -> Path:
+    selected_families = [
+        {"family": "time_only_exit", "best_variant_id": "time_only_exit-1", "variant_count": 5},
+        {"family": "entry_filter", "best_variant_id": "entry_filter-1", "variant_count": 5},
+        {"family": "selection_or_breadth", "best_variant_id": "selection_or_breadth-1", "variant_count": 5},
+    ]
+    path = tmp_path / "selected_ranking.json"
+    path.write_text(
+        json.dumps(
+            {
+                "method_version": "research_handoff_rank_v1",
+                "campaign_dir": str(campaign),
+                "selected_families": selected_families,
+                "variants": variants,
+            }
+        )
+        + "\n"
+    )
+    return path
+
+
 def variant(
     variant_id: str,
     family: str,
@@ -325,15 +601,33 @@ def variant(
     *,
     promotion_dir: Path | None = None,
     evidence_result_dirs: list[Path] | None = None,
+    blended_score: float = 0.01,
+    trade_count: int = 250,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "variant_id": variant_id,
         "family": family,
         "attempt_ids": [int(attempt_dir.name.split("_")[1])],
         "attempt_dirs": [str(attempt_dir)],
+        "base_score": blended_score,
+        "blended_score": blended_score,
+        "cost_stress_score": None,
         "promotion_score": None,
         "promotion_summary": None,
         "promotion_dir": None,
+        "recent_window_score_stdev": 0.0,
+        "recent_window_scores": [
+            {
+                "attempt_id": int(attempt_dir.name.split("_")[1]),
+                "window_id": "recent",
+                "score": blended_score,
+                "status": "scored",
+                "trade_count": trade_count,
+                "result_dir": str(attempt_dir),
+            }
+        ],
+        "trade_count": trade_count,
+        "params": {"threshold": blended_score},
         "evidence_result_dirs": [str(path) for path in evidence_result_dirs or []],
     }
     if promotion_dir is not None:

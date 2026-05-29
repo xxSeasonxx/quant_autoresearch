@@ -1,367 +1,353 @@
-"""Strategy: crypto_perp_funding_crowding_reversal_stateful_rebalance
+"""Strategy: crypto_perp_autoresearch_ensemble
 
 Source / provenance:
-Internal crowding-reversal hypothesis derived from crypto perpetual futures
-funding-rate mechanism literature, especially Ackerer, Hugonnier, and Jermann
-(2024), "Perpetual Futures Pricing", NBER Working Paper 32936, DOI
-10.3386/w32936, and Zhang (2026), "Funding Rate Mechanism in Perpetual
-Futures", SSRN 6185958, DOI 10.2139/ssrn.6185958. This file is not a direct
-paper replication.
+Exp102-inspired hybrid port of the upstream Nunchi autoresearch crypto
+perpetual futures ensemble documented in
+https://github.com/Nunchi-trade/auto-researchtrading/blob/main/STRATEGIES.md.
+This keeps the six hourly technical votes, BASE_POSITION_PCT = 0.08 as a
+portfolio budget, ATR stop multiplier = 5.5, and TAKE_PROFIT_PCT = 99.0. The
+upstream Sharpe claim is external benchmark context only; this module does not
+reproduce it locally.
 
 Market rationale:
-Recent same-direction perpetual funding pressure and price extension can mark
-crowded positioning that mean-reverts over the next configured max holding
-window. Repeated same-symbol signals are state updates, not independent trade
-tickets, so this bench variant suppresses new same-symbol entries until the
-active target window has exited.
+Crypto perpetual trend bursts can persist across liquid instruments when
+multi-horizon momentum, trend, oscillator, and volatility-regime signals agree.
+The ATR trailing stop is the local runner-compatible proxy for the upstream
+stateful risk exit.
 
 Required observables:
-Symbol, timestamp, close, funding timestamp, funding rate, and funding-event
-flag for crypto perpetual bars.
+Symbol, timezone-aware timestamp, open, high, low, and close for crypto
+perpetual bars. funding_rate is consumed when present for audit metadata but is
+not required because the upstream final funding boost is effectively disabled.
 
-Signal rule:
-On a sparse as-of cadence, use completed prior closes and funding events at or
-before the as-of time. Emit decisions after the as-of bar can be observed. Short
-the strongest positive funding plus positive return tail, and optionally long
-the strongest negative funding plus negative return tail. Use the configured
-time hold as the max-hold fallback, but do not emit a new target for a symbol
-while a prior target for that symbol is still active.
+Decision rule:
+Build completed hourly snapshots from rows available at or before the as-of
+timestamp. Emit a long or short target-weight decision when at least four of six
+votes agree: 12h momentum versus a dynamic volatility threshold, 6h momentum
+versus 0.5 of that threshold, EMA(12) versus EMA(26), RSI(8) versus 50,
+MACD(12,26,9) histogram sign, and Bollinger Band width percentile below 85 as a
+bidirectional volatility-regime vote. The exit policy uses ATR(24) * 5.5 as a
+trailing stop in basis points and no take-profit by default. The default 8%
+portfolio budget is split equally across configured symbols.
 
 Assumptions:
-Funding timestamps are known no later than the as-of time, market data
-availability is represented by the runner's `available_at` field when present,
-and the completed prior close rather than the as-of close drives return
-extension.
+Input bars are sorted by causal availability through the runner's available_at
+field when present, hourly snapshots can be labeled by existing bar timestamps,
+and max_hold_bars is expressed in the runner's native input-bar cadence. The
+local engine has no explicit flat target or portfolio-aware state, so this port
+suppresses overlapping same-symbol entries until the assumed local hold window
+ends instead of reproducing upstream portfolio state or signal flips.
 
 Falsifier:
-If explicit same-symbol state suppression removes the broad candidate's edge or
-leaves too few trades for the sample gate, the old result was likely an
-overlapping-ticket artifact rather than a tradable rebalance rule.
+If decisions fail causal data audit, require overlapping same-symbol exposure to
+work, or depend on unmodeled flat exits/signal flips for most return, reject
+this port before moving it to tested/.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
 from typing import Any
 
-from quant_strategies.decisions import ExitPolicy, InstrumentRef, PositionTarget, StrategyDecision
-
-__all__ = ["generate_signals", "generate_decisions"]
-
-_STRATEGY_ID = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
-_REQUIRED_FIELDS = {"symbol", "timestamp", "close", "funding_timestamp", "funding_rate", "has_funding_event"}
-
-
-class _SymbolRows:
-    __slots__ = (
-        "timestamps",
-        "closes_by_timestamp",
-        "conflicting_close_timestamps",
-        "funding_event_rows",
-        "latest_timestamp",
-    )
-
-    def __init__(
-        self,
-        *,
-        timestamps: tuple[datetime, ...],
-        closes_by_timestamp: dict[datetime, float],
-        conflicting_close_timestamps: frozenset[datetime],
-        funding_event_rows: tuple[tuple[datetime, datetime, float], ...],
-        latest_timestamp: datetime,
-    ) -> None:
-        self.timestamps = timestamps
-        self.closes_by_timestamp = closes_by_timestamp
-        self.conflicting_close_timestamps = conflicting_close_timestamps
-        self.funding_event_rows = funding_event_rows
-        self.latest_timestamp = latest_timestamp
+from quant_strategies.decisions import (
+    ExitPolicy,
+    InstrumentRef,
+    ObservationRef,
+    PositionTarget,
+    StrategyDecision,
+)
 
 
-def generate_signals(bars: Sequence[Mapping[str, object]], params: Mapping[str, object]) -> list[dict[str, object]]:
+__all__ = ["validate_params", "generate_decisions"]
+
+_REQUIRED_FIELDS = {"symbol", "timestamp", "open", "high", "low", "close"}
+_DEFAULT_SYMBOLS = ("BTC-PERP", "ETH-PERP", "SOL-PERP")
+_DEFAULT_STRATEGY_ID = "crypto_perp_autoresearch_ensemble"
+_SIGNAL_FAMILY = "crypto_perp_autoresearch_ensemble"
+_UPSTREAM_DEFAULTS = {
+    "BASE_POSITION_PCT": 0.08,
+    "TAKE_PROFIT_PCT": 99.0,
+    "ATR_STOP_MULT": 5.5,
+    "MIN_VOTES": 4,
+    "MOMENTUM_LONG_HOURS": 12,
+    "MOMENTUM_SHORT_HOURS": 6,
+    "VSHORT_THRESHOLD_MULT": 0.5,
+    "EMA_FAST_SPAN": 12,
+    "EMA_SLOW_SPAN": 26,
+    "RSI_PERIOD": 8,
+    "MACD_FAST_SPAN": 12,
+    "MACD_SLOW_SPAN": 26,
+    "MACD_SIGNAL_SPAN": 9,
+    "ATR_PERIOD": 24,
+    "BB_WINDOW_HOURS": 10,
+    "BB_PERCENTILE_THRESHOLD": 85.0,
+    "BASE_MOMENTUM_THRESHOLD": 0.012,
+    "TARGET_VOLATILITY": 0.015,
+    "VOL_LOOKBACK_HOURS": 48,
+    "DYNAMIC_THRESHOLD_VOL_WEIGHT": 0.5,
+    "DYNAMIC_THRESHOLD_FLOOR": 0.006,
+    "DYNAMIC_THRESHOLD_CEILING": 0.025,
+    "RSI_LONG_EXIT_THRESHOLD": 69.0,
+    "RSI_SHORT_EXIT_THRESHOLD": 31.0,
+}
+
+
+def validate_params(params: Mapping[str, object]) -> dict[str, object]:
+    return dict(params)
+
+
+@dataclass(frozen=True)
+class _Params:
+    symbols: tuple[str, ...]
+    symbol_weight_fractions: tuple[float, ...]
+    side_mode: str
+    excluded_decision_hours: tuple[int, ...]
+    min_votes: int
+    base_position_pct: float
+    cooldown_bars: int
+    decision_interval_minutes: int
+    decision_lag_minutes: int
+    max_hold_bars: int
+    use_full_indicator_history: bool
+    use_trailing_stop: bool
+    atr_stop_mult: float
+    rsi_period: int
+    bb_percentile_threshold: float
+    momentum_long_hours: int
+    momentum_short_hours: int
+    vshort_threshold_mult: float
+    vol_lookback_hours: int
+    base_momentum_threshold: float
+    target_volatility: float
+    dynamic_threshold_vol_weight: float
+    dynamic_threshold_floor: float
+    dynamic_threshold_ceiling: float
+    use_rsi_exhaustion_filter: bool
+    rsi_long_exit_threshold: float
+    rsi_short_exit_threshold: float
+    short_min_funding_bps: float | None
+    ema_fast_span: int
+    ema_slow_span: int
+    macd_fast_span: int
+    macd_slow_span: int
+    macd_signal_span: int
+    atr_period: int
+    bb_window_hours: int
+    bb_percentile_window_hours: int
+    bb_std_mult: float
+
+
+@dataclass(frozen=True)
+class _InputRow:
+    symbol: str
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    funding_rate: float | None
+
+
+@dataclass(frozen=True)
+class _HourlySnapshot:
+    symbol: str
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    funding_rate: float | None
+    observations: tuple[ObservationRef, ...]
+
+
+@dataclass(frozen=True)
+class _Indicators:
+    momentum_12h_bps: float
+    momentum_6h_bps: float
+    dynamic_threshold_bps: float
+    ema_fast: float
+    ema_slow: float
+    rsi: float
+    macd_histogram: float
+    bb_width_percentile: float
+    atr_bps: float
+    long_votes: int
+    short_votes: int
+    vote_details: dict[str, str]
+    dynamic_threshold: float
+    realized_vol: float
+    vol_ratio: float
+
+
+@dataclass(frozen=True)
+class _DynamicThreshold:
+    threshold: float
+    threshold_bps: float
+    realized_vol: float
+    vol_ratio: float
+
+
+def generate_decisions(
+    bars: Sequence[Mapping[str, object]],
+    params: Mapping[str, object],
+) -> list[StrategyDecision]:
     if not bars:
         return []
+
+    parsed_params = _parse_params(params)
     _require_fields(bars, _REQUIRED_FIELDS)
+    rows_by_symbol = _rows_by_symbol(bars, parsed_params.symbols)
+    required_history = _required_history_hours(parsed_params)
 
-    funding_lookback_events = _positive_int(params.get("funding_lookback_events", 3), "funding_lookback_events")
-    return_lookback_minutes = _positive_int(params.get("return_lookback_minutes", 240), "return_lookback_minutes")
-    decision_interval_minutes = _positive_int(params.get("decision_interval_minutes", 480), "decision_interval_minutes")
-    decision_lag_minutes = _non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes")
-    top_n = _positive_int(params.get("top_n", 1), "top_n")
-    min_cross_section = _positive_int(params.get("min_cross_section", 4), "min_cross_section")
-    min_abs_funding_bps = _non_negative_float(params.get("min_abs_funding_bps", 1.0), "min_abs_funding_bps")
-    min_abs_return_bps = _non_negative_float(params.get("min_abs_return_bps", 25.0), "min_abs_return_bps")
-    max_short_return_extension_bps = _non_negative_float(
-        params.get("max_short_return_extension_bps", 0.0),
-        "max_short_return_extension_bps",
-    )
-    include_positive_funding_shorts = _bool_param(
-        params.get("include_positive_funding_shorts", True),
-        "include_positive_funding_shorts",
-    )
-    include_negative_funding_longs = _bool_param(
-        params.get("include_negative_funding_longs", True),
-        "include_negative_funding_longs",
-    )
-    min_same_sign_funding_events = _non_negative_int(
-        params.get("min_same_sign_funding_events", 0),
-        "min_same_sign_funding_events",
-    )
-    min_latest_abs_funding_bps = _non_negative_float(
-        params.get("min_latest_abs_funding_bps", 0.0),
-        "min_latest_abs_funding_bps",
-    )
-    volatility_lookback_minutes = _non_negative_int(
-        params.get("volatility_lookback_minutes", 0),
-        "volatility_lookback_minutes",
-    )
-    min_abs_return_z = _non_negative_float(params.get("min_abs_return_z", 0.0), "min_abs_return_z")
-    recent_return_lookback_minutes = _non_negative_int(
-        params.get("recent_return_lookback_minutes", 0),
-        "recent_return_lookback_minutes",
-    )
-    max_recent_same_direction_return_bps = _non_negative_float(
-        params.get("max_recent_same_direction_return_bps", 0.0),
-        "max_recent_same_direction_return_bps",
-    )
-    min_idiosyncratic_return_bps = _non_negative_float(
-        params.get("min_idiosyncratic_return_bps", 0.0),
-        "min_idiosyncratic_return_bps",
-    )
-    min_short_idiosyncratic_return_bps = _non_negative_float(
-        params.get("min_short_idiosyncratic_return_bps", min_idiosyncratic_return_bps),
-        "min_short_idiosyncratic_return_bps",
-    )
-    min_long_idiosyncratic_return_bps = _non_negative_float(
-        params.get("min_long_idiosyncratic_return_bps", min_idiosyncratic_return_bps),
-        "min_long_idiosyncratic_return_bps",
-    )
-    symbol_cooldown_minutes = _non_negative_int(
-        params.get("symbol_cooldown_minutes", 0),
-        "symbol_cooldown_minutes",
-    )
-    min_tail_count = _positive_int(params.get("min_tail_count", 1), "min_tail_count")
-    balance_sides = _bool_param(params.get("balance_sides", False), "balance_sides")
-    selection_score = str(params.get("selection_score", "funding"))
-    if selection_score not in {"funding", "return", "product"}:
-        raise ValueError("selection_score must be one of: funding, return, product")
-    require_exit_horizon = _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
-    weight = float(params.get("weight", 1.0))
-    hold_bars = _positive_int(params.get("hold_bars", params.get("hold_minutes", 480)), "hold_bars")
-    short_hold_bars = _positive_int(params.get("short_hold_bars", hold_bars), "short_hold_bars")
-    long_hold_bars = _positive_int(params.get("long_hold_bars", hold_bars), "long_hold_bars")
-    high_extension_short_return_bps = _non_negative_float(
-        params.get("high_extension_short_return_bps", 0.0),
-        "high_extension_short_return_bps",
-    )
-    high_extension_short_hold_bars = _positive_int(
-        params.get("high_extension_short_hold_bars", short_hold_bars),
-        "high_extension_short_hold_bars",
-    )
-    state_mode = str(params.get("state_mode", "suppress_until_exit"))
-    if state_mode not in {"off", "suppress_until_exit"}:
-        raise ValueError("state_mode must be one of: off, suppress_until_exit")
-    overlap_exit_buffer_bars = _non_negative_int(
-        params.get("overlap_exit_buffer_bars", 2),
-        "overlap_exit_buffer_bars",
-    )
-    exit_controls = _exit_controls(params)
-    required_exit_horizon_bars = max(
-        short_hold_bars,
-        long_hold_bars,
-        high_extension_short_hold_bars if high_extension_short_return_bps > 0.0 else short_hold_bars,
-    )
-
-    rows_by_symbol = _rows_by_symbol(bars)
-    as_of_times = sorted(
-        {
-            timestamp
-            for rows in rows_by_symbol.values()
-            for timestamp in rows.timestamps
-            if _is_decision_time(timestamp, decision_interval_minutes, params)
-        }
-    )
-
-    signals: list[dict[str, object]] = []
-    last_signal_time_by_symbol: dict[str, datetime] = {}
-    active_until_by_symbol: dict[str, datetime] = {}
-    for as_of_time in as_of_times:
-        candidates = _decision_candidates(
-            rows_by_symbol,
-            as_of_time,
-            funding_lookback_events,
-            return_lookback_minutes,
-            volatility_lookback_minutes,
-            recent_return_lookback_minutes,
-        )
-        if len(candidates) < min_cross_section:
-            continue
-        market_return_bps = sum(candidate["return_extension_bps"] for candidate in candidates) / len(candidates)
-        decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
-        candidates = _filter_exit_horizon(
-            candidates,
-            rows_by_symbol,
-            decision_time,
-            required_exit_horizon_bars,
-            require_exit_horizon,
-        )
-
-        positive_tail = [
-            candidate
-            for candidate in candidates
-            if include_positive_funding_shorts
-            and candidate["funding_pressure_bps"] >= min_abs_funding_bps
-            and candidate["return_extension_bps"] >= min_abs_return_bps
-            and _passes_max_short_return_extension(candidate, max_short_return_extension_bps)
-            and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
-            and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
-            and _passes_return_z(candidate, min_abs_return_z)
-            and _passes_recent_cooloff(candidate, "short", max_recent_same_direction_return_bps)
-            and _passes_idiosyncratic_return(candidate, "short", market_return_bps, min_short_idiosyncratic_return_bps)
-        ]
-        negative_tail = [
-            candidate
-            for candidate in candidates
-            if candidate["funding_pressure_bps"] <= -min_abs_funding_bps
-            and candidate["return_extension_bps"] <= -min_abs_return_bps
-            and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
-            and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
-            and _passes_return_z(candidate, min_abs_return_z)
-            and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
-            and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_long_idiosyncratic_return_bps)
-        ]
-        if len(positive_tail) < min_tail_count:
-            positive_tail = []
-        if len(negative_tail) < min_tail_count:
-            negative_tail = []
-
-        selected_shorts = _selected_tail(positive_tail, "short", selection_score, top_n)
-        selected_longs = _selected_tail(negative_tail, "long", selection_score, top_n) if include_negative_funding_longs else []
-        if balance_sides:
-            balanced_count = min(len(selected_shorts), len(selected_longs))
-            selected_shorts = selected_shorts[:balanced_count]
-            selected_longs = selected_longs[:balanced_count]
-
-        for candidate in selected_shorts:
-            hold = _candidate_hold_bars(
-                candidate,
-                "short",
-                short_hold_bars,
-                long_hold_bars,
-                high_extension_short_return_bps,
-                high_extension_short_hold_bars,
-            )
-            if _passes_symbol_cooldown(
-                candidate["symbol"],
-                decision_time,
-                last_signal_time_by_symbol,
-                symbol_cooldown_minutes,
-            ) and _passes_state_gate(
-                candidate["symbol"],
-                decision_time,
-                active_until_by_symbol,
-                state_mode,
-            ):
-                signals.append(
-                    _signal(
-                        candidate,
-                        decision_time,
-                        as_of_time,
-                        "short",
-                        weight,
-                        hold,
-                        exit_controls,
-                        state_mode,
-                    )
-                )
-                last_signal_time_by_symbol[candidate["symbol"]] = decision_time
-                _record_active_window(
-                    candidate["symbol"],
-                    decision_time,
-                    hold,
-                    overlap_exit_buffer_bars,
-                    active_until_by_symbol,
-                    state_mode,
-                )
-        if include_negative_funding_longs:
-            for candidate in selected_longs:
-                hold = _candidate_hold_bars(
-                    candidate,
-                    "long",
-                    short_hold_bars,
-                    long_hold_bars,
-                    high_extension_short_return_bps,
-                    high_extension_short_hold_bars,
-                )
-                if _passes_symbol_cooldown(
-                    candidate["symbol"],
-                    decision_time,
-                    last_signal_time_by_symbol,
-                    symbol_cooldown_minutes,
-                ) and _passes_state_gate(
-                    candidate["symbol"],
-                    decision_time,
-                    active_until_by_symbol,
-                    state_mode,
-                ):
-                    signals.append(
-                        _signal(
-                            candidate,
-                            decision_time,
-                            as_of_time,
-                            "long",
-                            weight,
-                            hold,
-                            exit_controls,
-                            state_mode,
-                        )
-                    )
-                    last_signal_time_by_symbol[candidate["symbol"]] = decision_time
-                    _record_active_window(
-                        candidate["symbol"],
-                        decision_time,
-                        hold,
-                        overlap_exit_buffer_bars,
-                        active_until_by_symbol,
-                        state_mode,
-                    )
-
-    return signals
-
-
-def generate_decisions(bars: Sequence[Mapping[str, object]], params: Mapping[str, object]) -> list[StrategyDecision]:
     decisions: list[StrategyDecision] = []
-    for signal in generate_signals(bars, params):
-        side = str(signal["side"])
-        if side not in {"long", "short"}:
-            raise ValueError(f"unsupported decision side: {side}")
-        decisions.append(
-            StrategyDecision(
-                strategy_id=_STRATEGY_ID,
-                instrument=InstrumentRef(kind="crypto_perp", symbol=str(signal["symbol"])),
-                decision_time=_as_datetime(signal["decision_time"]),
-                as_of_time=_as_datetime(signal["as_of_time"]),
-                target=PositionTarget(
-                    direction=side,
-                    sizing_kind="target_weight",
-                    size=float(signal["weight"]),
-                ),
-                exit_policy=ExitPolicy(
-                    max_hold_bars=_positive_int(signal.get("max_hold_bars", signal["hold_bars"]), "max_hold_bars"),
-                    take_profit_bps=_optional_positive_float(signal.get("take_profit_bps"), "take_profit_bps"),
-                    stop_loss_bps=_optional_positive_float(signal.get("stop_loss_bps"), "stop_loss_bps"),
-                    trailing_stop_bps=_optional_positive_float(signal.get("trailing_stop_bps"), "trailing_stop_bps"),
-                ),
-                metadata={
-                    "funding_pressure_bps": signal.get("funding_pressure_bps"),
-                    "entry_return_extension_bps": signal.get("entry_return_extension_bps"),
-                    "signal_family": signal.get("signal_family"),
-                    "state_mode": signal.get("state_mode"),
-                },
-            )
+    for symbol_index, symbol in enumerate(parsed_params.symbols):
+        rows = rows_by_symbol.get(symbol, [])
+        if not rows:
+            continue
+        snapshots = _hourly_snapshots(rows, parsed_params.decision_interval_minutes)
+        if len(snapshots) < required_history:
+            continue
+        row_positions = {row.timestamp: position for position, row in enumerate(rows)}
+        bar_minutes = _median_bar_minutes(rows)
+        hold_signal_bars = max(
+            1,
+            math.ceil(parsed_params.max_hold_bars * bar_minutes / parsed_params.decision_interval_minutes),
         )
-    return decisions
+        next_allowed_index = 0
+
+        for index in range(required_history - 1, len(snapshots)):
+            if index < next_allowed_index:
+                continue
+            if snapshots[index].timestamp.hour in parsed_params.excluded_decision_hours:
+                continue
+            observation_history = snapshots[index - required_history + 1 : index + 1]
+            indicator_history = snapshots[: index + 1] if parsed_params.use_full_indicator_history else observation_history
+            indicators = _indicator_values(indicator_history, parsed_params)
+            if indicators is None:
+                continue
+
+            side = _entry_side(indicators, parsed_params)
+            if side is None:
+                continue
+            if not _side_allowed(side, parsed_params.side_mode):
+                continue
+            if not _passes_funding_gate(snapshots[index], side, parsed_params):
+                continue
+            if not _has_fillable_hold_window(
+                row_positions,
+                row_count=len(rows),
+                as_of_time=snapshots[index].timestamp,
+                decision_lag_minutes=parsed_params.decision_lag_minutes,
+                max_hold_bars=parsed_params.max_hold_bars,
+            ):
+                continue
+
+            effective_target_weight = (
+                parsed_params.base_position_pct * parsed_params.symbol_weight_fractions[symbol_index]
+            )
+            decision = _decision(
+                history=observation_history,
+                indicators=indicators,
+                side=side,
+                parsed_params=parsed_params,
+                effective_target_weight=effective_target_weight,
+            )
+            decisions.append(decision)
+            next_allowed_index = index + max(hold_signal_bars, parsed_params.cooldown_bars) + 1
+
+    return sorted(decisions, key=lambda decision: (decision.decision_time, decision.instrument.symbol))
+
+
+def _parse_params(params: Mapping[str, object]) -> _Params:
+    symbols = _symbols_param(params.get("symbols", _DEFAULT_SYMBOLS))
+    parsed = _Params(
+        symbols=symbols,
+        symbol_weight_fractions=_symbol_weight_fractions_param(
+            params.get("symbol_weight_fractions"),
+            len(symbols),
+        ),
+        side_mode=_side_mode_param(params.get("side_mode", "both")),
+        excluded_decision_hours=_hour_tuple_param(
+            params.get("excluded_decision_hours", ()),
+            "excluded_decision_hours",
+        ),
+        min_votes=_bounded_int(params.get("min_votes", 4), "min_votes", minimum=1, maximum=6),
+        base_position_pct=_positive_float(params.get("base_position_pct", 0.08), "base_position_pct"),
+        cooldown_bars=_non_negative_int(params.get("cooldown_bars", 2), "cooldown_bars"),
+        decision_interval_minutes=_positive_int(
+            params.get("decision_interval_minutes", 60),
+            "decision_interval_minutes",
+        ),
+        decision_lag_minutes=_non_negative_int(params.get("decision_lag_minutes", 1), "decision_lag_minutes"),
+        max_hold_bars=_positive_int(params.get("max_hold_bars", 720), "max_hold_bars"),
+        use_full_indicator_history=_bool_param(
+            params.get("use_full_indicator_history", False),
+            "use_full_indicator_history",
+        ),
+        use_trailing_stop=_bool_param(params.get("use_trailing_stop", True), "use_trailing_stop"),
+        atr_stop_mult=_positive_float(params.get("atr_stop_mult", 5.5), "atr_stop_mult"),
+        rsi_period=_positive_int(params.get("rsi_period", 8), "rsi_period"),
+        bb_percentile_threshold=_percentile_float(
+            params.get("bb_percentile_threshold", 85.0),
+            "bb_percentile_threshold",
+        ),
+        momentum_long_hours=_positive_int(params.get("momentum_long_hours", 12), "momentum_long_hours"),
+        momentum_short_hours=_positive_int(params.get("momentum_short_hours", 6), "momentum_short_hours"),
+        vshort_threshold_mult=_positive_float(params.get("vshort_threshold_mult", 0.5), "vshort_threshold_mult"),
+        vol_lookback_hours=_positive_int(
+            params.get("vol_lookback_hours", params.get("dynamic_threshold_window_hours", 48)),
+            "vol_lookback_hours",
+        ),
+        base_momentum_threshold=_positive_float(
+            params.get("base_momentum_threshold", 0.012),
+            "base_momentum_threshold",
+        ),
+        target_volatility=_positive_float(params.get("target_volatility", 0.015), "target_volatility"),
+        dynamic_threshold_vol_weight=_fraction_float(
+            params.get("dynamic_threshold_vol_weight", 0.5),
+            "dynamic_threshold_vol_weight",
+        ),
+        dynamic_threshold_floor=_positive_float(
+            params.get("dynamic_threshold_floor", 0.006),
+            "dynamic_threshold_floor",
+        ),
+        dynamic_threshold_ceiling=_positive_float(
+            params.get("dynamic_threshold_ceiling", 0.025),
+            "dynamic_threshold_ceiling",
+        ),
+        use_rsi_exhaustion_filter=_bool_param(
+            params.get("use_rsi_exhaustion_filter", False),
+            "use_rsi_exhaustion_filter",
+        ),
+        rsi_long_exit_threshold=_percentile_float(
+            params.get("rsi_long_exit_threshold", 69.0),
+            "rsi_long_exit_threshold",
+        ),
+        rsi_short_exit_threshold=_percentile_float(
+            params.get("rsi_short_exit_threshold", 31.0),
+            "rsi_short_exit_threshold",
+        ),
+        short_min_funding_bps=_optional_finite_float(
+            params.get("short_min_funding_bps"),
+            "short_min_funding_bps",
+        ),
+        ema_fast_span=_positive_int(params.get("ema_fast_span", 12), "ema_fast_span"),
+        ema_slow_span=_positive_int(params.get("ema_slow_span", 26), "ema_slow_span"),
+        macd_fast_span=_positive_int(params.get("macd_fast_span", 12), "macd_fast_span"),
+        macd_slow_span=_positive_int(params.get("macd_slow_span", 26), "macd_slow_span"),
+        macd_signal_span=_positive_int(params.get("macd_signal_span", 9), "macd_signal_span"),
+        atr_period=_positive_int(params.get("atr_period", 24), "atr_period"),
+        bb_window_hours=_positive_int(params.get("bb_window_hours", 10), "bb_window_hours"),
+        bb_percentile_window_hours=_positive_int(
+            params.get("bb_percentile_window_hours", 2 * int(params.get("bb_window_hours", 10))),
+            "bb_percentile_window_hours",
+        ),
+        bb_std_mult=_positive_float(params.get("bb_std_mult", 1.0), "bb_std_mult"),
+    )
+    if parsed.dynamic_threshold_floor > parsed.dynamic_threshold_ceiling:
+        raise ValueError("dynamic_threshold_floor must be less than or equal to dynamic_threshold_ceiling")
+    return parsed
 
 
 def _require_fields(bars: Sequence[Mapping[str, object]], required: set[str]) -> None:
@@ -369,6 +355,591 @@ def _require_fields(bars: Sequence[Mapping[str, object]], required: set[str]) ->
         missing = required.difference(row.keys())
         if missing:
             raise ValueError(f"bar {index} missing required fields: {sorted(missing)}")
+
+
+def _rows_by_symbol(
+    bars: Sequence[Mapping[str, object]],
+    symbols: tuple[str, ...],
+) -> dict[str, list[_InputRow]]:
+    allowed = set(symbols)
+    seen: set[tuple[str, datetime]] = set()
+    rows_by_symbol: dict[str, list[_InputRow]] = {symbol: [] for symbol in symbols}
+
+    for row in bars:
+        symbol = str(row["symbol"])
+        if symbol not in allowed:
+            continue
+        timestamp = _as_datetime(row["timestamp"])
+        key = (symbol, timestamp)
+        if key in seen:
+            raise ValueError(f"duplicate rows for {symbol} at {timestamp.isoformat()}")
+        seen.add(key)
+        rows_by_symbol[symbol].append(
+            _InputRow(
+                symbol=symbol,
+                timestamp=timestamp,
+                open=_positive_price(row["open"], "open"),
+                high=_positive_price(row["high"], "high"),
+                low=_positive_price(row["low"], "low"),
+                close=_positive_price(row["close"], "close"),
+                funding_rate=_optional_finite_float(row.get("funding_rate"), "funding_rate"),
+            )
+        )
+
+    for rows in rows_by_symbol.values():
+        rows.sort(key=lambda item: item.timestamp)
+    return rows_by_symbol
+
+
+def _hourly_snapshots(rows: list[_InputRow], interval_minutes: int) -> list[_HourlySnapshot]:
+    snapshots: list[_HourlySnapshot] = []
+    window: list[_InputRow] = []
+    interval = timedelta(minutes=interval_minutes)
+
+    for row in rows:
+        window.append(row)
+        cutoff = row.timestamp - interval
+        while window and window[0].timestamp <= cutoff:
+            window.pop(0)
+        if not _is_decision_time(row.timestamp, interval_minutes):
+            continue
+        if not window:
+            continue
+
+        open_row = window[0]
+        high_row = max(window, key=lambda item: item.high)
+        low_row = min(window, key=lambda item: item.low)
+        close_row = window[-1]
+        funding_row = next((item for item in reversed(window) if item.funding_rate is not None), None)
+        observations = (
+            ObservationRef(symbol=row.symbol, timestamp=open_row.timestamp, field="open", source="strategy_input"),
+            ObservationRef(symbol=row.symbol, timestamp=high_row.timestamp, field="high", source="strategy_input"),
+            ObservationRef(symbol=row.symbol, timestamp=low_row.timestamp, field="low", source="strategy_input"),
+            ObservationRef(symbol=row.symbol, timestamp=close_row.timestamp, field="close", source="strategy_input"),
+        )
+        if funding_row is not None:
+            observations = (
+                *observations,
+                ObservationRef(
+                    symbol=row.symbol,
+                    timestamp=funding_row.timestamp,
+                    field="funding_rate",
+                    source="strategy_input",
+                ),
+            )
+
+        snapshots.append(
+            _HourlySnapshot(
+                symbol=row.symbol,
+                timestamp=row.timestamp,
+                open=open_row.open,
+                high=high_row.high,
+                low=low_row.low,
+                close=close_row.close,
+                funding_rate=funding_row.funding_rate if funding_row is not None else None,
+                observations=observations,
+            )
+        )
+
+    return snapshots
+
+
+def _indicator_values(history: Sequence[_HourlySnapshot], params: _Params) -> _Indicators | None:
+    closes = [snapshot.close for snapshot in history]
+    highs = [snapshot.high for snapshot in history]
+    lows = [snapshot.low for snapshot in history]
+
+    momentum_long_bps = _momentum_bps(closes, params.momentum_long_hours)
+    momentum_short_bps = _momentum_bps(closes, params.momentum_short_hours)
+    dynamic_threshold = _dynamic_threshold(
+        closes,
+        vol_lookback_hours=params.vol_lookback_hours,
+        base_threshold=params.base_momentum_threshold,
+        target_volatility=params.target_volatility,
+        vol_weight=params.dynamic_threshold_vol_weight,
+        floor=params.dynamic_threshold_floor,
+        ceiling=params.dynamic_threshold_ceiling,
+    )
+    rsi = _rsi(closes, params.rsi_period)
+    macd_histogram = _macd_histogram(
+        closes,
+        fast_span=params.macd_fast_span,
+        slow_span=params.macd_slow_span,
+        signal_span=params.macd_signal_span,
+    )
+    bb_width_percentile = _bollinger_width_percentile(
+        closes,
+        window_hours=params.bb_window_hours,
+        percentile_window_hours=params.bb_percentile_window_hours,
+        std_mult=params.bb_std_mult,
+    )
+    atr_bps = _atr_bps(highs, lows, closes, params.atr_period)
+    if (
+        momentum_long_bps is None
+        or momentum_short_bps is None
+        or dynamic_threshold is None
+        or rsi is None
+        or macd_histogram is None
+        or bb_width_percentile is None
+        or atr_bps is None
+        or atr_bps <= 0.0
+    ):
+        return None
+
+    ema_fast = _ema(closes, params.ema_fast_span)
+    ema_slow = _ema(closes, params.ema_slow_span)
+    if ema_fast is None or ema_slow is None:
+        return None
+
+    long_votes = 0
+    short_votes = 0
+    vote_details: dict[str, str] = {}
+
+    if momentum_long_bps > dynamic_threshold.threshold_bps:
+        long_votes += 1
+        vote_details["momentum_12h"] = "long"
+    elif momentum_long_bps < -dynamic_threshold.threshold_bps:
+        short_votes += 1
+        vote_details["momentum_12h"] = "short"
+    else:
+        vote_details["momentum_12h"] = "neutral"
+
+    short_threshold = params.vshort_threshold_mult * dynamic_threshold.threshold_bps
+    if momentum_short_bps > short_threshold:
+        long_votes += 1
+        vote_details["momentum_6h"] = "long"
+    elif momentum_short_bps < -short_threshold:
+        short_votes += 1
+        vote_details["momentum_6h"] = "short"
+    else:
+        vote_details["momentum_6h"] = "neutral"
+
+    if ema_fast > ema_slow:
+        long_votes += 1
+        vote_details["ema"] = "long"
+    elif ema_fast < ema_slow:
+        short_votes += 1
+        vote_details["ema"] = "short"
+    else:
+        vote_details["ema"] = "neutral"
+
+    if rsi > 50.0:
+        long_votes += 1
+        vote_details["rsi"] = "long"
+    elif rsi < 50.0:
+        short_votes += 1
+        vote_details["rsi"] = "short"
+    else:
+        vote_details["rsi"] = "neutral"
+
+    if macd_histogram > 0.0:
+        long_votes += 1
+        vote_details["macd_histogram"] = "long"
+    elif macd_histogram < 0.0:
+        short_votes += 1
+        vote_details["macd_histogram"] = "short"
+    else:
+        vote_details["macd_histogram"] = "neutral"
+
+    if bb_width_percentile < params.bb_percentile_threshold:
+        long_votes += 1
+        short_votes += 1
+        vote_details["bb_width_percentile"] = "both"
+    else:
+        vote_details["bb_width_percentile"] = "neutral"
+
+    return _Indicators(
+        momentum_12h_bps=momentum_long_bps,
+        momentum_6h_bps=momentum_short_bps,
+        dynamic_threshold_bps=dynamic_threshold.threshold_bps,
+        ema_fast=ema_fast,
+        ema_slow=ema_slow,
+        rsi=rsi,
+        macd_histogram=macd_histogram,
+        bb_width_percentile=bb_width_percentile,
+        atr_bps=atr_bps,
+        long_votes=long_votes,
+        short_votes=short_votes,
+        vote_details=vote_details,
+        dynamic_threshold=dynamic_threshold.threshold,
+        realized_vol=dynamic_threshold.realized_vol,
+        vol_ratio=dynamic_threshold.vol_ratio,
+    )
+
+
+def _entry_side(indicators: _Indicators, params: _Params) -> str | None:
+    if indicators.long_votes >= params.min_votes and indicators.long_votes > indicators.short_votes:
+        if params.use_rsi_exhaustion_filter and indicators.rsi >= params.rsi_long_exit_threshold:
+            return None
+        return "long"
+    if indicators.short_votes >= params.min_votes and indicators.short_votes > indicators.long_votes:
+        if params.use_rsi_exhaustion_filter and indicators.rsi <= params.rsi_short_exit_threshold:
+            return None
+        return "short"
+    return None
+
+
+def _side_allowed(side: str, side_mode: str) -> bool:
+    return side_mode == "both" or side_mode == f"{side}_only"
+
+
+def _passes_funding_gate(snapshot: _HourlySnapshot, side: str, parsed_params: _Params) -> bool:
+    if side != "short" or parsed_params.short_min_funding_bps is None:
+        return True
+    if snapshot.funding_rate is None:
+        return False
+    return snapshot.funding_rate * 10_000.0 >= parsed_params.short_min_funding_bps
+
+
+def _decision(
+    history: Sequence[_HourlySnapshot],
+    indicators: _Indicators,
+    side: str,
+    parsed_params: _Params,
+    effective_target_weight: float,
+) -> StrategyDecision:
+    snapshot = history[-1]
+    decision_time = snapshot.timestamp + timedelta(minutes=parsed_params.decision_lag_minutes)
+    trailing_stop_bps = indicators.atr_bps * parsed_params.atr_stop_mult if parsed_params.use_trailing_stop else None
+    metadata: dict[str, Any] = {
+        "signal_family": _SIGNAL_FAMILY,
+        "symbol_weight_fractions": parsed_params.symbol_weight_fractions,
+        "side_mode": parsed_params.side_mode,
+        "excluded_decision_hours": parsed_params.excluded_decision_hours,
+        "use_full_indicator_history": parsed_params.use_full_indicator_history,
+        "use_trailing_stop": parsed_params.use_trailing_stop,
+        "long_votes": indicators.long_votes,
+        "short_votes": indicators.short_votes,
+        "vote_details": indicators.vote_details,
+        "min_votes": parsed_params.min_votes,
+        "momentum_12h_bps": indicators.momentum_12h_bps,
+        "momentum_6h_bps": indicators.momentum_6h_bps,
+        "vshort_threshold_mult": parsed_params.vshort_threshold_mult,
+        "dynamic_threshold": indicators.dynamic_threshold,
+        "dynamic_threshold_bps": indicators.dynamic_threshold_bps,
+        "realized_vol": indicators.realized_vol,
+        "vol_ratio": indicators.vol_ratio,
+        "dynamic_threshold_vol_weight": parsed_params.dynamic_threshold_vol_weight,
+        "use_rsi_exhaustion_filter": parsed_params.use_rsi_exhaustion_filter,
+        "rsi_long_exit_threshold": parsed_params.rsi_long_exit_threshold,
+        "rsi_short_exit_threshold": parsed_params.rsi_short_exit_threshold,
+        "short_min_funding_bps": parsed_params.short_min_funding_bps,
+        "ema_fast": indicators.ema_fast,
+        "ema_slow": indicators.ema_slow,
+        "rsi": indicators.rsi,
+        "macd_histogram": indicators.macd_histogram,
+        "bb_width_percentile": indicators.bb_width_percentile,
+        "atr_bps": indicators.atr_bps,
+        "trailing_stop_bps": trailing_stop_bps,
+        "upstream_reference": "Nunchi STRATEGIES.md exp102-inspired",
+        "portfolio_budget_pct": parsed_params.base_position_pct,
+        "symbol_weight_fraction": 1.0 / len(parsed_params.symbols),
+        "effective_target_weight": effective_target_weight,
+        "stateful_rsi_exit_supported": False,
+        "signal_flip_supported": False,
+        "same_symbol_overlap_policy": "suppress_until_assumed_hold_window_end",
+        "upstream_defaults": _UPSTREAM_DEFAULTS,
+    }
+    if snapshot.funding_rate is not None:
+        metadata["latest_funding_rate"] = snapshot.funding_rate
+
+    return StrategyDecision(
+        strategy_id=_DEFAULT_STRATEGY_ID,
+        instrument=InstrumentRef(kind="crypto_perp", symbol=snapshot.symbol),
+        decision_time=decision_time,
+        as_of_time=snapshot.timestamp,
+        target=PositionTarget(
+            direction=side,
+            sizing_kind="target_weight",
+            size=effective_target_weight,
+        ),
+        exit_policy=ExitPolicy(
+            max_hold_bars=parsed_params.max_hold_bars,
+            trailing_stop_bps=trailing_stop_bps,
+        ),
+        observations=_dedupe_observations(history),
+        metadata=metadata,
+    )
+
+
+def _dedupe_observations(snapshots: Sequence[_HourlySnapshot]) -> tuple[ObservationRef, ...]:
+    observations: list[ObservationRef] = []
+    seen: set[tuple[str, datetime, str | None, str | None]] = set()
+    for snapshot in snapshots:
+        for observation in snapshot.observations:
+            key = (observation.symbol, observation.timestamp, observation.field, observation.source)
+            if key not in seen:
+                observations.append(observation)
+                seen.add(key)
+    return tuple(observations)
+
+
+def _required_history_hours(params: _Params) -> int:
+    return max(
+        params.momentum_long_hours + 1,
+        params.momentum_short_hours + 1,
+        params.vol_lookback_hours + 1,
+        params.ema_slow_span,
+        params.macd_slow_span + params.macd_signal_span,
+        params.rsi_period + 1,
+        params.atr_period + 1,
+        params.bb_window_hours + params.bb_percentile_window_hours - 1,
+    )
+
+
+def _has_fillable_hold_window(
+    row_positions: Mapping[datetime, int],
+    *,
+    row_count: int,
+    as_of_time: datetime,
+    decision_lag_minutes: int,
+    max_hold_bars: int,
+) -> bool:
+    decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
+    position = row_positions.get(decision_time)
+    if position is None:
+        return False
+    return position + max_hold_bars + 1 < row_count
+
+
+def _momentum_bps(closes: Sequence[float], lookback_hours: int) -> float | None:
+    if len(closes) <= lookback_hours:
+        return None
+    base = closes[-lookback_hours - 1]
+    if base <= 0.0:
+        return None
+    return (closes[-1] / base - 1.0) * 10_000.0
+
+
+def _ema(values: Sequence[float], span: int) -> float | None:
+    series = _ema_series(values, span)
+    return series[-1] if series else None
+
+
+def _ema_series(values: Sequence[float], span: int) -> list[float]:
+    if not values:
+        return []
+    alpha = 2.0 / (span + 1.0)
+    ema = float(values[0])
+    output = [ema]
+    for value in values[1:]:
+        ema = alpha * float(value) + (1.0 - alpha) * ema
+        output.append(ema)
+    return output
+
+
+def _rsi(closes: Sequence[float], period: int) -> float | None:
+    if len(closes) <= period:
+        return None
+    recent = closes[-(period + 1) :]
+    diffs = [recent[index] - recent[index - 1] for index in range(1, len(recent))]
+    gains = [max(diff, 0.0) for diff in diffs]
+    losses = [max(-diff, 0.0) for diff in diffs]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    if avg_gain == 0.0 and avg_loss == 0.0:
+        return 50.0
+    if avg_loss == 0.0:
+        return 100.0
+    if avg_gain == 0.0:
+        return 0.0
+    relative_strength = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + relative_strength)
+
+
+def _macd_histogram(
+    closes: Sequence[float],
+    *,
+    fast_span: int,
+    slow_span: int,
+    signal_span: int,
+) -> float | None:
+    if len(closes) < slow_span + signal_span:
+        return None
+    fast = _ema_series(closes, fast_span)
+    slow = _ema_series(closes, slow_span)
+    macd = [fast_value - slow_value for fast_value, slow_value in zip(fast, slow)]
+    signal = _ema_series(macd, signal_span)
+    return macd[-1] - signal[-1]
+
+
+def _atr_bps(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int,
+) -> float | None:
+    if len(closes) <= period or len(highs) != len(closes) or len(lows) != len(closes):
+        return None
+    true_ranges = []
+    for index in range(1, len(closes)):
+        high = highs[index]
+        low = lows[index]
+        previous_close = closes[index - 1]
+        true_ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+    atr = sum(true_ranges[-period:]) / period
+    return atr / closes[-1] * 10_000.0
+
+
+def _bollinger_width_percentile(
+    closes: Sequence[float],
+    *,
+    window_hours: int,
+    percentile_window_hours: int,
+    std_mult: float,
+) -> float | None:
+    if len(closes) < window_hours + percentile_window_hours - 1:
+        return None
+
+    widths = []
+    for end in range(window_hours, len(closes) + 1):
+        window = closes[end - window_hours : end]
+        mean = sum(window) / window_hours
+        if mean <= 0.0:
+            return None
+        variance = sum((value - mean) ** 2 for value in window) / window_hours
+        width = (2.0 * std_mult * math.sqrt(variance)) / mean
+        widths.append(width)
+
+    recent = widths[-percentile_window_hours:]
+    current = recent[-1]
+    return 100.0 * sum(1 for width in recent if width <= current) / len(recent)
+
+
+def _dynamic_threshold(
+    closes: Sequence[float],
+    *,
+    vol_lookback_hours: int,
+    base_threshold: float,
+    target_volatility: float,
+    vol_weight: float,
+    floor: float,
+    ceiling: float,
+) -> _DynamicThreshold | None:
+    if len(closes) <= vol_lookback_hours:
+        return None
+    returns = [math.log(closes[index] / closes[index - 1]) for index in range(len(closes) - vol_lookback_hours, len(closes))]
+    mean = sum(returns) / len(returns)
+    variance = sum((value - mean) ** 2 for value in returns) / len(returns)
+    realized_vol = math.sqrt(variance)
+    vol_ratio = realized_vol / target_volatility
+    threshold = base_threshold * ((1.0 - vol_weight) + vol_ratio * vol_weight)
+    threshold = min(max(threshold, floor), ceiling)
+    return _DynamicThreshold(
+        threshold=threshold,
+        threshold_bps=threshold * 10_000.0,
+        realized_vol=realized_vol,
+        vol_ratio=vol_ratio,
+    )
+
+
+def _dynamic_threshold_bps(
+    closes: Sequence[float],
+    *,
+    vol_lookback_hours: int,
+    base_threshold: float,
+    target_volatility: float,
+    vol_weight: float = 0.5,
+    floor: float,
+    ceiling: float,
+) -> float | None:
+    threshold = _dynamic_threshold(
+        closes,
+        vol_lookback_hours=vol_lookback_hours,
+        base_threshold=base_threshold,
+        target_volatility=target_volatility,
+        vol_weight=vol_weight,
+        floor=floor,
+        ceiling=ceiling,
+    )
+    return threshold.threshold_bps if threshold is not None else None
+
+
+def _median_bar_minutes(rows: Sequence[_InputRow]) -> float:
+    if len(rows) < 2:
+        return 1.0
+    gaps = [
+        (rows[index].timestamp - rows[index - 1].timestamp).total_seconds() / 60.0
+        for index in range(1, len(rows))
+        if rows[index].timestamp > rows[index - 1].timestamp
+    ]
+    if not gaps:
+        return 1.0
+    ordered = sorted(gaps)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _is_decision_time(timestamp: datetime, decision_interval_minutes: int) -> bool:
+    if timestamp.second or timestamp.microsecond:
+        return False
+    minute_of_day = timestamp.hour * 60 + timestamp.minute
+    return minute_of_day % decision_interval_minutes == 0
+
+
+def _symbols_param(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        raw_symbols = tuple(part.strip() for part in value.split(","))
+    elif isinstance(value, Sequence):
+        raw_symbols = tuple(str(part).strip() for part in value)
+    else:
+        raise ValueError("symbols must be a string or sequence")
+    symbols = tuple(symbol for symbol in raw_symbols if symbol)
+    if not symbols:
+        raise ValueError("symbols must contain at least one symbol")
+    return symbols
+
+
+def _symbol_weight_fractions_param(value: object, symbol_count: int) -> tuple[float, ...]:
+    if value is None:
+        return tuple(1.0 / symbol_count for _ in range(symbol_count))
+    if isinstance(value, str):
+        raw_values: Sequence[object] = tuple(part.strip() for part in value.split(",") if part.strip())
+    elif isinstance(value, Sequence):
+        raw_values = value
+    else:
+        raise ValueError("symbol_weight_fractions must be a sequence")
+    if len(raw_values) != symbol_count:
+        raise ValueError("symbol_weight_fractions must match symbols length")
+    weights = tuple(_non_negative_float(item, "symbol_weight_fractions") for item in raw_values)
+    total = sum(weights)
+    if total <= 0.0:
+        raise ValueError("symbol_weight_fractions must contain positive total weight")
+    return tuple(weight / total for weight in weights)
+
+
+def _side_mode_param(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"both", "long_only", "short_only"}:
+        raise ValueError("side_mode must be one of: both, long_only, short_only")
+    return parsed
+
+
+def _hour_tuple_param(value: object, name: str) -> tuple[int, ...]:
+    if isinstance(value, str):
+        raw_values: Sequence[object] = tuple(part.strip() for part in value.split(",") if part.strip())
+    elif isinstance(value, Sequence):
+        raw_values = value
+    else:
+        raise ValueError(f"{name} must be a sequence of hours")
+    hours = tuple(sorted({_bounded_int(item, name, minimum=0, maximum=23) for item in raw_values}))
+    return hours
+
+
+def _bool_param(value: object, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _bounded_int(value: object, name: str, *, minimum: int, maximum: int) -> int:
+    parsed = int(value)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return parsed
 
 
 def _positive_int(value: object, name: str) -> int:
@@ -385,6 +956,13 @@ def _non_negative_int(value: object, name: str) -> int:
     return parsed
 
 
+def _positive_float(value: object, name: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return parsed
+
+
 def _non_negative_float(value: object, name: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0.0:
@@ -392,431 +970,37 @@ def _non_negative_float(value: object, name: str) -> float:
     return parsed
 
 
-def _optional_positive_float(value: object, name: str) -> float | None:
-    if value is None:
-        return None
+def _percentile_float(value: object, name: str) -> float:
     parsed = float(value)
-    if not math.isfinite(parsed) or parsed <= 0.0:
-        raise ValueError(f"{name} must be finite and positive")
+    if not math.isfinite(parsed) or parsed < 0.0 or parsed > 100.0:
+        raise ValueError(f"{name} must be between 0 and 100")
     return parsed
 
 
-def _exit_controls(params: Mapping[str, object]) -> dict[str, object]:
-    controls: dict[str, object] = {}
-    for name in ("take_profit_bps", "stop_loss_bps", "trailing_stop_bps"):
-        value = _optional_positive_float(params.get(name), name)
-        if value is not None:
-            controls[name] = value
-    return controls
+def _fraction_float(value: object, name: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0 or parsed > 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return parsed
 
 
-def _bool_param(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be boolean")
-    return value
+def _positive_price(value: object, name: str) -> float:
+    parsed = _positive_float(value, name)
+    return parsed
 
 
-def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
-    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
-    for row in bars:
-        symbol = str(row["symbol"])
-        rows_by_symbol.setdefault(symbol, []).append(
-            {
-                "symbol": symbol,
-                "timestamp": _as_datetime(row["timestamp"]),
-                "close": _finite_float(row["close"]),
-                "funding_timestamp": _optional_datetime(row["funding_timestamp"]),
-                "funding_rate": _finite_float(row["funding_rate"]),
-                "has_funding_event": bool(row["has_funding_event"]),
-            }
-        )
-
-    indexed: dict[str, _SymbolRows] = {}
-    for symbol, rows in rows_by_symbol.items():
-        rows.sort(key=lambda item: item["timestamp"])
-        timestamps: list[datetime] = []
-        closes_by_timestamp: dict[datetime, float] = {}
-        conflicting_close_timestamps: set[datetime] = set()
-        funding_event_rows: list[tuple[datetime, datetime, float]] = []
-
-        for row in rows:
-            timestamp = row["timestamp"]
-            timestamps.append(timestamp)
-
-            close = row["close"]
-            if close is not None:
-                if timestamp in closes_by_timestamp:
-                    existing_close = closes_by_timestamp[timestamp]
-                    if not math.isclose(existing_close, float(close), rel_tol=0.0, abs_tol=1e-12):
-                        conflicting_close_timestamps.add(timestamp)
-                else:
-                    closes_by_timestamp[timestamp] = float(close)
-
-            funding_time = row["funding_timestamp"]
-            funding_rate = row["funding_rate"]
-            if row["has_funding_event"] and funding_time is not None and funding_rate is not None:
-                funding_event_rows.append((timestamp, funding_time, funding_rate))
-
-        indexed[symbol] = _SymbolRows(
-            timestamps=tuple(timestamps),
-            closes_by_timestamp=closes_by_timestamp,
-            conflicting_close_timestamps=frozenset(conflicting_close_timestamps),
-            funding_event_rows=tuple(funding_event_rows),
-            latest_timestamp=timestamps[-1],
-        )
-    return indexed
-
-
-def _filter_exit_horizon(
-    candidates: list[dict[str, Any]],
-    rows_by_symbol: dict[str, _SymbolRows],
-    decision_time: datetime,
-    hold_bars: int,
-    require_exit_horizon: bool,
-) -> list[dict[str, Any]]:
-    if not require_exit_horizon:
-        return candidates
-    return [
-        candidate
-        for candidate in candidates
-        if _has_exit_horizon(rows_by_symbol[candidate["symbol"]], decision_time, hold_bars)
-    ]
-
-
-def _has_exit_horizon(rows: _SymbolRows, decision_time: datetime, hold_bars: int) -> bool:
-    try:
-        decision_index = rows.timestamps.index(decision_time)
-    except ValueError:
-        return False
-    return decision_index + hold_bars < len(rows.timestamps)
-
-
-def _decision_candidates(
-    rows_by_symbol: dict[str, _SymbolRows],
-    decision_time: datetime,
-    funding_lookback_events: int,
-    return_lookback_minutes: int,
-    volatility_lookback_minutes: int,
-    recent_return_lookback_minutes: int,
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    observed_time = decision_time - timedelta(minutes=1)
-    base_time = decision_time - timedelta(minutes=return_lookback_minutes)
-
-    for symbol, rows in rows_by_symbol.items():
-        observed_close = _exact_close_at(rows, observed_time)
-        base_close = _exact_close_at(rows, base_time)
-        funding_stats = _funding_pressure_stats(rows, decision_time, funding_lookback_events)
-        if (
-            observed_close is None
-            or base_close is None
-            or observed_close <= 0.0
-            or base_close <= 0.0
-            or funding_stats is None
-        ):
-            continue
-        return_extension_bps = (observed_close / base_close - 1.0) * 10_000.0
-        candidates.append(
-            {
-                "symbol": symbol,
-                "funding_pressure_bps": funding_stats["funding_pressure_bps"],
-                "funding_same_sign_events": funding_stats["funding_same_sign_events"],
-                "latest_funding_bps": funding_stats["latest_funding_bps"],
-                "return_extension_bps": return_extension_bps,
-                "return_z": _realized_return_z(
-                    rows,
-                    observed_time,
-                    return_lookback_minutes,
-                    volatility_lookback_minutes,
-                    return_extension_bps,
-                ),
-                "recent_return_bps": _recent_return_bps(rows, observed_time, recent_return_lookback_minutes),
-            }
-        )
-    return candidates
-
-
-def _exact_close_at(rows: _SymbolRows, timestamp: datetime) -> float | None:
-    if timestamp in rows.conflicting_close_timestamps:
-        raise ValueError(f"conflicting duplicate close rows at {timestamp.isoformat()}")
-    return rows.closes_by_timestamp.get(timestamp)
-
-
-def _funding_pressure_stats(
-    rows: _SymbolRows,
-    decision_time: datetime,
-    funding_lookback_events: int,
-) -> dict[str, float | int] | None:
-    funding_events: dict[datetime, tuple[datetime, float]] = {}
-    for row_timestamp, funding_time, funding_rate in rows.funding_event_rows:
-        if row_timestamp > decision_time:
-            break
-        if funding_time > decision_time:
-            continue
-
-        existing = funding_events.get(funding_time)
-        if existing is not None:
-            _, existing_rate = existing
-            if not math.isclose(existing_rate, funding_rate, rel_tol=0.0, abs_tol=1e-15):
-                raise ValueError(f"conflicting duplicate funding rates at {funding_time.isoformat()}")
-        funding_events[funding_time] = (row_timestamp, funding_rate)
-
-    if len(funding_events) < funding_lookback_events:
+def _optional_finite_float(value: object, name: str) -> float | None:
+    if value is None:
         return None
-    recent = sorted(funding_events.items(), key=lambda item: (item[0], item[1][0]))[-funding_lookback_events:]
-    recent_rates = [rate for _, (_, rate) in recent]
-    funding_pressure_bps = sum(recent_rates) * 10_000.0
-    pressure_sign = _sign(funding_pressure_bps)
-    return {
-        "funding_pressure_bps": funding_pressure_bps,
-        "funding_same_sign_events": sum(1 for rate in recent_rates if _sign(rate) == pressure_sign),
-        "latest_funding_bps": recent_rates[-1] * 10_000.0,
-    }
-
-
-def _recent_return_bps(rows: _SymbolRows, observed_time: datetime, lookback_minutes: int) -> float | None:
-    if lookback_minutes <= 0:
-        return None
-    observed_close = _exact_close_at(rows, observed_time)
-    base_close = _exact_close_at(rows, observed_time - timedelta(minutes=lookback_minutes))
-    if observed_close is None or base_close is None or observed_close <= 0.0 or base_close <= 0.0:
-        return None
-    return (observed_close / base_close - 1.0) * 10_000.0
-
-
-def _realized_return_z(
-    rows: _SymbolRows,
-    observed_time: datetime,
-    return_lookback_minutes: int,
-    volatility_lookback_minutes: int,
-    return_extension_bps: float,
-) -> float | None:
-    if volatility_lookback_minutes <= 0:
-        return None
-
-    returns: list[float] = []
-    start_time = observed_time - timedelta(minutes=volatility_lookback_minutes)
-    previous_close = _exact_close_at(rows, start_time)
-    if previous_close is None or previous_close <= 0.0:
-        return None
-    for offset in range(1, volatility_lookback_minutes + 1):
-        timestamp = start_time + timedelta(minutes=offset)
-        close = _exact_close_at(rows, timestamp)
-        if close is None or close <= 0.0:
-            return None
-        returns.append(math.log(close / previous_close))
-        previous_close = close
-
-    if len(returns) < 2:
-        return None
-    mean_return = sum(returns) / len(returns)
-    variance = sum((value - mean_return) ** 2 for value in returns) / len(returns)
-    horizon_vol_bps = math.sqrt(variance) * math.sqrt(return_lookback_minutes) * 10_000.0
-    if horizon_vol_bps <= 0.0:
-        return None
-    return return_extension_bps / horizon_vol_bps
-
-
-def _passes_return_z(candidate: Mapping[str, Any], min_abs_return_z: float) -> bool:
-    if min_abs_return_z <= 0.0:
-        return True
-    value = candidate.get("return_z")
-    return isinstance(value, float) and abs(value) >= min_abs_return_z
-
-
-def _passes_recent_cooloff(
-    candidate: Mapping[str, Any],
-    side: str,
-    max_recent_same_direction_return_bps: float,
-) -> bool:
-    if max_recent_same_direction_return_bps <= 0.0:
-        return True
-    value = candidate.get("recent_return_bps")
-    if not isinstance(value, float):
-        return False
-    if side == "short":
-        return value <= max_recent_same_direction_return_bps
-    return value >= -max_recent_same_direction_return_bps
-
-
-def _passes_idiosyncratic_return(
-    candidate: Mapping[str, Any],
-    side: str,
-    market_return_bps: float,
-    min_idiosyncratic_return_bps: float,
-) -> bool:
-    if min_idiosyncratic_return_bps <= 0.0:
-        return True
-    idiosyncratic_return_bps = float(candidate["return_extension_bps"]) - market_return_bps
-    if side == "short":
-        return idiosyncratic_return_bps >= min_idiosyncratic_return_bps
-    return idiosyncratic_return_bps <= -min_idiosyncratic_return_bps
-
-
-def _passes_max_short_return_extension(
-    candidate: Mapping[str, Any],
-    max_short_return_extension_bps: float,
-) -> bool:
-    if max_short_return_extension_bps <= 0.0:
-        return True
-    return float(candidate["return_extension_bps"]) <= max_short_return_extension_bps
-
-
-def _candidate_hold_bars(
-    candidate: Mapping[str, Any],
-    side: str,
-    short_hold_bars: int,
-    long_hold_bars: int,
-    high_extension_short_return_bps: float,
-    high_extension_short_hold_bars: int,
-) -> int:
-    if side == "long":
-        return long_hold_bars
-    if (
-        high_extension_short_return_bps > 0.0
-        and float(candidate["return_extension_bps"]) >= high_extension_short_return_bps
-    ):
-        return high_extension_short_hold_bars
-    return short_hold_bars
-
-
-def _selected_tail(
-    candidates: list[dict[str, Any]],
-    side: str,
-    selection_score: str,
-    top_n: int,
-) -> list[dict[str, Any]]:
-    if selection_score == "product":
-        return sorted(
-            candidates,
-            key=lambda item: (
-                -abs(item["funding_pressure_bps"] * item["return_extension_bps"]),
-                -abs(item["funding_pressure_bps"]),
-                -abs(item["return_extension_bps"]),
-                item["symbol"],
-            ),
-        )[:top_n]
-    if selection_score == "return":
-        return sorted(
-            candidates,
-            key=lambda item: (
-                -abs(item["return_extension_bps"]),
-                -abs(item["funding_pressure_bps"]),
-                item["symbol"],
-            ),
-        )[:top_n]
-    if side == "short":
-        return sorted(
-            candidates,
-            key=lambda item: (-item["funding_pressure_bps"], -item["return_extension_bps"], item["symbol"]),
-        )[:top_n]
-    return sorted(
-        candidates,
-        key=lambda item: (item["funding_pressure_bps"], item["return_extension_bps"], item["symbol"]),
-    )[:top_n]
-
-
-def _passes_symbol_cooldown(
-    symbol: str,
-    decision_time: datetime,
-    last_signal_time_by_symbol: Mapping[str, datetime],
-    symbol_cooldown_minutes: int,
-) -> bool:
-    if symbol_cooldown_minutes <= 0:
-        return True
-    last_signal_time = last_signal_time_by_symbol.get(symbol)
-    if last_signal_time is None:
-        return True
-    return decision_time - last_signal_time >= timedelta(minutes=symbol_cooldown_minutes)
-
-
-def _passes_state_gate(
-    symbol: str,
-    decision_time: datetime,
-    active_until_by_symbol: Mapping[str, datetime],
-    state_mode: str,
-) -> bool:
-    if state_mode == "off":
-        return True
-    active_until = active_until_by_symbol.get(symbol)
-    return active_until is None or decision_time > active_until
-
-
-def _record_active_window(
-    symbol: str,
-    decision_time: datetime,
-    hold_bars: int,
-    overlap_exit_buffer_bars: int,
-    active_until_by_symbol: dict[str, datetime],
-    state_mode: str,
-) -> None:
-    if state_mode == "off":
-        return
-    active_until_by_symbol[symbol] = decision_time + timedelta(minutes=hold_bars + overlap_exit_buffer_bars)
-
-
-def _sign(value: float) -> int:
-    if value > 0.0:
-        return 1
-    if value < 0.0:
-        return -1
-    return 0
-
-
-def _is_decision_time(timestamp: datetime, decision_interval_minutes: int, params: Mapping[str, object]) -> bool:
-    session_start_hour = int(params.get("session_start_hour", 0))
-    session_end_hour = int(params.get("session_end_hour", 24))
-    if timestamp.second or timestamp.microsecond:
-        return False
-    if not session_start_hour <= timestamp.hour < session_end_hour:
-        return False
-    minute_of_day = timestamp.hour * 60 + timestamp.minute
-    return minute_of_day % decision_interval_minutes == 0
-
-
-def _signal(
-    candidate: Mapping[str, Any],
-    decision_time: datetime,
-    as_of_time: datetime,
-    side: str,
-    weight: float,
-    hold_bars: int,
-    exit_controls: Mapping[str, object],
-    state_mode: str,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "symbol": candidate["symbol"],
-        "decision_time": decision_time,
-        "as_of_time": as_of_time,
-        "side": side,
-        "weight": weight,
-        "hold_bars": hold_bars,
-        "max_hold_bars": hold_bars,
-        "funding_pressure_bps": candidate["funding_pressure_bps"],
-        "entry_return_extension_bps": candidate["return_extension_bps"],
-        "signal_family": _STRATEGY_ID,
-        "state_mode": state_mode,
-    }
-    payload.update(exit_controls)
-    return payload
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be finite when present")
+    return parsed
 
 
 def _as_datetime(value: object) -> datetime:
     if not isinstance(value, datetime):
         raise TypeError(f"expected datetime timestamp, got {type(value).__name__}")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
     return value
-
-
-def _optional_datetime(value: object) -> datetime | None:
-    if value is None:
-        return None
-    return _as_datetime(value)
-
-
-def _finite_float(value: object) -> float | None:
-    if value is None:
-        return None
-    parsed = float(value)
-    if not math.isfinite(parsed):
-        return None
-    return parsed

@@ -9,8 +9,9 @@ To set up a new strategy candidate, work with the user to:
 1. **Understand the candidate**: read `strategy.py` and identify the strategy
    hypothesis before changing anything. Fine-tune and improve the strategy, but
    do not drift away from the overarching strategy hypothesis. Keep the file
-   shaped like a normal `quant_strategies` strategy module. Review the strategy
-   to ensure it is implemented correctly.
+   shaped like a current `quant_strategies` decision strategy: expose
+   `generate_decisions(rows, params)` and, when useful, `validate_params(params)`.
+   Review the strategy to ensure it is implemented correctly.
 2. **Use the current worktree**: this workbench is intentionally run on the
    current branch unless the human explicitly asks for a new branch.
 3. **Read the in-scope files**: The repo is small. Read these files for full
@@ -87,7 +88,7 @@ Read-only during a research loop:
 - Set `decision_lag_minutes` to zero; decisions must be emitted after the
   as-of bar can be observed.
 
-**The goal is simple: find promoted candidates for comprehensive validation.** The runner
+**The goal is simple: find promoted candidates for the next review step.** The runner
 keeps raw `net_return` as evidence, but the guarded score is normalized by
 window days when window metadata is available. It is valid only when the trade
 count passes the configured sample gate. Higher is better, but only promoted
@@ -96,10 +97,10 @@ Set the sample gate high enough for the configured 120-180 day windows; a gate
 that was acceptable for a short debugging run is not acceptable research
 evidence.
 
-Think like a quant researcher. The score is loop feedback only, not market
-evidence. Loop feedback only. Do not blindly chase the last number. Use the
-score to compare attempts, then use causal timing, trade count, costs, data
-quality, fill assumptions, and overfit risk to decide what to try next.
+Think like a quant researcher. Loop feedback only: the score is loop feedback only. Do not blindly
+chase the last number. Use the score to compare attempts, then use causal
+timing, trade count, costs, data quality, fill assumptions, and overfit risk to
+decide what to try next.
 
 Do not default to a parameter sweep. The next iteration should usually improve
 the strategy hypothesis, signal construction, risk filter, timing logic,
@@ -116,14 +117,17 @@ improvement magnitude.
 **The first run**: Your very first run should always establish the baseline, so
 run the current `strategy.py` and `experiment.toml` as is.
 
-## Candidate confirmation
+## Candidate confirmation and promotion
 
-A one-window result is exploration evidence only. `runner.py --confirm` remains
-available as a manual recent-window bundle diagnostic. The default fast loop
+Candidate confirmation is still supported for deliberate bundle checks:
+`runner.py --confirm` remains available when you need a manual recent-window
+bundle diagnostic before promotion.
+
+A one-window result is exploration evidence only. The default fast loop
 escalates serious candidates with `runner.py --promote`.
 
-Recent windows dominate the score for confirmation and promotion. Older windows
-are diagnostic or stress evidence unless `experiment.toml` says otherwise.
+Recent windows dominate the score. Older windows are diagnostic or
+stress evidence unless `experiment.toml` says otherwise.
 
 Do not prune symbols or windows because of one isolated result. If a candidate
 improves one window but weakens the recent bundle, discard it.
@@ -158,8 +162,8 @@ conda run -n quant python runner.py --promote --description "promote candidate: 
 ```
 
 Promotion screening remains a compact robustness filter, not final validation.
-A promoted candidate is ready for comprehensive validation; it is not validated
-market evidence.
+A promoted candidate is ready for the next review step; comprehensive validation
+is separate.
 
 ## Output format
 
@@ -176,7 +180,9 @@ Once the runner finishes it prints a JSON summary like this:
 }
 ```
 
-Use the printed `result_dir` to inspect the attempt artifacts.
+Use the printed `result_dir` to inspect the attempt artifacts. Artifact detail
+is controlled by `experiment.toml` and runner settings. Use fuller artifacts
+only when the extra evidence is worth the storage cost.
 
 ```bash
 cat results/session_state.json
@@ -199,13 +205,18 @@ cat <result_dir>/promotion_summary.json
 cat <result_dir>/trade_attribution.json
 ```
 
+If promotion reports `promote`, advance the promoted candidate for the next
+review step. If promotion reports `reject`, restore the previous promoted or
+baseline commit before trying another idea.
+
 ## Logging results
 
 The runner appends results to `results.tsv` automatically. Do not hand-edit this
 file during the research loop.
 
-The ledger records attempt identity, evaluated window, score/trade feedback,
-status, and the short description. The exact schema is owned by the runner.
+The ledger records attempt identity, evaluated window, result directory,
+score/trade feedback, status, and the short description. The exact schema is
+owned by the runner.
 
 ## Evidence review
 
@@ -216,7 +227,7 @@ write down the research reason for the next attempt:
 - causal timing and `as_of_time` assumptions
 - falsifier
 - guarded score movement and raw return movement
-- raw net return, gross return, costs, and failed gates
+- raw net return, gross return, funding return, costs, and failed gates
 - trade count and sample quality
 - fill assumptions and data quality
 - overfit risk and whether the change adds unjustified complexity
@@ -249,25 +260,24 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
 1. Look at the git state: the current branch and commit we're on.
 2. Review the latest `results/` artifacts and `results.tsv`.
 3. Tune `strategy.py` or `experiment.toml` with one focused experimental idea.
-4. git commit the focused research change.
-5. Run the cheap screen:
+4. Run the cheap screen:
    `conda run -n quant python runner.py --explore --description "short attempt description"`.
-   If the primary result is plausible, run the fixed guard:
-   `conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"`.
+   If the primary result is plausible and a diagnostic window is useful, run:
+   `conda run -n quant python runner.py --window-id WINDOW_ID --description "diagnostic: short attempt description"`.
    If both support a serious candidate with a clear quant rationale, run:
    `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
    Do not run full promotion after every idea.
-6. Read the JSON summary. For `run_kind = "promotion"`, inspect
+5. Read the JSON summary. For `run_kind = "promotion"`, inspect
    `promotion_score.json`, `promotion_summary.json`, and
    `trade_attribution.json`. For explore or guard diagnostics, inspect
    `score.json`, `summary.json`, and `evidence.json`.
-7. The runner records the results in `results.tsv`; leave it untracked by git.
-8. If promotion reports `promote`, advance from that commit.
-9. If promotion reports `reject` or the cheap screen fails, restore
+6. The runner records the results in `results.tsv`; leave it untracked by git.
+7. If promotion reports `promote`, keep that candidate as the current best.
+8. If promotion reports `reject` or the cheap screen fails, restore
    `strategy.py` and `experiment.toml` to the previous promoted or baseline
-   commit before designing the next change. Keep generated results as the
+   version before designing the next change. Keep generated results as the
    research record.
-10. If the run was exploration or diagnostic only, treat it as evidence for the
+9. If the run was exploration or diagnostic only, treat it as evidence for the
     next focused change, not as best-so-far.
 
 The idea is that you are an autonomous quant researcher trying things out. If a

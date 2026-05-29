@@ -40,7 +40,7 @@ def write_attempt(
     trade_count: int = 250,
     window_id: str = "recent",
     status: str = "scored",
-    strategy_source: str = "def generate_signals():\n    return []\n",
+    strategy_source: str = "def generate_decisions(rows, params):\n    return []\n",
 ) -> Path:
     attempt_dir = campaign / f"2026-05-25T000{attempt:03d}Z-demo"
     attempt_dir.mkdir(parents=True)

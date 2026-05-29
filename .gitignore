@@ -4,4 +4,14 @@ __pycache__/
 
 /.autoresearch_session.json
 /results
-/results.tsv
+
+# Local agent/editor state.
+/.claude/
+/.cursor/
+/.codegraph/
+/.codex/skills/openspec-*/
+/openspec/
+
+# Scratch notes for local research sessions.
+/TODO.md
+/idea.md

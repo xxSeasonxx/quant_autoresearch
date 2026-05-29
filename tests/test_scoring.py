@@ -10,24 +10,34 @@ def evidence(
     *,
     net_return: float = 0.03,
     gross_return: float = 0.04,
+    funding_return: float = 0.002,
     cost_return: float = 0.01,
     trade_count: int = 25,
     passed: bool = True,
 ) -> dict[str, object]:
+    screening_result = {
+        "trade_count": trade_count,
+        "smoke_score": {
+            "sum_weighted_trade_net_return": net_return,
+            "sum_weighted_trade_gross_return": gross_return,
+            "sum_weighted_trade_funding_return": funding_return,
+            "sum_weighted_trade_cost_return": cost_return,
+        },
+    }
     return {
+        "schema_version": "quant_strategies.engine.evidence/v2",
+        "mode": "validate",
+        "strategy_id": "demo_strategy",
+        "screening_result": screening_result,
         "validation_report": {
+            "mode": "validate",
             "passed": passed,
             "gates": [
                 {"name": "valid_inputs", "passed": True, "detail": "screening completed"},
                 {"name": "positive_net", "passed": passed, "detail": f"net_return={net_return}"},
             ],
-            "screening_result": {
-                "trade_count": trade_count,
-                "net_return": net_return,
-                "gross_return": gross_return,
-                "cost_return": cost_return,
-            },
-        }
+            "screening_result": screening_result,
+        },
     }
 
 
@@ -48,6 +58,9 @@ def test_build_score_returns_guarded_score_when_trade_count_is_sufficient():
     assert score["score"] == pytest.approx(0.03 / 120)
     assert score["score_basis"] == "net_return_per_day"
     assert score["raw_net_return"] == 0.03
+    assert score["gross_return"] == 0.04
+    assert score["funding_return"] == 0.002
+    assert score["cost_return"] == 0.01
     assert score["trade_count"] == 25
     assert score["window_start"] == "2024-01-01"
     assert score["window_end"] == "2024-04-29"
@@ -55,6 +68,7 @@ def test_build_score_returns_guarded_score_when_trade_count_is_sufficient():
     assert score["symbol_count"] == 8
     assert score["passed_validation"] is True
     assert score["failed_gates"] == []
+    assert score["failure_message"] is None
     assert score["notes"] == "Loop feedback only. Not market evidence."
 
 
@@ -103,9 +117,10 @@ def test_build_score_classifies_runner_failure_without_evidence():
     assert score["trade_count"] is None
 
 
-def test_build_score_returns_runner_failed_when_net_return_is_missing_with_enough_trades():
+def test_build_score_returns_runner_failed_when_v2_smoke_score_is_missing_with_enough_trades():
     malformed_evidence = evidence(trade_count=25)
-    del malformed_evidence["validation_report"]["screening_result"]["net_return"]
+    del malformed_evidence["validation_report"]["screening_result"]["smoke_score"]
+    malformed_evidence["screening_result"].pop("smoke_score", None)
 
     score = build_score(
         summary={"stage": "completed", "assessment_status": "smoke_passed"},
@@ -118,7 +133,10 @@ def test_build_score_returns_runner_failed_when_net_return_is_missing_with_enoug
     assert score["status"] == "runner_failed"
     assert score["score"] is None
     assert score["raw_net_return"] is None
+    assert score["funding_return"] is None
     assert score["trade_count"] == 25
+    assert score["failure_source"] == "quant_strategies_error"
+    assert "smoke_score.sum_weighted_trade_net_return" in score["failure_message"]
 
 
 def test_build_score_fails_closed_when_validation_passed_is_not_bool():
@@ -156,6 +174,8 @@ def test_build_score_returns_runner_failed_when_net_return_is_non_finite():
 def test_classify_failure_source_maps_runner_stages_and_messages():
     assert classify_failure_source("signal_generation", "strategy execution failed") == "strategy_error"
     assert classify_failure_source("request_build", "entry fill is outside available bars") == "strategy_error"
+    assert classify_failure_source("param_validation", "param validation failed") == "strategy_error"
+    assert classify_failure_source("decision_generation", "decision generation failed") == "strategy_error"
     assert classify_failure_source("data_load", "strict data window failed") == "quant_data_error"
     assert classify_failure_source("strategy_import", "strategy import failed") == "strategy_error"
     assert classify_failure_source("config", "invalid TOML") == "config_error"
@@ -308,22 +328,20 @@ def trade(symbol: str, side: str, decision_time: str, net: float, gross: float, 
 def test_build_trade_attribution_groups_trade_evidence():
     evidence_by_window = {
         "validation_2025_h1": {
-            "validation_report": {
-                "screening_result": {
-                    "trades": [
-                        trade("ETH-PERP", "short", "2025-01-02T08:01:00Z", 0.01, 0.009, 0.001),
-                        trade("ETH-PERP", "long", "2025-01-02T12:01:00Z", -0.02, -0.019, -0.001),
-                    ]
-                }
+            "schema_version": "quant_strategies.engine.evidence/v2",
+            "screening_result": {
+                "trades": [
+                    trade("ETH-PERP", "short", "2025-01-02T08:01:00Z", 0.01, 0.009, 0.001),
+                    trade("ETH-PERP", "long", "2025-01-02T12:01:00Z", -0.02, -0.019, -0.001),
+                ]
             }
         },
         "locked_recent_2026": {
-            "validation_report": {
-                "screening_result": {
-                    "trades": [
-                        trade("ADA-PERP", "short", "2026-01-02T08:01:00Z", 0.03, 0.029, 0.001),
-                    ]
-                }
+            "schema_version": "quant_strategies.engine.evidence/v2",
+            "screening_result": {
+                "trades": [
+                    trade("ADA-PERP", "short", "2026-01-02T08:01:00Z", 0.03, 0.029, 0.001),
+                ]
             }
         },
     }

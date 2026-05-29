@@ -212,6 +212,9 @@ def materialize_runner_toml(
 
     output = dict(config.output)
     output["results_dir"] = str(results_dir)
+    output["artifact_profile"] = "full"
+    if output.get("mode") == "validate":
+        output["mode"] = "screen"
 
     sections = [
         _format_key_value("strategy_path", str(config.strategy_path)),

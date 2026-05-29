@@ -45,10 +45,15 @@ def write_artifacts(result_dir: Path) -> None:
         "summary.json",
         "evidence.json",
         "signals.csv",
+        "decision_records.jsonl",
         "strategy_snapshot.py",
         "engine_request.json",
         "strategy_input_rows.csv",
         "strategy_input_rows.jsonl",
+        "artifact_profile_summary.json",
+        "data_manifest.json",
+        "run_manifest.json",
+        "notes.md",
     ):
         (result_dir / name).write_text(name + "\n")
 
@@ -68,7 +73,12 @@ def test_apply_artifact_policy_removes_large_debug_inputs_for_research_profile(t
     assert (result_dir / "summary.json").exists()
     assert (result_dir / "evidence.json").exists()
     assert (result_dir / "signals.csv").exists()
+    assert (result_dir / "decision_records.jsonl").exists()
     assert (result_dir / "strategy_snapshot.py").exists()
+    assert (result_dir / "artifact_profile_summary.json").exists()
+    assert (result_dir / "data_manifest.json").exists()
+    assert (result_dir / "run_manifest.json").exists()
+    assert (result_dir / "notes.md").exists()
     assert not (result_dir / "engine_request.json").exists()
     assert not (result_dir / "strategy_input_rows.csv").exists()
     assert not (result_dir / "strategy_input_rows.jsonl").exists()
@@ -106,9 +116,14 @@ def test_apply_artifact_policy_honors_core_keep_flags_for_research_profile(tmp_p
     removed = apply_artifact_policy(result_dir, policy)
 
     assert sorted(removed) == [
+        "artifact_profile_summary.json",
         "config.toml",
+        "data_manifest.json",
+        "decision_records.jsonl",
         "engine_request.json",
         "evidence.json",
+        "notes.md",
+        "run_manifest.json",
         "signals.csv",
         "strategy_input_rows.csv",
         "strategy_input_rows.jsonl",

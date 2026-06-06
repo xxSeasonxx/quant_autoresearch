@@ -63,6 +63,32 @@ def evidence_gate(trade_count: int, min_trades: int) -> GateOutcome:
     )
 
 
+def factor_panel_gate(panels_cover: bool, n_required: int) -> GateOutcome:
+    """Fail-closed factor-panel coverage gate (FR-C3, AC-9/G2, PRD Principle 6).
+
+    The mechanical wall that makes "score raw beta as residual alpha" UNREPRESENTABLE on the live
+    path: when the Protocol REQUIRES factor neutralization (``n_required > 0``) but the supplied
+    panel does not COVER those columns (empty/identity — e.g. an unwired provider), the candidate
+    is infeasible. ``passed`` is True only when every required column is present for every fold;
+    otherwise it fails with ``factor_panel_unwired`` — never a silent raw-returns pass. Never
+    passes by default (an unmeasurable requirement is a failing requirement)."""
+    return GateOutcome(
+        name="factor_panel",
+        passed=panels_cover,
+        value=1.0 if panels_cover else 0.0,
+        threshold=1.0,
+        detail=(
+            f"required factor columns covered for every fold ({n_required} required)"
+            if panels_cover
+            else (
+                "factor_panel_unwired: the Protocol requires neutralization of "
+                f"{n_required} factor column(s) but the supplied panel does not cover them "
+                "(empty/identity) — infeasible (fail-closed), NOT a raw-returns pass"
+            )
+        ),
+    )
+
+
 def _pnl_shares(by_symbol: Mapping[str, FoldReturns]) -> dict[str, float]:
     """Absolute-PnL share per symbol (compounded growth - 1, by |contribution|).
 

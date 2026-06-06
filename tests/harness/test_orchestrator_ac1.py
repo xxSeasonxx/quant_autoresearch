@@ -118,7 +118,10 @@ def _genuine_fold(seed, symbols, n=240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    return fold, {"market": market}, 1.5  # neutralize the TRUE market only ⇒ alpha survives
+    # A COVERING panel (market + funding_carry) — the columns the Protocol requires neutralized
+    # (funding is ~0 in this synthetic fold, but the column is present, as the real provider
+    # supplies it). The genuine idiosyncratic alpha survives neutralization.
+    return fold, {"market": market, "funding_carry": np.zeros_like(market)}, 1.5
 
 
 def test_ac1_full_diagnosed_campaign_is_infeasible_through_the_walk_forward_path():

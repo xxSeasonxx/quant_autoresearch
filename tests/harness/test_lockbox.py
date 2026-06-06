@@ -53,8 +53,17 @@ def _experiment() -> Experiment:
 
 
 def _gateway_returning(values: np.ndarray):
-    """A FoundationGateway whose single Lockbox evaluate returns the given return series."""
+    """A FoundationGateway whose single Lockbox evaluate returns the given return series.
+
+    ``panel_for`` returns a COVERING panel of zero columns (market + funding_carry) aligned to
+    the series: it satisfies the Protocol's required-factor coverage (so the fail-closed wiring
+    gate does not fire) while leaving the residual equal to the raw series (zero factor columns
+    have zero beta), so the confirmed/rejected assertions are about the same return distribution.
+    The synthetic series has no real factor driver, so neutralizing against zeros is a no-op —
+    the honest thing for a driverless fixture."""
     fr = make_returns(np.asarray(values, dtype=np.float64), periods_per_year=HOURLY)
+    zeros = np.zeros(fr.values.shape[0], dtype=np.float64)
+    covering_panel = {"market": zeros, "funding_carry": zeros}
 
     class _GW:
         def __init__(self):
@@ -70,6 +79,9 @@ def _gateway_returning(values: np.ndarray):
                 calmar=None, max_drawdown=-0.1, trade_count=200, worst_period_return=-0.03,
                 provenance={"snapshot": "synthetic"}, failure_stage=None,
             )
+
+        def panel_for(self, window, returns):  # noqa: ARG002
+            return covering_panel
 
     return _GW()
 
@@ -189,6 +201,7 @@ def test_confirmed_on_a_powered_block_with_a_real_edge():
     verdict = confirm_on_lockbox(
         exp, proto, profile, claimed_edge=1.0,
         gateway=gw, book=LockboxBook(), trial_id="t", spent_at="2025-01-01T00:00:00",
+        factor_panel_provider=gw.panel_for,
     )
     assert verdict.verdict == "confirmed"
     assert verdict.lower_bound is not None and verdict.lower_bound > 0.0
@@ -205,6 +218,7 @@ def test_rejected_when_a_powered_block_comes_back_flat():
     verdict = confirm_on_lockbox(
         exp, proto, profile, claimed_edge=1.0,
         gateway=gw, book=LockboxBook(), trial_id="t", spent_at="2025-01-01T00:00:00",
+        factor_panel_provider=gw.panel_for,
     )
     assert verdict.verdict == "rejected"
     assert verdict.lower_bound is not None and verdict.lower_bound <= 0.0
@@ -217,6 +231,7 @@ def test_rejected_when_a_powered_block_is_negative():
     verdict = confirm_on_lockbox(
         exp, proto, profile, claimed_edge=1.0,
         gateway=gw, book=LockboxBook(), trial_id="t", spent_at="2025-01-01T00:00:00",
+        factor_panel_provider=gw.panel_for,
     )
     assert verdict.verdict == "rejected"
 
@@ -237,6 +252,7 @@ def test_write_once_a_second_graduation_on_the_same_dataset_is_refused():
     v1 = confirm_on_lockbox(
         exp, proto, profile, claimed_edge=1.0,
         gateway=gw1, book=book, trial_id="first", spent_at="2025-01-01T00:00:00",
+        factor_panel_provider=gw1.panel_for,
     )
     assert v1.verdict in ("confirmed", "rejected")
 
@@ -246,6 +262,7 @@ def test_write_once_a_second_graduation_on_the_same_dataset_is_refused():
         confirm_on_lockbox(
             exp, proto, profile, claimed_edge=1.0,
             gateway=gw2, book=book, trial_id="second", spent_at="2025-02-01T00:00:00",
+            factor_panel_provider=gw2.panel_for,
         )
     assert gw2.evaluate_calls == []  # the refused second graduation never scored
 
@@ -269,6 +286,7 @@ def test_write_once_does_not_charge_an_insufficient_evidence_verdict():
     v2 = confirm_on_lockbox(
         exp, proto, powered, claimed_edge=1.0,
         gateway=gw2, book=book, trial_id="b", spent_at="2025-02-01T00:00:00",
+        factor_panel_provider=gw2.panel_for,
     )
     assert v2.verdict in ("confirmed", "rejected")
     assert len(gw2.evaluate_calls) == 1
@@ -285,10 +303,12 @@ def test_lockbox_verdict_is_deterministic_bit_for_bit():
     series = _edged_series(4000, seed=20, mean=0.0008)
 
     def run():
+        gw = _gateway_returning(series)
         return confirm_on_lockbox(
             exp, proto, profile, claimed_edge=1.0,
-            gateway=_gateway_returning(series), book=LockboxBook(),
+            gateway=gw, book=LockboxBook(),
             trial_id="t", spent_at="2025-01-01T00:00:00",
+            factor_panel_provider=gw.panel_for,
         )
 
     a, b = run(), run()
@@ -319,10 +339,14 @@ def test_lockbox_evaluate_failure_raises():
                 provenance={}, failure_stage="contract",
             )
 
+        def panel_for(self, window, returns):  # pragma: no cover - evaluate fails before this
+            return {"market": np.zeros(0), "funding_carry": np.zeros(0)}
+
     with pytest.raises(LockboxError):
         confirm_on_lockbox(
             exp, proto, profile, claimed_edge=1.0,
             gateway=_FailGW(), book=LockboxBook(), trial_id="t", spent_at="2025-01-01T00:00:00",
+            factor_panel_provider=_FailGW().panel_for,
         )
 
 

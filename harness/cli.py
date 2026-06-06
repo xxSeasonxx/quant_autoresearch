@@ -1,22 +1,25 @@
 """The agent + admin CLI — the composition root where rigor is MECHANICAL (§8).
 
-Three agent-facing commands and three admin/human commands, each a thin shell over the
-immutable judgment layer. The agent's contract (``program.md``) names exactly these:
+Three agent-facing subcommands (``status`` | ``run`` | ``evaluate``) plus ONE admin subcommand
+(``graduate``), each a thin shell over the immutable judgment layer. ``profile`` and ``lockbox``
+are NOT argparse subcommands here — they are operator-invoked functions (``profile_campaign`` and
+``harness.lockbox.confirm_on_lockbox``) the campaign harness calls with live data; the
+mechanically-enforced agent loop is ``status``/``run``/``evaluate`` + the ``graduate`` audit.
 
-- ``status``   — best logged candidate + recent ledger rows + the budget as a QUOTA state
-                 (looks remaining, never a countdown; FR-E5).
-- ``run``      — Train quick run: causal diagnostic + a coarse plausibility band. FREE, unlimited
-                 (FR-A2/NFR-3). Never spends a look.
-- ``evaluate`` — Selection: the harness applies the **escalation gate** + the **budget**, and
-                 ONLY if the gate passes AND budget remains runs the walk-forward RES via
-                 ``SelectionController.take_look`` and LOGS the bet. Refuses with a clear reason
-                 if the gate fails (routed to Train) or the budget is spent (quota). This is
+- ``status``   — (subcommand) best logged candidate + recent ledger rows + the budget as a QUOTA
+                 state (looks remaining, never a countdown; FR-E5).
+- ``run``      — (subcommand) Train quick run: causal diagnostic + a coarse plausibility band.
+                 FREE, unlimited (FR-A2/NFR-3). Never spends a look.
+- ``evaluate`` — (subcommand) Selection: the harness applies the **escalation gate** + the
+                 **budget**, and ONLY if the gate passes AND budget remains runs the walk-forward
+                 RES via ``SelectionController.take_look`` and LOGS the bet. Refuses with a clear
+                 reason if the gate fails (routed to Train) or the budget is spent (quota). This is
                  where rigor is MECHANICAL — the agent cannot bypass it (FR-D1/D3, AC-8).
-- ``profile``  — Asset Profiler + data-sufficiency (admin; FR-G).
-- ``graduate`` — returns-based audit + top-K graduation decision (admin; FR-F1/F3). EMITS a
-                 verdict; never promotes.
-- ``lockbox``  — power-aware one-shot Lockbox verdict (human-gated; FR-F2). EMITS a verdict;
-                 the harness NEVER promotes.
+- ``graduate`` — (subcommand) returns-based audit + top-K graduation decision (admin; FR-F1/F3).
+                 EMITS a verdict; never promotes.
+- ``profile``  — (operator function ``profile_campaign``) Asset Profiler + data-sufficiency (FR-G).
+- ``lockbox``  — (operator function ``confirm_on_lockbox``) power-aware one-shot Lockbox verdict
+                 (human-gated; FR-F2). EMITS a verdict; the harness NEVER promotes.
 
 **Boundary (the seam test must stay green).** This module must NOT ``import quant_strategies``.
 It constructs the ``RealFoundationGateway`` LAZILY (inside ``_build_real_gateway`` →
@@ -51,15 +54,32 @@ from harness.selection import NoLookAvailable, SelectionController
 from harness.stability import train_plausibility
 
 
-def _no_factor_panel(window: FoldWindowSpan, returns) -> Mapping[str, np.ndarray]:
-    """Default factor-panel provider: no neutralization (identity).
+def _unwired_factor_panel(window: FoldWindowSpan, returns) -> Mapping[str, np.ndarray]:
+    """The UNWIRED factor-panel provider — TEST-ONLY; it FAILS CLOSED in production (FR-C3, AC-9/G2).
 
-    The real campaign injects a ``quant_data``-backed panel (market/momentum/funding-carry/size)
-    here — that is the seam where factor neutralization plugs in (harness-architecture §2, FR-C3).
-    Absent a wired panel, RES scores the raw OOS residual (no factor columns to regress out); the
-    breadth/concentration and OOS gates still bind. We do NOT fabricate a synthetic panel.
+    Returns an empty (identity) panel. This is NOT a silent "score raw returns" path: when the
+    Protocol requires factor neutralization (``objective.factor_panel.required_factors`` non-empty,
+    the default), the judgment layer treats an uncovered panel as ``factor_panel_unwired`` and
+    fails closed — RES infeasible / Lockbox insufficient_evidence (PRD Principle 6, "never lower the
+    bar"). It exists so tests that deliberately drive the unwired case (and Protocols that
+    explicitly require NO factors) have an identity provider; the REAL campaign injects
+    ``RealFactorPanelProvider`` (``harness.foundation_real``, the only ``quant_data`` importer) via
+    ``main`` so a genuine market/funding-carry panel is neutralized. The production default is NEVER
+    an identity-pass — see ``main`` (it wires the real provider) and the fail-closed guard.
     """
     return {}
+
+
+def _build_real_factor_panel_provider(protocol: Protocol) -> FactorPanelProvider:
+    """Construct the data-backed ``RealFactorPanelProvider`` LAZILY (boundary).
+
+    Imported HERE (inside the call) so importing ``harness.cli`` never pulls in ``quant_strategies``
+    / ``quant_data`` — the seam test asserts only ``foundation_real`` crosses to the engine. Mirrors
+    ``_build_real_gateway``. Tests never call this; they inject a fake provider into ``HarnessCLI``.
+    """
+    from harness.foundation_real import RealFactorPanelProvider
+
+    return RealFactorPanelProvider(protocol)
 
 
 @dataclass(frozen=True)
@@ -123,7 +143,7 @@ class HarnessCLI:
         protocol: Protocol,
         ledger: TrialLedger,
         budget: BudgetManager,
-        factor_panel_provider: FactorPanelProvider = _no_factor_panel,
+        factor_panel_provider: FactorPanelProvider = _unwired_factor_panel,
         swing_big_every: int = DEFAULT_SWING_BIG_EVERY,
         ideas_since_new_family: int = 0,
         train_window: Any = None,
@@ -406,12 +426,16 @@ def _load_experiment(path: str | Path) -> Experiment:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Admin/agent CLI entry point. Constructs the real harness (lazy real gateway) and dispatches.
+    """Admin/agent CLI entry point. Constructs the real harness (lazy real gateway + factor-panel
+    provider) and dispatches.
 
-    Agent commands: ``status`` | ``run --desc`` | ``evaluate --desc``. Admin: ``profile`` |
-    ``graduate`` | ``lockbox`` (these read the durable ledger/book; full wiring of profile/graduate/
-    lockbox to live ``quant_data`` is the operator's campaign harness — here ``status``/``run``/
-    ``evaluate`` are the mechanically-enforced agent loop).
+    Subcommands: ``status`` | ``run --desc`` | ``evaluate --desc`` (agent) and ``graduate`` (admin
+    audit + top-K over the ledger). ``profile`` and ``lockbox`` are NOT subcommands — they are
+    operator-invoked functions (``profile_campaign`` / ``harness.lockbox.confirm_on_lockbox``) the
+    campaign harness calls with live data; here ``status``/``run``/``evaluate`` + ``graduate`` are
+    the mechanically-enforced loop. ``evaluate`` wires the real factor-panel provider so the
+    walk-forward RES neutralizes the live market/funding-carry panel (AC-9/G2); an unwired panel
+    fails closed, never scores raw beta as alpha.
     """
     import datetime as _dt
     import uuid as _uuid
@@ -455,11 +479,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # status reads only the ledger/budget; build the CLI with the (lazy) real gateway uniformly so
-    # run/evaluate share one construction. The gateway is constructed lazily so importing this
-    # module never pulls in the engine; running it does.
+    # run/evaluate share one construction. The gateway AND the factor-panel provider are built
+    # lazily (via foundation_real) so importing this module never pulls in the engine/quant_data;
+    # running it does. The REAL provider neutralizes the live market/funding-carry panel — the
+    # production default is NEVER the unwired identity (the fail-closed guard would bounce that).
     gateway = _build_real_gateway(repo_root)
+    factor_panel_provider = _build_real_factor_panel_provider(protocol)
     cli = HarnessCLI(
         gateway=gateway, protocol=protocol, ledger=ledger, budget=budget,
+        factor_panel_provider=factor_panel_provider,
         ideas_since_new_family=marker.ideas_since_new_family,
     )
 

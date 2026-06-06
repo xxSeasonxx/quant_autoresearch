@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 import harness.foundation_real as fr_mod
-from harness.foundation_real import FoldWindow, RealFoundationGateway
+from harness.foundation_real import FoldWindow, RealFactorPanelProvider, RealFoundationGateway
 from harness.protocol import Experiment, Protocol
 
 
@@ -459,3 +459,98 @@ def test_ac10_real_fold_typed_returns_flow_into_res():
     thr = GateThresholds(min_trades=1, max_concentration=1.0, min_effective_breadth=1.0)
     res = compute_res([fold.returns], [{}], trade_count=fold.trade_count, thresholds=thr)
     assert res.per_fold_sharpe is not None
+
+
+# --------------------------------------------------------------------------- #
+# RealFactorPanelProvider — the data-backed factor panel (FR-C3 wiring).
+#
+# Unit: the empty-frame path fails closed (returns {}), so the judgment-layer guard bounces an
+# unwired/empty panel rather than scoring raw returns. Data-gated: a real build over the live DB
+# yields a covering {market, funding_carry} panel aligned to the return timestamps.
+# --------------------------------------------------------------------------- #
+
+
+def _fold_returns(n: int = 48, start: str = "2024-07-01"):
+    from harness.foundation import FoldReturns
+
+    ts = (np.arange(n, dtype="timedelta64[h]") + np.datetime64(start)).astype("datetime64[ns]")
+    return FoldReturns(
+        timestamps=ts, values=np.zeros(n, dtype=np.float64), periods_per_year=8760.0
+    )
+
+
+def test_real_factor_panel_provider_empty_frame_fails_closed(monkeypatch):
+    """No benchmark rows for the window ⇒ the provider returns an EMPTY panel (it never fabricates
+    a synthetic factor). The judgment layer then fails closed — this is the seam half of AC-9/G2.
+
+    An injected engine + a stubbed loader returning an empty frame exercise the path with no DB."""
+    import quant_data.loader as ql
+
+    monkeypatch.setattr(ql, "load_crypto_perp_bars_with_funding", lambda *a, **k: __import__("polars").DataFrame(
+        {"timestamp": [], "close": [], "funding_rate": []}
+    ))
+    provider = RealFactorPanelProvider(_protocol(), engine=object())  # injected engine, never queried
+    panel = provider(FoldWindow("f0", "2024-07-01", "2024-08-31"), _fold_returns())
+    assert panel == {}  # empty ⇒ no coverage ⇒ judgment layer fails closed
+
+
+def test_real_factor_panel_provider_builds_covering_panel(monkeypatch):
+    """With benchmark bars+funding, the provider returns a COVERING {market, funding_carry} panel,
+    each column aligned 1:1 to the strategy's return timestamps. Stubbed loader (no DB)."""
+    import polars as pl
+
+    import quant_data.loader as ql
+
+    n = 48
+    base = np.datetime64("2024-07-01")
+    bench_ts = [(base + np.timedelta64(i, "h")).astype("datetime64[us]").item() for i in range(n)]
+    closes = list(100.0 + np.arange(n, dtype=np.float64))  # monotone ⇒ small positive market returns
+    fundings = list(0.0001 * np.ones(n, dtype=np.float64))
+
+    def fake_loader(engine, symbol, start, end, **kw):  # noqa: ARG001
+        return pl.DataFrame({"timestamp": bench_ts, "close": closes, "funding_rate": fundings}).with_columns(
+            pl.col("timestamp").cast(pl.Datetime("us", "UTC"))
+        )
+
+    monkeypatch.setattr(ql, "load_crypto_perp_bars_with_funding", fake_loader)
+    provider = RealFactorPanelProvider(_protocol(), engine=object())
+    returns = _fold_returns(n=n)
+    panel = provider.panel_for(FoldWindow("f0", "2024-07-01", "2024-08-31"), returns)
+
+    assert set(panel) == {"market", "funding_carry"}
+    assert panel["market"].shape[0] == n and panel["funding_carry"].shape[0] == n
+    assert panel["market"].dtype == np.float64
+    # The funding_carry column carries the (forward-filled) funding rate.
+    assert np.allclose(panel["funding_carry"], 0.0001)
+    # The market column is non-trivial (close-to-close returns of the monotone benchmark).
+    assert np.any(panel["market"] != 0.0)
+
+
+def _factor_panel_db_available() -> bool:
+    """True iff the live DB can serve benchmark bars+funding (else skip the real smoke)."""
+    try:
+        import datetime as dt
+
+        from quant_data.loader import load_crypto_perp_bars_with_funding
+
+        provider = RealFactorPanelProvider(_protocol())
+        df = load_crypto_perp_bars_with_funding(
+            provider._get_engine(), "BTC-PERP", dt.date(2023, 6, 1), dt.date(2023, 6, 3)
+        )
+        return not df.is_empty()
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(
+    not _factor_panel_db_available(),
+    reason="live quant_data DB unreachable (no DB credentials) — real factor-panel smoke skipped",
+)
+def test_real_factor_panel_provider_real_build_is_covering():
+    """End-to-end (data-gated): a real panel build over the live DB covers {market, funding_carry}
+    aligned to a synthetic return series. Correctness of the live build is exercised only here."""
+    provider = RealFactorPanelProvider(_protocol())
+    returns = _fold_returns(n=72, start="2023-06-01")
+    panel = provider.panel_for(FoldWindow("real", "2023-06-01", "2023-06-04"), returns)
+    assert {"market", "funding_carry"} <= set(panel)
+    assert panel["market"].shape[0] == returns.timestamps.shape[0]

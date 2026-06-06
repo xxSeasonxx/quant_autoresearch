@@ -33,6 +33,7 @@ pandas, if any, lives ONLY here. (numpy arrays come straight off the typed acces
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import tempfile
 from dataclasses import dataclass
@@ -396,3 +397,102 @@ class RealFoundationGateway:
                 out[axis] = group
         out.setdefault("by_symbol", {})
         return out
+
+
+# --------------------------------------------------------------------------- #
+# RealFactorPanelProvider — the data-backed factor panel (FR-C3, the seam wiring).
+#
+# Builds the factor-return columns RES neutralizes against, for one fold window, from the
+# foundation data (``quant_data``). This is the ONLY place the panel touches live data; the
+# judgment layer consumes it as plain numpy columns through the ``FactorPanelProvider`` seam
+# (orchestrator/lockbox), so it stays pure and testable with a fake.
+#
+# At minimum it supplies the two columns a crypto-perp campaign MUST neutralize (the Protocol's
+# ``required_factors`` default): ``market`` (the benchmark/BTC-PERP close-to-close return — the
+# BTC beta every alt co-moves with) and ``funding_carry`` (the perp funding rate — carry,
+# regressed out, never additive alpha). Columns are aligned (as-of) to the strategy's per-bar
+# return timestamps so the OLS in ``factors.residualize`` is well-posed.
+#
+# DB-GATED: the DB is unreachable in CI/this environment, so live correctness is exercised only
+# by a skip-if-no-DB smoke (``tests/harness/test_foundation_real.py``). Safety does NOT depend on
+# this running: when no panel covers the required factors the JUDGMENT layer fails closed
+# (RES infeasible / Lockbox insufficient_evidence). This provider supplies the honest panel so a
+# REAL campaign neutralizes beta; the fail-closed guard is the wall when it (or any provider)
+# cannot.
+# --------------------------------------------------------------------------- #
+
+
+class RealFactorPanelProvider:
+    """A ``FactorPanelProvider`` (callable seam) backed by ``quant_data``.
+
+    Constructs ``{"market", "funding_carry"}`` factor-return columns for a fold window, aligned to
+    the strategy's return-series timestamps. ``benchmark_symbol`` is the market-beta proxy (the
+    canonical crypto market driver). The SQLAlchemy engine is created lazily so importing this
+    module (or constructing the provider) never opens a DB connection.
+    """
+
+    def __init__(self, protocol: Protocol, *, benchmark_symbol: str = "BTC-PERP", engine: Any = None) -> None:
+        self._protocol = protocol
+        self._benchmark = benchmark_symbol
+        self._engine = engine  # injected in tests; built lazily from quant_data otherwise
+
+    def __call__(self, window, returns: FoldReturns) -> Mapping[str, np.ndarray]:
+        """Build the factor panel for ``window`` aligned to ``returns`` (the seam call)."""
+        return self.panel_for(window, returns)
+
+    def _get_engine(self) -> Any:
+        if self._engine is None:
+            from quant_data.db import get_engine
+
+            self._engine = get_engine()
+        return self._engine
+
+    def panel_for(self, window, returns: FoldReturns) -> Mapping[str, np.ndarray]:
+        """Load the benchmark bars+funding over ``window`` and align market + funding_carry to the
+        strategy's return timestamps. Returns numpy columns of the same length as ``returns``.
+
+        Alignment is as-of (the last benchmark observation at or before each strategy bar): the
+        benchmark return is the close-to-close return; the funding rate is forward-filled between
+        funding events. polars (a ``quant_data`` dependency) lives only here, never in the core.
+        """
+        import polars as pl
+
+        from quant_data.loader import load_crypto_perp_bars_with_funding
+
+        n = int(np.asarray(returns.timestamps).shape[0])
+        start = _dt.date.fromisoformat(window.start)
+        end = _dt.date.fromisoformat(window.end)
+
+        bars = load_crypto_perp_bars_with_funding(self._get_engine(), self._benchmark, start, end)
+        if bars.is_empty():
+            # No benchmark data for the window ⇒ no covering panel ⇒ the judgment layer fails
+            # closed (we return an empty panel rather than fabricate a synthetic factor).
+            return {}
+
+        # Benchmark close-to-close return (the market beta proxy) + the funding-carry column.
+        bench = (
+            bars.select(["timestamp", "close", "funding_rate"])
+            .sort("timestamp")
+            .with_columns(
+                pl.col("close").pct_change().alias("market"),
+                pl.col("funding_rate").fill_null(strategy="forward").fill_null(0.0).alias("funding_carry"),
+            )
+            .with_columns(pl.col("market").fill_null(0.0))
+            .select(["timestamp", "market", "funding_carry"])
+        )
+
+        # As-of align to the strategy's per-bar timestamps (datetime64[ns] → UTC microseconds).
+        ts = pl.Series(
+            "timestamp", np.asarray(returns.timestamps).astype("datetime64[us]")
+        ).cast(pl.Datetime("us", "UTC"))
+        strat = pl.DataFrame({"timestamp": ts}).sort("timestamp")
+        aligned = strat.join_asof(bench, on="timestamp", strategy="backward").with_columns(
+            pl.col("market").fill_null(0.0), pl.col("funding_carry").fill_null(0.0)
+        )
+
+        market = aligned.get_column("market").to_numpy().astype(np.float64)
+        funding = aligned.get_column("funding_carry").to_numpy().astype(np.float64)
+        if market.shape[0] != n or funding.shape[0] != n:
+            # Alignment did not produce a 1:1 column ⇒ fail closed (no fabricated panel).
+            return {}
+        return {"market": market, "funding_carry": funding}

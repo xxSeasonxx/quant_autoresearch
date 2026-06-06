@@ -90,7 +90,9 @@ def _genuine_fold(seed, symbols, n=240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    return fold, {"market": market}
+    # COVERING panel (market + funding_carry, the Protocol-required columns; funding ~0 here but
+    # present, as the real provider supplies it). The genuine alpha survives neutralization.
+    return fold, {"market": market, "funding_carry": np.zeros_like(market)}
 
 
 class _EdgeGateway:

@@ -132,9 +132,19 @@ class GateThresholdSpec(_Frozen):
 
 
 class FactorPanelSpec(_Frozen):
-    """Which factor axes to neutralize (FR-C3). Funding is carry, regressed out."""
+    """Which factor axes to neutralize (FR-C3). Funding is carry, regressed out.
+
+    ``axes`` is the full canonical panel the harness neutralizes *when a column is present*.
+    ``required_factors`` is the stronger FAIL-CLOSED contract (PRD Principle 6, AC-9/G2): the
+    columns the objective MUST be able to regress out before it may produce a feasible RES /
+    confirmed Lockbox verdict. If the supplied panel does not COVER these (empty/identity panel
+    — e.g. an unwired provider), the judgment layer fails closed (RES infeasible / Lockbox
+    insufficient_evidence) rather than silently scoring RAW returns as residual alpha. Defaults
+    to the two drivers a crypto-perp campaign must neutralize: market (BTC beta) + funding carry.
+    """
 
     axes: tuple[str, ...] = ("market", "momentum", "funding_carry", "size")
+    required_factors: tuple[str, ...] = ("market", "funding_carry")
 
 
 class ObjectiveSpec(_Frozen):

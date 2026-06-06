@@ -50,7 +50,8 @@ import numpy as np
 from harness.bootstrap import circular_block_indices, politis_white_block
 from harness.data.lockbox_book import LockboxBook, lockbox_dataset_id
 from harness.foundation import FoundationGateway
-from harness.objective import metrics
+from harness.objective import factors, metrics
+from harness.orchestrator import FactorPanelProvider
 from harness.profiler import AssetProfile
 from harness.protocol import Experiment, Protocol
 
@@ -178,6 +179,7 @@ def confirm_on_lockbox(
     book: LockboxBook,
     trial_id: str,
     spent_at: str,
+    factor_panel_provider: FactorPanelProvider | None = None,
     confidence: float = _DEFAULT_CONFIDENCE,
     n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
 ) -> LockboxVerdict:
@@ -189,18 +191,30 @@ def confirm_on_lockbox(
        non-finite, or the claim is not a finite positive Sharpe), return
        ``insufficient_evidence`` — *before* reserving or scoring. A ``confirmed`` the block
        cannot power can never be produced.
-    2. **Write-once reserve (FR-B4).** Reserve the Lockbox ``dataset_id`` on the ``LockboxBook``;
+    2. **Factor-panel wiring gate (AC-9/G2, FAIL-CLOSED).** If the Protocol REQUIRES factor
+       neutralization but no ``factor_panel_provider`` is supplied (the production default with
+       no provider), return ``insufficient_evidence`` (``factor_panel_unwired``) — *before*
+       reserving or scoring. The Lockbox must NEVER score RAW returns as residual alpha; a
+       pure factor-beta basket can never be ``confirmed`` on the live path.
+    3. **Write-once reserve (FR-B4).** Reserve the Lockbox ``dataset_id`` on the ``LockboxBook``;
        a second graduation on the same block raises ``LockboxSpentError`` here, before scoring.
-    3. **Score once.** One ``evaluate`` over the Lockbox window via the seam (FR-J2).
-    4. **Binding test + decision.** Pick ``forward_block`` (thick block) or ``block_bootstrap``
+    4. **Score once.** One ``evaluate`` over the Lockbox window via the seam (FR-J2).
+    5. **Residualize (FR-C3).** Build the factor panel for the Lockbox window and residualize the
+       returns against it BEFORE scoring — the confirmation is on residual alpha, not raw return.
+       If the provider does not produce a panel that COVERS the required factors,
+       ``insufficient_evidence`` (``factor_panel_unwired``) — fail-closed, never a raw pass.
+    6. **Binding test + decision.** Pick ``forward_block`` (thick block) or ``block_bootstrap``
        (thin block) as binding; ``confirmed`` iff the binding lower CI bound on the annualized
        Sharpe clears 0 AND the point estimate is positive; else ``rejected``.
 
     ``profile`` supplies ``lockbox_mde`` (the power bar). ``claimed_edge`` is the candidate's
     OOS edge in annualized Sharpe units (e.g. its Selection ``rank_sharpe``). ``spent_at`` is an
-    injected ISO timestamp (never read from a clock here).
+    injected ISO timestamp (never read from a clock here). ``factor_panel_provider`` is the same
+    seam the Selection path uses; the real campaign wires it (built from quant_data) — tests inject
+    a fake. With no required factors it is optional (identity is then a deliberate choice).
     """
     mde = profile.lockbox_mde
+    required_factors = protocol.objective.factor_panel.required_factors
 
     # --- 1. Power gate FIRST (AC-5): never manufacture a confirm the data can't power. ---
     if not _claimed_edge_is_valid(claimed_edge):
@@ -225,7 +239,26 @@ def confirm_on_lockbox(
             ),
         )
 
-    # --- 2. Write-once reserve (FR-B4): refuse a second graduation on the same block. ---
+    # --- 2. Factor-panel wiring gate (AC-9/G2): fail closed BEFORE reserve/score when the
+    # Protocol requires neutralization but no provider is wired. A confirm on RAW beta is
+    # unrepresentable — and no Lockbox block is burned on the misconfiguration (mirrors the
+    # power gate's pre-reserve return, so insufficient_evidence never spends the block). ---
+    if required_factors and factor_panel_provider is None:
+        return LockboxVerdict(
+            verdict="insufficient_evidence",
+            mde=mde,
+            claimed_edge=claimed_edge,
+            binding_test=_binding_test_for(profile, claimed_edge),
+            confidence=confidence,
+            detail=(
+                "factor_panel_unwired: the Protocol requires neutralization of "
+                f"{len(required_factors)} factor column(s) but no factor-panel provider is "
+                "wired — the Lockbox refuses to score raw returns as residual alpha "
+                "(insufficient_evidence, fail-closed)"
+            ),
+        )
+
+    # --- 3. Write-once reserve (FR-B4): refuse a second graduation on the same block. ---
     dataset_id = lockbox_dataset_id(
         protocol_hash=protocol.content_hash,
         lockbox_start=protocol.data_tiers.lockbox.start,
@@ -235,7 +268,7 @@ def confirm_on_lockbox(
     # reserve() raises LockboxSpentError if already spent — the gate, before any scoring.
     book.reserve(dataset_id, trial_id=trial_id, spent_at=spent_at)
 
-    # --- 3. Score once on the Lockbox window (one evaluate, FR-J2). ---
+    # --- 4. Score once on the Lockbox window (one evaluate, FR-J2). ---
     window = _lockbox_window(protocol)
     result = gateway.evaluate(experiment, protocol, window)
     if not result.succeeded or result.returns is None:
@@ -244,8 +277,28 @@ def confirm_on_lockbox(
             f"{result.failure_stage!r}); cannot confirm"
         )
 
-    # --- 4. Binding test + decision. ---
-    returns = result.returns
+    # --- 5. Residualize against the factor panel BEFORE scoring (FR-C3, AC-9/G2). The
+    # confirmation is on RESIDUAL alpha — market/funding-carry beta is regressed out, never
+    # scored as edge. If the provider cannot supply a panel covering the required factors, fail
+    # closed (insufficient_evidence) rather than scoring raw returns. ---
+    raw_returns = result.returns
+    panel = factor_panel_provider(window, raw_returns) if factor_panel_provider is not None else {}
+    if required_factors and not factors.panel_covers(panel, required_factors):
+        return LockboxVerdict(
+            verdict="insufficient_evidence",
+            mde=mde,
+            claimed_edge=claimed_edge,
+            binding_test=_binding_test_for(profile, claimed_edge),
+            confidence=confidence,
+            detail=(
+                "factor_panel_unwired: the Lockbox factor panel does not cover the "
+                f"{len(required_factors)} required factor column(s) — refusing to score raw "
+                "returns as residual alpha (insufficient_evidence, fail-closed)"
+            ),
+        )
+    returns = factors.residual_fold_returns(raw_returns, panel)
+
+    # --- 6. Binding test + decision. ---
     binding = _binding_test_for(profile, claimed_edge)
     seed = _lockbox_seed(dataset_id, f"{experiment.strategy_path}:{trial_id}")
     rng = np.random.default_rng(seed)

@@ -35,6 +35,7 @@ from harness.objective.gates import (
     cost_stress_gate,
     effective_breadth_gate,
     evidence_gate,
+    factor_panel_gate,
     max_drawdown_gate,
     psr_gate,
     worst_fold_gate,
@@ -169,6 +170,7 @@ def compute_res(
     trade_count: int,
     thresholds: GateThresholds,
     *,
+    required_factors: Sequence[str] = (),
     psr_benchmark: float = 0.0,
     stressed_folds: Sequence[FoldReturns] | None = None,
     stressed_factor_panels: Sequence[Mapping[str, np.ndarray]] | None = None,
@@ -178,6 +180,14 @@ def compute_res(
     ``factor_panels[i]`` is the panel for ``folds[i]`` (factor-return columns aligned to
     that fold). Pass empty mappings for an identity (no neutralization) — but the honest
     path always supplies the panel so beta/funding-carry are removed.
+
+    ``required_factors`` is the FAIL-CLOSED contract (FR-C3, AC-9/G2, PRD Principle 6): the
+    factor columns the Protocol requires neutralized. If non-empty and any fold's panel does
+    NOT cover them (empty/identity — e.g. an unwired provider on the live path), the result is
+    ``infeasible`` with ``rank_sharpe=None`` and an explicit ``factor_panel`` gate failure
+    (``factor_panel_unwired``) — NEVER a silent pass that scores RAW returns as residual alpha.
+    Default ``()`` keeps the pure-logic / panel-injected callers (which pass the true panel)
+    unchanged. This is the mechanical wall against a pure factor-beta strategy graduating.
 
     ``stressed_folds`` (optional) is the same folds re-evaluated under STRESSED costs — the
     evidence for the cost-stress survival gate. When supplied, the cost-stress gate is part
@@ -190,6 +200,24 @@ def compute_res(
     if len(folds) != len(factor_panels):
         raise ValueError("folds and factor_panels must be the same length")
 
+    # --- Fail-closed factor wall FIRST (AC-9/G2): the Protocol requires neutralization but the
+    # panel does not cover it ⇒ infeasible, before any residual is scored. A pure factor-beta
+    # strategy can never graduate via an unwired/identity panel scored as raw alpha. ---
+    if required_factors:
+        covered = bool(folds) and all(
+            factors.panel_covers(panel, required_factors) for panel in factor_panels
+        )
+        if not covered:
+            gate = factor_panel_gate(False, len(required_factors))
+            return ResResult(
+                feasible=False,
+                gate_results={gate.name: gate},
+                rank_sharpe=None,
+                per_fold_sharpe=(),
+                residual_info_ratio=None,
+                psr=None,
+            )
+
     pooled_fr, per_fold_aligned = _pooled_residual_fr(folds, factor_panels)
     per_fold_sharpe = [s for s in per_fold_aligned if s is not None]  # measurable evidence unit
     rank_sharpe = metrics.sharpe(pooled_fr)
@@ -199,7 +227,12 @@ def compute_res(
 
     # --- Stage-1 feasibility gates (hard, binary) — measured on the RESIDUAL legs ---
     pooled_symbols = _pool_residual_by_symbol(folds, factor_panels)
-    gate_list = [
+    gate_list = []
+    if required_factors:
+        # Coverage was confirmed above (else we returned infeasible); record the passing gate so
+        # the verdict is observable as "neutralization was actually applied", not assumed.
+        gate_list.append(factor_panel_gate(True, len(required_factors)))
+    gate_list += [
         evidence_gate(trade_count, thresholds.min_trades),
         psr_gate(psr, thresholds.psr_floor),
         concentration_gate(pooled_symbols, thresholds.max_concentration),

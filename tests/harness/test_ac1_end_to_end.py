@@ -148,7 +148,9 @@ def _genuine_fold(seed, symbols, n=240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    return fold, {"market": market}
+    # COVERING panel (market + funding_carry, the Protocol-required columns; funding ~0 here but
+    # present, as the real provider supplies it). The genuine alpha survives neutralization.
+    return fold, {"market": market, "funding_carry": np.zeros_like(market)}
 
 
 class _GenuineGateway:
@@ -285,7 +287,7 @@ def test_ac1_positive_control_genuine_edge_logs_graduates_and_confirms():
     # Only assert confirmability is possible (powered): MDE ≤ claimed edge ⇒ not auto-insufficient.
     verdict = confirm_on_lockbox(
         exp, proto, profile, claimed_edge=float(claimed), gateway=gw, book=LockboxBook(),
-        trial_id="g1", spent_at="2024-12-15T00:00:00Z",
+        trial_id="g1", spent_at="2024-12-15T00:00:00Z", factor_panel_provider=gw.panel_for,
     )
     assert verdict.verdict in ("confirmed", "rejected")  # powered ⇒ a real verdict, not insufficient
     assert verdict.verdict != "insufficient_evidence"

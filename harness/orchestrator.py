@@ -149,10 +149,15 @@ def run_walk_forward_res(
                 stressed_folds.append(s_result.returns)
                 stressed_panels.append(panel)
 
+    # The factor columns the Protocol REQUIRES neutralized — the fail-closed contract passed
+    # through to RES (AC-9/G2). An unwired/identity panel on this live path therefore yields an
+    # infeasible RES, never a raw-returns pass scored as residual alpha.
+    required_factors = protocol.objective.factor_panel.required_factors
+
     if not realistic_folds:
         # No usable fold ⇒ no evidence ⇒ infeasible RES (compute_res over an empty set yields
         # rank None / failing gates; we still return it so the caller sees the gate detail).
-        res = compute_res([], [], trade_count=0, thresholds=thresholds)
+        res = compute_res([], [], trade_count=0, thresholds=thresholds, required_factors=required_factors)
         return WalkForwardRES(res=res, fold_windows=tuple(fold_windows),
                               fold_results=tuple(fold_results), n_folds_evaluated=0)
 
@@ -163,6 +168,7 @@ def run_walk_forward_res(
         panels,
         trade_count=trade_count,
         thresholds=thresholds,
+        required_factors=required_factors,
         stressed_folds=stressed_folds if have_stress else None,
         stressed_factor_panels=stressed_panels if have_stress else None,
     )

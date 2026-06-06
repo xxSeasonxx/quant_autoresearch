@@ -19,7 +19,7 @@ Pure numpy (lstsq); deterministic.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -51,6 +51,20 @@ class ResidualResult:
     alpha: float  # regression intercept (the average residual alpha per period)
     betas: Mapping[str, float]  # factor name -> loading (the beta that IS removed)
     r_squared: float  # fraction of return variance explained by factor BETAS (not the intercept)
+
+
+def panel_covers(
+    factor_panel: Mapping[str, np.ndarray], required_factors: Sequence[str]
+) -> bool:
+    """Does this panel cover every factor the objective REQUIRES neutralized? (FR-C3, AC-9/G2).
+
+    The fail-closed test the judgment layer runs before trusting a residual: a panel covers the
+    requirement iff every required factor name is present as a column. An empty/identity panel
+    covers nothing, so a Protocol that requires neutralization fails closed rather than scoring
+    raw returns as residual alpha. With no required factors the requirement is vacuously met
+    (identity is then a deliberate choice, not an unwired accident).
+    """
+    return all(name in factor_panel for name in required_factors)
 
 
 def _panel_matrix(

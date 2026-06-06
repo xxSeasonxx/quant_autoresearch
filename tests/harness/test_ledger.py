@@ -190,3 +190,31 @@ def test_finalize_unknown_reservation_raises(tmp_path):
             per_fold_returns=_folds(), res=_res(),
             provenance={"snapshot": "s"}, created_at="2026-06-05T00:00:01Z",
         )
+
+
+def test_failed_replace_leaves_no_orphan_tmp_and_keeps_live_ledger(tmp_path, monkeypatch):
+    """A write that fails at the atomic swap must not leave a ``.tmp`` artifact behind, and the
+    live ledger must keep its prior good state (the rewrite-and-swap is all-or-nothing)."""
+    import harness.ledger as ledger_mod
+
+    path = tmp_path / "f.jsonl"
+    led = TrialLedger(path)
+    _reserve_and_finalize(led, trial_id="good")  # one valid, persisted trial
+
+    # Force the atomic swap to fail on the very next write.
+    def _boom(_src, _dst):
+        raise OSError("simulated swap failure")
+
+    monkeypatch.setattr(ledger_mod.os, "replace", _boom)
+    with pytest.raises(OSError, match="simulated swap failure"):
+        led.reserve(
+            trial_id="doomed", family_id="f", experiment_hash="e",
+            protocol_hash="p", thesis="t", reserved_at="2026-06-05T00:00:02Z",
+        )
+
+    # The half-written temp artifact was cleaned up (Fix 3), and the live file is untouched.
+    assert not (tmp_path / "f.jsonl.tmp").exists()
+    assert list(path.parent.glob("*.tmp")) == []
+    reread = TrialLedger(path)
+    assert reread.charged_trial_ids() == {"good"}
+    assert len(reread.rows()) == 1

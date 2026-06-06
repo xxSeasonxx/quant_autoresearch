@@ -1,33 +1,39 @@
-"""Budget Manager — the global, MinBTL-sized, effective-N Selection-look cap (FR-E2/E3/E5).
+"""Budget Manager — the global, MinBTL-sized Selection-look cap (FR-E2/E3/E5).
 
 Trials are the scarce resource. The multiple-testing unit is **each Selection look**, and the
 budget is **GLOBAL to the campaign** — not reset per family (FR-E2; the resolved decision in the
-phase plan). Every Selection touch spends 1; the family fingerprint is the unforgeable key that
-stops relabeling from minting budget (AC-2) and the clustering used for effective-N *sizing* —
-it is NOT a per-family budget.
+phase plan). Every Selection touch spends 1.
+
+The budget is one of three complementary anti-gaming layers; it is precisely the **first**:
+
+1. **The budget** (here) is a hard cap on the number of *raw* Selection looks. Its size is a pure
+   function of the **effective SAMPLE** — MinBTL on the autocorrelation-discounted history (the
+   Asset Profiler's ``budget_upper_bound``; FR-E3). It is deliberately **family-count-INDEPENDENT**:
+   the cap is one global integer that does not grow with the number of distinct families, so no
+   amount of relabeling/splitting a config into "new" families can mint additional looks (AC-2).
+2. **Trial CORRELATION** is not the budget's job. Correlated looks are corrected by P4's
+   graduation audit (Romano-Wolf / PBO over the logged per-fold *returns*, which absorb residual
+   correlation directly — FR-F1), NOT by loosening this cap. The budget never tries to "discount"
+   itself for correlation; doing so would be the loosening AC-2 forbids.
+3. The family **fingerprint** (``harness.family``) is the unforgeable key the audit groups by; it
+   is structure-derived, not agent-chosen.
+
+So the budget caps raw looks from the effective sample; correlation is handled downstream. Keeping
+the cap family-independent is what makes AC-2 hold: tightening from clustering would be safe (it
+can only ``min`` the cap down), but the live cap takes no family input at all, so the property is
+unconditional.
 
 Two numbers, kept distinct (first principles):
 
-1. **The cap** is an integer upper bound on the number of Selection looks the campaign may run.
-   Its size comes from the Asset Profiler's ``budget_upper_bound`` — MinBTL on the **effective
-   sample** (autocorrelation-discounted history; see ``profiler``). FR-E3's other half —
-   **effective independent trials** (clustering correlated configs) — refines the cap downward:
-   the cap is ``min(profile.budget_upper_bound, effective-trial bound)``. Because the cap is one
-   global integer that does not grow with the number of families, no relabeling/splitting can
-   raise it (AC-2).
+1. **The cap** is an integer upper bound on the number of Selection looks the campaign may run,
+   constructed directly from ``profile.budget_upper_bound`` (a pure function of effective YEARS).
+   Because it does not grow with the number of families, no relabeling/splitting can raise it.
 
 2. **Consumption** is the count of looks already CHARGED — every reserved Selection touch
    (finalized or crashed; the ledger's ``charged_count``). A look may be reserved **iff**
    ``charged < cap``. When ``charged == cap`` the budget is **spent**: the harness STOPS issuing
    looks (FR-E5). The agent is never handed a countdown — "no more looks" is a quota state, not a
    per-call rejection the agent can probe around.
-
-Effective-N (FR-E3, sizing): correlated configs do not count as independent evidence. Configs in
-the **same family** are correlated; the number of **distinct families** is the count of effective
-independent directions the search has explored. ``effective_independent_trials`` exposes this for
-the cap refinement here and for P4's audit. (The audit itself operates on the logged *returns*,
-which absorb residual correlation directly — FR-F1 — so this clustering is the search-time proxy,
-not the final correction.)
 
 Pure: no clock, no RNG, no I/O, no ``quant_strategies``. The manager reads consumption from the
 ledger (injected) and never mutates it — reserving a look is the ledger's job, so a reserved look
@@ -37,42 +43,13 @@ is charged exactly once and the two states cannot disagree.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Protocol as TypingProtocol
+from typing import Protocol as TypingProtocol
 
 
 class _ChargedSource(TypingProtocol):
     """The slice of the ledger the budget reads: how many looks are already charged."""
 
     def charged_count(self) -> int: ...
-
-
-def effective_independent_trials(family_ids: Iterable[str]) -> int:
-    """Effective independent trials = the number of DISTINCT families among the looks.
-
-    Configs sharing a family are correlated (same signal structure), so a family contributes one
-    effective independent direction no matter how many param-tweaks it spawned. This is the
-    search-time effective-N (FR-E3) used to size the cap and, in P4, to reason about top-K.
-    """
-    return len({f for f in family_ids})
-
-
-def size_budget(
-    profile_upper_bound: int,
-    *,
-    effective_trials_cap: int | None = None,
-) -> int:
-    """Compute the global cap as an upper bound (FR-E3).
-
-    ``profile_upper_bound`` is the profiler's MinBTL-on-effective-sample cap (the primary bound).
-    ``effective_trials_cap``, when supplied, is a tighter bound from the effective independent
-    trials the campaign expects to run; the cap is the **minimum** of the two (a campaign can
-    never run more looks than either bound allows). Always ≥ 1 so a campaign can take at least one
-    honest look when the profile admits any.
-    """
-    cap = int(profile_upper_bound)
-    if effective_trials_cap is not None:
-        cap = min(cap, int(effective_trials_cap))
-    return max(1, cap)
 
 
 class BudgetExhaustedError(RuntimeError):
@@ -101,7 +78,8 @@ class BudgetStatus:
 class BudgetManager:
     """The global Selection-look budget, enforced against the ledger's charged count.
 
-    ``cap`` is the global integer bound (from ``size_budget``). ``ledger`` is any object exposing
+    ``cap`` is the global integer bound (from ``profile.budget_upper_bound`` — MinBTL on the
+    effective sample, family-count-independent). ``ledger`` is any object exposing
     ``charged_count()`` (the ``TrialLedger``); the manager never writes to it. Consumption is read
     live, so a crashed-but-reserved look (still charged in the ledger) correctly counts against the
     budget — the budget and the ledger cannot drift apart (FR-I2/NFR-6).

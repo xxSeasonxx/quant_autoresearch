@@ -1,8 +1,8 @@
-"""Trial Ledger — append-only, reproducible, fail-safe (FR-E1, FR-I1, FR-I2, NFR-6).
+"""Trial Ledger — logically append-only, reproducible, fail-safe (FR-E1, FR-I1, FR-I2, NFR-6).
 
 Every Selection look is a logged bet. The ledger is the campaign's system of record (it
-retires ``results.tsv``): an **append-only** JSONL file where each row carries everything the
-P4 audit and an AC-7 reproduction need:
+retires ``results.tsv``): a **logically append-only** JSONL file where each row carries
+everything the P4 audit and an AC-7 reproduction need:
 
 - ids: ``trial_id``, the computed ``family_id`` (FR-E4), ``experiment_hash`` (strategy+params),
   ``protocol_hash`` (FR-H2), and the Lockbox ``dataset_id`` it relates to (P2's book);
@@ -14,12 +14,17 @@ P4 audit and an AC-7 reproduction need:
 - ``thesis`` (effect / observable / falsifier) and ``created_at`` (ISO, **injected** — never read
   from a clock inside this pure module, NFR-1).
 
-**Append-only & atomic (FR-I2/NFR-6).** A Selection touch is RESERVED before it runs and
-FINALIZED after. Both are single appended JSONL records (`os.replace` of a rewritten temp file —
-the only safe atomic write on top of an append-only file). A crash *after* reserve but *before*
-finalize leaves a RESERVED record with no FINALIZED partner: the look still **counts as spent**
-(``charged_trial_ids`` includes it), so a crash can never yield a silent un-ledgered look. Rows
-are never mutated; a finalize is a new record keyed to the reservation's ``trial_id``.
+**Logically append-only, physically rewrite-and-swap (FR-I2/NFR-6).** A Selection touch is
+RESERVED before it runs and FINALIZED after. Each adds one new JSONL record — *logically* an
+append: existing rows are never mutated or deleted, and a finalize is a fresh record keyed to the
+reservation's ``trial_id``. On disk the write is **not** a literal ``O_APPEND``; ``_append``
+rewrites the whole file (existing bytes + the new line) to a temp file and ``os.replace``s it over
+the ledger. ``os.replace`` is atomic on POSIX, so a crash mid-write never leaves a torn ledger —
+the live file is either the old state or the new one, never a partial line. The cost is O(n) bytes
+per write (the whole file is re-read and re-written); at the single-digit MinBTL look budget this
+is negligible, and it buys crash-atomicity that a bare append cannot. A crash *after* reserve but
+*before* finalize leaves a RESERVED record with no FINALIZED partner: the look still **counts as
+spent** (``charged_trial_ids`` includes it), so a crash can never yield a silent un-ledgered look.
 
 **Lossless numpy round-trip (AC-7).** ``FoldReturns`` arrays are serialized as base64 of their
 **raw little-endian bytes** plus dtype + shape, so a persisted row reconstructs ``values`` and
@@ -229,11 +234,12 @@ class LedgerError(RuntimeError):
 
 
 class TrialLedger:
-    """An append-only JSONL trial ledger (the campaign system of record).
+    """A logically append-only JSONL trial ledger (the campaign system of record).
 
     In-memory by default; pass ``path`` to persist across processes (the campaign lifecycle).
-    The append-only invariant is mechanical: ``reserve`` and ``finalize`` only ever *append* a
-    record; nothing rewrites or deletes an existing one.
+    The append-only invariant is logical: ``reserve`` and ``finalize`` only ever add a *new*
+    record; no existing record is ever mutated or deleted. On disk each add is a crash-atomic
+    rewrite-and-swap (see ``_append``), not a literal file append.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -250,16 +256,29 @@ class TrialLedger:
                 self._records.append(json.loads(line))
 
     def _append(self, record: Mapping[str, object]) -> None:
-        """Append one JSONL record. Atomic on disk: rewrite a temp file with all records +
-        the new one, then ``os.replace`` over the ledger (the safe atomic primitive; a partial
-        write never replaces the live file). In-memory then mirrors the persisted state."""
+        """Add one JSONL record via a crash-atomic rewrite-and-swap (logical append, FR-I2).
+
+        Not a literal ``O_APPEND``: rewrite a temp file with all existing records + the new one,
+        then ``os.replace`` it over the ledger. ``os.replace`` is atomic on POSIX, so a partial
+        write never replaces the live file — the ledger is always the old or the new state, never
+        torn. O(n) bytes per write (whole file re-read/re-written), which is negligible at the
+        single-digit MinBTL look budget. In-memory then mirrors the persisted state.
+
+        If the write or swap fails, the half-written ``.tmp`` artifact is removed (try/finally) so
+        a failed append leaves no orphan file behind; the live ledger is untouched.
+        """
         line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         if self._path is not None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(self._path.suffix + ".tmp")
             existing = self._path.read_text(encoding="utf-8") if self._path.is_file() else ""
-            tmp.write_text(existing + line + "\n", encoding="utf-8")
-            os.replace(tmp, self._path)  # atomic on POSIX
+            try:
+                tmp.write_text(existing + line + "\n", encoding="utf-8")
+                os.replace(tmp, self._path)  # atomic on POSIX
+            finally:
+                # On success ``os.replace`` consumed ``tmp``; on failure it may linger — clean it up
+                # so a failed write never leaves an orphan temp artifact beside the live ledger.
+                tmp.unlink(missing_ok=True)
         self._records.append(json.loads(line))
 
     # -- reserve / finalize (the fail-safe touch protocol, FR-I2/NFR-6) --

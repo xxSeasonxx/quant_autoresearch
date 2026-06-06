@@ -148,11 +148,15 @@ def test_real_strategy_param_only_change_is_the_same_family(tmp_path):
     src = __import__("inspect").getsource(strategy)
     base_id = compute_family_id(src)
 
-    # A literal-only edit to the source (e.g. a hardcoded default) — same family.
-    literal_edit = src.replace("_DEFAULT_STRATEGY_ID = ", "_DEFAULT_STRATEGY_ID = ", 1)
-    literal_edit = literal_edit.replace('"long"', '"long"')  # no-op safety
+    # A REAL literal-only edit to the source: change a hardcoded default-param value
+    # (0.08 → 0.09 for BASE_POSITION_PCT). Params live in the Experiment, not the source, so a
+    # numeric-literal change is structure-invariant ⇒ same family. (Asserted independently of
+    # ``test_literal_value_change_is_the_same_family``, which pins the same rule on a fixture.)
+    literal_edit = src.replace('"BASE_POSITION_PCT": 0.08', '"BASE_POSITION_PCT": 0.09', 1)
+    assert literal_edit != src  # the edit actually changed the source (no vacuous .replace)
     # Flip a real comparison operator deep in the signal — must be a NEW family.
     logic_edit = src.replace("if rsi > 50.0:", "if rsi < 50.0:", 1)
+    assert logic_edit != src
 
     assert compute_family_id(literal_edit) == base_id
     assert compute_family_id(logic_edit) != base_id

@@ -1,7 +1,7 @@
-"""Budget Manager — global cap, effective-N sizing, fail-safe consumption (FR-E2/E3/E5).
+"""Budget Manager — global cap, fail-safe consumption (FR-E2/E3/E5).
 
 Unit-level guarantees:
-- the cap is a global integer upper bound sized on effective-N (sizing math);
+- the cap is a global integer upper bound sized on the effective SAMPLE (family-count-independent);
 - consumption reads the ledger's CHARGED count, so a crashed-but-reserved look still counts;
 - when charged == cap the budget is spent and no more looks may be reserved (FR-E5).
 The campaign-level AC-2/AC-8 assertions live in ``test_selection_budget.py``.
@@ -11,12 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness.budget import (
-    BudgetExhaustedError,
-    BudgetManager,
-    effective_independent_trials,
-    size_budget,
-)
+from harness.budget import BudgetExhaustedError, BudgetManager
 
 
 class _FakeLedger:
@@ -32,23 +27,41 @@ class _FakeLedger:
         self._charged += 1
 
 
-def test_effective_independent_trials_clusters_by_family():
-    # Five looks across two families ⇒ two effective independent directions (FR-E3).
-    fams = ["F1", "F1", "F1", "F2", "F2"]
-    assert effective_independent_trials(fams) == 2
-    assert effective_independent_trials([]) == 0
-    assert effective_independent_trials(["F1"]) == 1
+class _FamilyCountingLedger:
+    """A ledger stub whose charged-count equals the number of DISTINCT families charged.
+
+    This is the surface a future change might (wrongly) try to use to size the cap upward as more
+    families appear — exactly the AC-2 loosening the budget must never allow.
+    """
+
+    def __init__(self) -> None:
+        self._families: set[str] = set()
+
+    def charge_family(self, family_id: str) -> None:
+        self._families.add(family_id)
+
+    def charged_count(self) -> int:
+        return len(self._families)
 
 
-def test_size_budget_is_an_upper_bound_min_of_the_two_bounds():
-    # The profiler's MinBTL-on-effective-sample bound is the primary cap.
-    assert size_budget(8) == 8
-    # An effective-trials bound tightens it downward (never up).
-    assert size_budget(8, effective_trials_cap=3) == 3
-    assert size_budget(3, effective_trials_cap=8) == 3
-    # Always at least one honest look.
-    assert size_budget(0) == 1
-    assert size_budget(5, effective_trials_cap=0) == 1
+def test_cap_cannot_be_raised_by_adding_families():
+    """AC-2: the budget cap is a fixed global integer; nothing about how many DISTINCT families
+    have been charged can raise it. A campaign that has explored 1 family and one that has
+    explored 100 share the identical cap — so relabeling/splitting cannot mint headroom (FR-E2).
+
+    This fails if anyone later wires family count into the cap (e.g. ``cap = base * n_families``).
+    """
+    ledger = _FamilyCountingLedger()
+    bm = BudgetManager(cap=3, ledger=ledger)
+    cap_with_zero_families = bm.cap
+
+    for i in range(100):
+        ledger.charge_family(f"F{i}")
+        # The cap is immutable regardless of how many families have been seen.
+        assert bm.cap == cap_with_zero_families == 3
+    # And once charges (here, distinct families) reach the cap, the budget is spent — the family
+    # explosion consumes the cap, it never enlarges it.
+    assert bm.status().spent and not bm.can_reserve()
 
 
 def test_remaining_decrements_as_looks_are_charged():

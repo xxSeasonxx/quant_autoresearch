@@ -14,21 +14,30 @@ correlation DIRECTLY — no ``N=K`` shortcut, no separate ``N_effective`` estima
 How the correlation is absorbed (the key design choice)
 --------------------------------------------------------
 Each trial has a per-fold OOS return series. We align the K trials' pooled OOS tracks into a
-common ``(T, K)`` matrix (truncated to the common length T — the tracks are the same
-walk-forward Selection folds, so they share a time index) and **resample whole blocks on a
-SHARED index across all K columns at once**. A single set of circular block-start indices is
-drawn per bootstrap replicate and applied to every column simultaneously, so if trials co-move
-at time t that co-movement is carried into every replicate. The bootstrap distribution of the
-*max* studentized statistic therefore widens exactly as much as the trials are correlated —
-which is the correlation absorption FR-F1 demands. Per-column centering (subtract each
+common ``(T, K)`` matrix on their **shared timestamp index** — the INTERSECTION of the trials'
+bar timestamps, so row ``t`` of every column is the same calendar bar (genuinely
+contemporaneous). Non-finite bars are dropped on that intersection consistently across all
+columns, so a missing bar in one trial never positionally shifts another. We then **resample
+whole blocks on a SHARED index across all K columns at once**: a single set of circular
+block-start indices is drawn per bootstrap replicate and applied to every column simultaneously,
+so if trials co-move at time t that co-movement is carried into every replicate. The bootstrap
+distribution of the *max* studentized statistic therefore widens exactly as much as the trials
+are correlated — the correlation absorption FR-F1 demands. Per-column centering (subtract each
 column's mean) imposes the joint null H0: every trial's true mean is zero.
 
 Statistic
 ---------
 Per trial, the one-sided studentized mean of its pooled OOS return track ``t_i = mean_i/SE_i``
-(SE = sample std / sqrt(n)). Monotone in Sharpe for a fixed sample; one-sided because only a
-*positive* edge is a graduation candidate. The bootstrap supplies the joint null distribution
-of the studentized stats, so the procedure is correlation- and heteroskedasticity-robust.
+with a **HAC (Newey-West) long-run-variance** SE — ``SE = sqrt(LRV/n)``, not the iid
+``std/sqrt(n)``. The HAC scale is the serial-correlation-corrected variance of the sample mean,
+so the statistic is asymptotically PIVOTAL under AR(p) within-trial memory: the same long-run
+scale divides the observed mean and every bootstrap-null mean, so the null distribution matches
+the observed sampling distribution and FWER is controlled even when a finite block length cannot
+fully recover the autocorrelation (the iid SE under-states the mean's variance once φ≥0.3 and
+let AR(1) noise graduate above α — the HAC SE is the root fix). Monotone in Sharpe for a fixed
+sample; one-sided because only a *positive* edge is a graduation candidate. The block bootstrap
+uses a **data-driven (Politis-White) block length** so it also carries the within-trial memory.
+Together these make the procedure correlation- and heteroskedasticity-robust.
 
 Determinism (NFR-1, AC-7-critical)
 ----------------------------------
@@ -60,6 +69,12 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from harness.bootstrap import (
+    circular_block_indices,
+    newey_west_lrv,
+    nw_lag,
+    politis_white_block,
+)
 from harness.ledger import LedgerRow
 
 _EPS = 1e-12
@@ -149,40 +164,80 @@ def _trial_fingerprint(row: LedgerRow) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _pooled_track(row: LedgerRow) -> np.ndarray:
-    """One trial's pooled OOS return track: its per-fold series concatenated in fold order.
+def _pooled_track(row: LedgerRow) -> tuple[np.ndarray, np.ndarray]:
+    """One trial's pooled OOS track as ``(timestamps, values)``, folds concatenated in order.
 
-    The audit operates on the realized OOS returns the ledger logged (FR-E1). Concatenating
-    the folds in order preserves each fold's internal serial correlation; the block bootstrap
-    then respects that memory. Non-finite bars are dropped (an unmeasurable bar is not
-    evidence) — consistent with the metrics layer's finite-only contract.
+    The audit operates on the realized OOS returns the ledger logged (FR-E1). Concatenating the
+    folds preserves each fold's internal serial correlation; the block bootstrap then respects
+    that memory. The TIMESTAMPS are carried alongside the values so alignment can intersect
+    trials on their genuinely contemporaneous bars (not positionally) — a NaN dropped in one
+    trial must not positionally shift it relative to the others. Bars are NOT dropped here;
+    non-finite bars are dropped on the shared index in ``_align_tracks`` (consistently across
+    columns). Duplicate timestamps within a trial keep the first occurrence (walk-forward folds
+    are non-overlapping, so this is a no-op in practice but guards a malformed ledger).
     """
-    parts = [np.asarray(fr.values, dtype=np.float64) for fr in row.per_fold_returns]
-    track = np.concatenate(parts) if parts else np.empty(0, dtype=np.float64)
-    return track[np.isfinite(track)]
+    if not row.per_fold_returns:
+        return (
+            np.empty(0, dtype="datetime64[ns]"),
+            np.empty(0, dtype=np.float64),
+        )
+    ts_parts = [np.asarray(fr.timestamps, dtype="datetime64[ns]") for fr in row.per_fold_returns]
+    val_parts = [np.asarray(fr.values, dtype=np.float64) for fr in row.per_fold_returns]
+    timestamps = np.concatenate(ts_parts)
+    values = np.concatenate(val_parts)
+    # Unique, SORTED-by-timestamp index keeping the first value at each timestamp. ``np.unique``
+    # returns the sorted unique timestamps and the first-occurrence positions; selecting values at
+    # those positions yields a strictly-increasing, unique track — so ``_align_tracks`` can
+    # intersect and ``searchsorted`` is always valid regardless of fold order on disk.
+    unique_ts, first_idx = np.unique(timestamps, return_index=True)
+    return unique_ts, values[first_idx]
 
 
 def _align_tracks(rows: Sequence[LedgerRow]) -> tuple[np.ndarray, tuple[str, ...]]:
-    """Align the trials' pooled OOS tracks into a common ``(T, K)`` matrix.
+    """Align the trials' pooled OOS tracks into a common ``(T, K)`` matrix on a SHARED timestamp
+    index — the contemporaneous bars the shared-index bootstrap requires (FR-F1).
 
-    Truncates every track to the common length T = min track length (the tracks are the same
-    walk-forward Selection folds, so they are near-equal; truncation is conservative — less
-    data ⇒ a wider null ⇒ harder to graduate, never anti-conservative). Trials with an empty
-    track are dropped (no evidence to audit). Returns the matrix and the aligned trial-id
-    tuple in the SAME column order.
+    Each trial contributes a ``(timestamps, values)`` track. The common index is the
+    INTERSECTION of the trials' timestamps (genuinely contemporaneous bars), then any timestamp
+    where ANY trial's value is non-finite is dropped CONSISTENTLY across all columns — so a NaN
+    in one trial removes that bar everywhere rather than positionally shifting one trial against
+    the others (the latent misalignment bug). The matrix rows are the surviving timestamps in
+    increasing order, so column ``j`` and column ``j'`` at row ``t`` are the SAME calendar bar —
+    which is what lets one shared block-index draw carry the true cross-trial co-movement.
 
-    Truncation takes the LAST T bars of each track (the most-recent, forward-most OOS), so the
-    common index is a shared recent window across trials — the alignment that best preserves
-    cross-trial co-movement (FR-F1).
+    Intersecting is conservative in the methodology's sense: it can only DROP bars (never invent
+    co-movement), so the null is never narrowed by misalignment. Trials with an empty track are
+    dropped (no evidence to audit). Returns the matrix and the aligned trial-id tuple in the
+    SAME column order.
     """
-    tracks = [(row.trial_id, _pooled_track(row)) for row in rows]
-    tracks = [(tid, tr) for tid, tr in tracks if tr.size > 0]
+    tracks = [(row.trial_id, *_pooled_track(row)) for row in rows]
+    tracks = [(tid, ts, val) for tid, ts, val in tracks if ts.size > 0]
     if not tracks:
         return np.empty((0, 0), dtype=np.float64), ()
-    common = min(tr.size for _, tr in tracks)
-    ids = tuple(tid for tid, _ in tracks)
-    matrix = np.column_stack([tr[-common:] for _, tr in tracks])
-    return matrix, ids
+
+    # Common calendar index = intersection of every trial's timestamps.
+    common_ts = tracks[0][1]
+    for _, ts, _ in tracks[1:]:
+        common_ts = np.intersect1d(common_ts, ts, assume_unique=True)
+    if common_ts.size == 0:
+        return np.empty((0, 0), dtype=np.float64), ()
+
+    # Gather each trial's values on the common index (searchsorted: tracks are sorted unique).
+    columns = []
+    ids = []
+    for tid, ts, val in tracks:
+        pos = np.searchsorted(ts, common_ts)
+        columns.append(val[pos])
+        ids.append(tid)
+    matrix = np.column_stack(columns)
+
+    # Drop any common-index bar that is non-finite in ANY column — consistently, no positional
+    # shift (the alignment-correctness fix). Keeps the matrix genuinely contemporaneous.
+    finite_rows = np.all(np.isfinite(matrix), axis=1)
+    matrix = matrix[finite_rows]
+    if matrix.shape[0] == 0:
+        return np.empty((0, 0), dtype=np.float64), ()
+    return matrix, tuple(ids)
 
 
 # --------------------------------------------------------------------------- #
@@ -190,51 +245,55 @@ def _align_tracks(rows: Sequence[LedgerRow]) -> tuple[np.ndarray, tuple[str, ...
 # --------------------------------------------------------------------------- #
 
 
-def _studentized_means(matrix: np.ndarray) -> np.ndarray:
-    """Per-column one-sided studentized mean ``mean/SE`` (SE = std/sqrt(n)).
+def _studentized_means(matrix: np.ndarray, lag: int | None = None) -> np.ndarray:
+    """Per-column one-sided studentized mean ``mean/SE`` with a HAC (Newey-West) SE.
 
-    A degenerate (near-zero-variance) column has no usable statistic; it maps to 0.0 (the null
-    value) so it can never reject — an unmeasurable edge is not a significant one (fail-closed,
-    consistent with the gates).
+    ``SE = sqrt(LRV/n)`` where ``LRV`` is the Newey-West long-run variance (NOT the iid
+    ``std/sqrt(n)``). Using the serial-correlation-corrected scale makes the statistic
+    **asymptotically pivotal** under AR(p) dependence: the same long-run scale divides both the
+    observed mean and every bootstrap-null mean, so observed and null share one
+    serial-correlation-robust scale and the bootstrap quantiles match the observed sampling
+    distribution regardless of how much within-trial memory the finite block length recovers.
+    The iid SE under-states the mean's variance when φ>0 (the defect that let AR(1) noise
+    graduate above α); the HAC SE does not.
+
+    ``lag`` is the Bartlett truncation lag; ``None`` ⇒ the automatic ``nw_lag(n)``. The SAME
+    ``lag`` is passed to the observed and the bootstrap statistics so the studentization is
+    consistent on both sides. A degenerate (near-zero-LRV) column has no usable statistic; it
+    maps to 0.0 (the null value) so it can never reject — fail-closed, consistent with the gates.
     """
     n = matrix.shape[0]
     if n < 2:
         return np.zeros(matrix.shape[1], dtype=np.float64)
+    if lag is None:
+        lag = nw_lag(n)
     means = matrix.mean(axis=0)
-    sd = matrix.std(axis=0, ddof=1)
-    se = sd / math.sqrt(n)
+    lrv = newey_west_lrv(matrix, lag)
+    se = np.sqrt(np.maximum(lrv, 0.0) / n)
     out = np.zeros_like(means)
     live = se > _EPS
     out[live] = means[live] / se[live]
     return out
 
 
-def _block_length(n: int) -> int:
-    """Circular-block length ``b ≈ n**(1/3)`` (the standard stationary-bootstrap rule).
+def _block_length(matrix: np.ndarray) -> int:
+    """Data-driven circular-block length for the shared-index bootstrap of a ``(T, K)`` matrix.
 
-    Long enough to carry within-trial serial correlation into each resample, short enough to
-    keep the bootstrap powered. Clamped to ``[1, n]``.
+    The shared-index scheme draws ONE block-start vector applied to every column, so it needs a
+    SINGLE scalar block length. Take the Politis-White automatic length (``politis_white_block``)
+    per column and use the MAX across columns: the longest within-trial memory governs, so the
+    block is long enough to carry the most serially-correlated trial's autocorrelation into every
+    resample (conservative — a too-short block is the failure that under-widened the null).
+    Clamped to ``[1, T]``.
     """
+    n = matrix.shape[0]
     if n <= 1:
         return 1
-    return int(min(max(1, round(n ** (1.0 / 3.0))), n))
-
-
-def _shared_block_indices(rng: np.random.Generator, n: int, block: int) -> np.ndarray:
-    """One circular-block index vector of length ``n`` (shared across all K columns).
-
-    Draws ``ceil(n/block)`` random block starts in ``[0, n)`` and lays down contiguous blocks
-    of length ``block`` with wrap-around (circular), then truncates to ``n``. Applying the SAME
-    index vector to every column is what preserves the cross-trial co-movement at each
-    resampled time (FR-F1).
-    """
-    if n <= 0:
-        return np.empty(0, dtype=np.intp)
-    n_blocks = int(math.ceil(n / block))
-    starts = rng.integers(0, n, size=n_blocks)
-    offsets = np.arange(block)
-    idx = ((starts[:, None] + offsets[None, :]) % n).reshape(-1)[:n]
-    return idx.astype(np.intp)
+    k = matrix.shape[1]
+    if k == 0:
+        return 1
+    block = max(politis_white_block(matrix[:, j]) for j in range(k))
+    return int(min(max(1, block), n))
 
 
 def _bootstrap_null_stats(
@@ -242,22 +301,25 @@ def _bootstrap_null_stats(
     rng: np.random.Generator,
     n_bootstrap: int,
     block: int,
+    lag: int,
 ) -> np.ndarray:
     """Bootstrap the joint null distribution of the per-column studentized stats.
 
     ``centered`` is the ``(T, K)`` matrix with each column demeaned (H0: true mean 0). Each
     replicate draws ONE shared circular-block index (so cross-trial correlation is preserved)
-    and recomputes the K studentized means. Returns ``boot_stats`` of shape
-    ``(n_bootstrap, K)`` — the per-column bootstrap studentized stats, from which the
-    Romano-Wolf step-down takes the right-tail probability of the max over any surviving set
-    (the shared-index draw is what makes those maxima carry the cross-trial dependence).
+    and recomputes the K HAC-studentized means with the SAME ``lag`` used for the observed
+    statistic — so observed and null share the serial-correlation-corrected scale and the
+    statistic is asymptotically pivotal. Returns ``boot_stats`` of shape ``(n_bootstrap, K)``,
+    from which the Romano-Wolf step-down takes the right-tail probability of the max over any
+    surviving set (the shared-index draw is what makes those maxima carry the cross-trial
+    dependence).
     """
     n, k = centered.shape
     boot_stats = np.empty((n_bootstrap, k), dtype=np.float64)
     for b in range(n_bootstrap):
-        idx = _shared_block_indices(rng, n, block)
+        idx = circular_block_indices(rng, n, block)
         sample = centered[idx, :]
-        boot_stats[b, :] = _studentized_means(sample)
+        boot_stats[b, :] = _studentized_means(sample, lag)
     return boot_stats
 
 
@@ -428,10 +490,17 @@ def run_graduation_audit(
     as diagnostics.
 
     Statistical contract:
-    - The studentized-mean statistic and the shared-index circular block bootstrap absorb
-      cross-trial correlation and serial correlation directly (no ``N=K`` shortcut).
-    - Under K true-zero-Sharpe trials, ``P(any false graduation) ≤ alpha`` (FWER control),
-      validated empirically across seeds in the tests.
+    - The HAC-studentized-mean statistic and the shared-index circular block bootstrap absorb
+      cross-trial correlation and within-trial serial correlation directly (no ``N=K`` shortcut):
+      a Newey-West long-run-variance SE makes the statistic asymptotically pivotal under AR(p)
+      memory, and a data-driven (Politis-White) block length carries that memory into the null.
+    - Under K true-zero-Sharpe trials, ``P(any false graduation) ≤ alpha`` (FWER control). The
+      tests measure empirical FWER over many deterministic seeds and confirm control (within a
+      Monte-Carlo tolerance) across AR(1) serial correlation φ∈{0,0.2,0.3,0.6,0.8} and a heavy
+      tail (t(3)), and across cross-sectional correlation up to ρ=0.9 at φ=0 (perfectly
+      correlated nulls incur no spurious multiplicity penalty — the shared-index scheme). The
+      asymptotics weaken at very small samples combined with near-unit-root persistence, where a
+      small residual size distortion remains (it shrinks as the sample grows).
     """
     matrix, ids = _align_tracks(rows)
     fingerprints = [_trial_fingerprint(r) for r in rows]
@@ -453,10 +522,11 @@ def run_graduation_audit(
         )
 
     n = matrix.shape[0]
-    observed = _studentized_means(matrix)
+    lag = nw_lag(n)  # HAC truncation lag — shared by observed and bootstrap (pivotal scale)
+    observed = _studentized_means(matrix, lag)
     centered = matrix - matrix.mean(axis=0, keepdims=True)  # impose H0 per column
-    block = _block_length(n)
-    boot_stats = _bootstrap_null_stats(centered, rng, n_bootstrap, block)
+    block = _block_length(matrix)  # data-driven (Politis-White) circular-block length
+    boot_stats = _bootstrap_null_stats(centered, rng, n_bootstrap, block, lag)
 
     # PRIMARY: Romano-Wolf step-down (FWER-controlled survivors — binding for AC-6).
     rw_reject, rw_adj_p = _romano_wolf(observed, boot_stats, alpha)

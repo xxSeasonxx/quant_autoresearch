@@ -11,8 +11,6 @@ so the verdict is deterministic with synthetic returns (no live data, no engine 
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
@@ -21,6 +19,7 @@ from harness.foundation import FoldEvalResult
 from harness.lockbox import (
     LockboxError,
     _binding_test_for,
+    _bootstrap_sharpe_lower_bound,
     _lockbox_seed,
     confirm_on_lockbox,
 )
@@ -325,3 +324,50 @@ def test_lockbox_evaluate_failure_raises():
             exp, proto, profile, claimed_edge=1.0,
             gateway=_FailGW(), book=LockboxBook(), trial_id="t", spent_at="2025-01-01T00:00:00",
         )
+
+
+# --------------------------------------------------------------------------- #
+# Serial-correlation false-confirm control (the binding-CI counterpart of AC-6's audit fix).
+# --------------------------------------------------------------------------- #
+
+
+def _ar1_zero_sharpe(n: int, phi: float, rng: np.random.Generator) -> np.ndarray:
+    """A TRUE-ZERO-Sharpe (mean-0) AR(1) return series — the Lockbox null under serial
+    correlation (the regime where a too-short block under-widens the CI)."""
+    eps = rng.standard_normal(n) * 0.01
+    x = np.empty(n)
+    x[0] = eps[0]
+    for t in range(1, n):
+        x[t] = phi * x[t - 1] + eps[t]
+    return x
+
+
+@pytest.mark.parametrize("phi", [0.0, 0.3, 0.6, 0.8])
+def test_lockbox_false_confirm_rate_controlled_under_serial_correlation(phi: float):
+    """The Lockbox ``confirmed`` verdict turns on the block-bootstrap lower CI bound clearing 0
+    AND a positive point estimate. Under a TRUE-ZERO Sharpe with AR(1) memory, the rate of that
+    event (a false confirm — the FINAL wall passing noise) must stay ≤ the one-sided level
+    ``1-confidence`` (+ MC slack). A fixed ``n**(1/3)`` block under-widened the CI and breached
+    this (φ=0.6 ~0.07, φ=0.8 ~0.12); the Politis-White data-driven block restores control.
+
+    Measured directly on the binding primitive ``_bootstrap_sharpe_lower_bound`` (the CI that
+    decides ``confirmed``) over many deterministic seeds. Tolerance: with S=150 seeds the
+    binomial SE at the 0.05 level is ~0.018; the 0.04 allowance (≈ 2.2 SE) is MC slack — the
+    pre-fix φ=0.8 rate (~0.12) still blows through 0.09, so this fails loudly on the old block."""
+    confidence = 0.95
+    n, n_seeds, n_bootstrap = 500, 150, 250
+    false_confirms = 0
+    for seed in range(n_seeds):
+        values = _ar1_zero_sharpe(n, phi, np.random.default_rng(seed * 13 + 1))
+        boot_rng = np.random.default_rng(seed * 13 + 7)
+        point, lower = _bootstrap_sharpe_lower_bound(
+            values, HOURLY, boot_rng, confidence=confidence, n_bootstrap=n_bootstrap
+        )
+        if lower is not None and point is not None and lower > 0.0 and point > 0.0:
+            false_confirms += 1
+    rate = false_confirms / n_seeds
+    one_sided_level = 1.0 - confidence
+    assert rate <= one_sided_level + 0.04, (
+        f"AR(1) φ={phi}: Lockbox false-confirm rate {rate:.3f} exceeds the one-sided level "
+        f"{one_sided_level} + 0.04 (block-bootstrap CI under-widening under serial correlation)"
+    )

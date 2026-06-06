@@ -17,6 +17,8 @@ audit core). The audit reads ``LedgerRow.per_fold_returns`` exactly as productio
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -26,10 +28,10 @@ from harness.audit import (
     _block_length,
     _pbo,
     _romano_wolf,
-    _shared_block_indices,
     _studentized_means,
     run_graduation_audit,
 )
+from harness.bootstrap import circular_block_indices
 from harness.foundation import FoldReturns
 from harness.ledger import LedgerRow
 from harness.objective.res import ResResult
@@ -54,17 +56,37 @@ def _res(rank: float | None) -> ResResult:
     )
 
 
-def _row(trial_id: str, folds: list[np.ndarray], *, rank: float | None = 1.0) -> LedgerRow:
-    """A finalized ledger row whose per-fold returns are the given arrays (the audit input)."""
-    per_fold = tuple(
-        FoldReturns(
-            timestamps=(np.arange(v.size, dtype="timedelta64[h]")
-                        + np.datetime64("2025-01-01")).astype("datetime64[ns]"),
-            values=np.asarray(v, dtype=np.float64),
-            periods_per_year=PPY,
-        )
-        for v in folds
+def _fold_returns(values: np.ndarray, *, start_hour: int) -> FoldReturns:
+    """A FoldReturns over an hourly index starting ``start_hour`` hours after the epoch base.
+
+    Folds are walk-forward: non-overlapping in calendar time. Offsetting each fold's start by
+    the cumulative length of prior folds makes the pooled (concatenated) track carry a UNIQUE,
+    increasing timestamp index — the contemporaneous index the audit aligns trials on.
+    """
+    base = np.datetime64("2025-01-01")
+    ts = (np.arange(values.size, dtype="timedelta64[h]") + start_hour + base).astype(
+        "datetime64[ns]"
     )
+    return FoldReturns(
+        timestamps=ts,
+        values=np.asarray(values, dtype=np.float64),
+        periods_per_year=PPY,
+    )
+
+
+def _row(trial_id: str, folds: list[np.ndarray], *, rank: float | None = 1.0) -> LedgerRow:
+    """A finalized ledger row whose per-fold returns are the given arrays (the audit input).
+
+    Folds are laid down on a SHARED, non-overlapping hourly calendar (fold i starts where fold
+    i-1 ended) so every trial built this way shares one timestamp index — exactly the
+    contemporaneous-bar contract the shared-index bootstrap relies on.
+    """
+    per_fold = []
+    offset = 0
+    for v in folds:
+        per_fold.append(_fold_returns(np.asarray(v, dtype=np.float64), start_hour=offset))
+        offset += int(np.asarray(v).size)
+    per_fold = tuple(per_fold)
     return LedgerRow(
         trial_id=trial_id,
         family_id=f"fam-{trial_id}",
@@ -78,16 +100,23 @@ def _row(trial_id: str, folds: list[np.ndarray], *, rank: float | None = 1.0) ->
     )
 
 
-def _zero_sharpe_batch(k: int, n: int, seed: int, *, ar: float = 0.2) -> list[LedgerRow]:
+def _zero_sharpe_batch(
+    k: int, n: int, seed: int, *, ar: float = 0.2, heavy_tail: bool = False
+) -> list[LedgerRow]:
     """K independent TRUE-ZERO-Sharpe trials with realistic AR(1) serial correlation.
 
     Each is an AR(1) mean-zero return series (memory the block bootstrap must respect). No
     drift ⇒ true Sharpe = 0 ⇒ under FWER control the audit must graduate at most α of these.
+    ``heavy_tail`` drives the innovations with a unit-variance Student-t(3) (fat tails + the
+    same AR(1) memory) to stress the HAC/bootstrap scale under non-Gaussianity.
     """
     rng = np.random.default_rng(seed)
     rows = []
     for i in range(k):
-        eps = rng.standard_normal(n) * 0.01
+        if heavy_tail:
+            eps = rng.standard_t(3, size=n) / math.sqrt(3.0) * 0.01  # var-1 t(3), scaled
+        else:
+            eps = rng.standard_normal(n) * 0.01
         x = np.empty(n)
         x[0] = eps[0]
         for t in range(1, n):
@@ -130,6 +159,76 @@ def test_ac6_empirical_fwer_under_alpha_for_a_true_zero_sharpe_batch():
     # seeds): the procedure targets ≤ α; assert it does not materially exceed it.
     assert empirical_fwer <= alpha + 0.04, (
         f"empirical FWER {empirical_fwer:.3f} exceeds α={alpha} (noise batch sneaking through)"
+    )
+
+
+def _empirical_fwer(
+    *, k: int, n: int, n_seeds: int, n_bootstrap: int, ar: float, heavy_tail: bool, alpha: float
+) -> float:
+    """Fraction of deterministic seeds in which the audit graduates ANY true-zero-Sharpe trial.
+
+    Each seed builds a fresh K-trial true-zero batch with AR(1) ``ar`` (optionally heavy-tailed)
+    and runs the FULL ``run_graduation_audit``; a family-wise error is ≥1 survivor. Returns the
+    Monte-Carlo FWER estimate of the procedure at this (ar, tail) cell.
+    """
+    family_errors = 0
+    for seed in range(n_seeds):
+        rows = _zero_sharpe_batch(k, n, seed, ar=ar, heavy_tail=heavy_tail)
+        result = run_graduation_audit(rows, PROTO_HASH, alpha=alpha, n_bootstrap=n_bootstrap)
+        if len(result.survivors) > 0:
+            family_errors += 1
+    return family_errors / n_seeds
+
+
+# The serial-correlation FWER grid (the CRITICAL fix's contract). Each cell measures empirical
+# FWER through the real audit and asserts control. The existing headline test above is the φ=0.2
+# cell; φ∈{0.3,0.6,0.8} are the AR(1) stress cells the adversarial review flagged (the iid SE
+# under-widened the null there — at this K=8 batch φ=0.6 graduated ~0.12 and φ=0.8 ~0.25,
+# well above α). A heavy-tail t(3) cell stresses non-Gaussianity. K=8 matches the headline test
+# and the reviewer's reported batch regime (the breach grows with the multiplicity K).
+#
+# Monte-Carlo tolerance: with S=150 seeds, a procedure with true size α=0.05 has a binomial SE
+# of sqrt(α(1-α)/S) ≈ 0.018 on the FWER estimate. The allowance below (α + 0.05 ⇒ a 0.10
+# threshold, ≈ 2.8 SE above α) is the MC slack at this seed count plus the honest residual
+# finite-sample size distortion of the studentized block bootstrap at near-unit-root persistence
+# (φ=0.8 sits ~0.08 post-fix). It is NOT headroom to hide a breach: the pre-fix rates — φ=0.6
+# ~0.12 and φ=0.8 ~0.25 — blow through 0.10 by 1–8 SE, so the threshold still FAILS loudly on
+# the iid-SE defect while the HAC + Politis-White fix passes with margin (verified pre/post-fix).
+_FWER_K = 8
+_FWER_N = 500
+_FWER_SEEDS = 150
+_FWER_BOOT = 250
+_FWER_ALPHA = 0.05
+_FWER_TOL = 0.05  # ⇒ 0.10 threshold; ≈ 2.8 × binomial SE at S=150 (see note above)
+
+
+@pytest.mark.parametrize("ar", [0.3, 0.6, 0.8])
+def test_ac6_empirical_fwer_controlled_under_serial_correlation(ar: float):
+    """AC-6 under SERIAL correlation: a true-zero-Sharpe batch with AR(1) φ∈{0.3,0.6,0.8} must
+    still have empirical FWER ≤ α (+ MC slack). This is the CRITICAL fix's contract — the iid
+    studentized SE under-widened the null here (φ=0.6 graduated ~0.145); the HAC long-run
+    variance + Politis-White block restore control."""
+    fwer = _empirical_fwer(
+        k=_FWER_K, n=_FWER_N, n_seeds=_FWER_SEEDS, n_bootstrap=_FWER_BOOT,
+        ar=ar, heavy_tail=False, alpha=_FWER_ALPHA,
+    )
+    assert fwer <= _FWER_ALPHA + _FWER_TOL, (
+        f"AR(1) φ={ar}: empirical FWER {fwer:.3f} exceeds α={_FWER_ALPHA} + {_FWER_TOL} "
+        f"(serial-correlation under-widening — the CRITICAL defect)"
+    )
+
+
+def test_ac6_empirical_fwer_controlled_under_heavy_tails():
+    """AC-6 under HEAVY TAILS: a true-zero batch with t(3) innovations (fat tails) + AR(1)
+    memory must still have empirical FWER ≤ α (+ MC slack). The HAC/bootstrap scale must be
+    robust to non-Gaussianity, not just serial correlation."""
+    fwer = _empirical_fwer(
+        k=_FWER_K, n=_FWER_N, n_seeds=_FWER_SEEDS, n_bootstrap=_FWER_BOOT,
+        ar=0.6, heavy_tail=True, alpha=_FWER_ALPHA,
+    )
+    assert fwer <= _FWER_ALPHA + _FWER_TOL, (
+        f"t(3) φ=0.6: empirical FWER {fwer:.3f} exceeds α={_FWER_ALPHA} + {_FWER_TOL} "
+        f"(heavy-tail scale mis-estimation)"
     )
 
 
@@ -340,15 +439,37 @@ def test_bhy_empty_is_safe():
 # --------------------------------------------------------------------------- #
 
 
-def test_block_length_is_cube_root_ish():
-    assert _block_length(1000) == round(1000 ** (1 / 3))
-    assert _block_length(1) == 1
-    assert 1 <= _block_length(50) <= 50
+def test_block_length_is_data_driven_and_grows_with_serial_correlation():
+    """The block length is the Politis-White automatic length (per column, max across columns),
+    NOT a fixed ``n**(1/3)``. It must GROW with within-trial serial correlation — that is the
+    fix for the AR(1) under-widening (a fixed short block could not carry the memory)."""
+    rng = np.random.default_rng(0)
+    n = 800
+
+    def ar1_col(phi: float) -> np.ndarray:
+        eps = rng.standard_normal(n)
+        x = np.empty(n)
+        x[0] = eps[0]
+        for t in range(1, n):
+            x[t] = phi * x[t - 1] + eps[t]
+        return x
+
+    white = np.column_stack([ar1_col(0.0), ar1_col(0.0)])
+    persistent = np.column_stack([ar1_col(0.0), ar1_col(0.8)])  # one strongly autocorrelated
+    b_white = _block_length(white)
+    b_persistent = _block_length(persistent)
+    assert 1 <= b_white <= n and 1 <= b_persistent <= n
+    # White noise ⇒ short block; strong AR(1) present ⇒ materially longer (memory carried).
+    assert b_persistent > b_white
+    assert b_persistent >= round(n ** (1.0 / 3.0))  # longer than the old fixed cube-root rule
+    # Degenerate shapes are clamped, never zero or negative.
+    assert _block_length(np.ones((1, 3))) == 1
+    assert _block_length(np.empty((0, 0))) == 1
 
 
 def test_shared_block_indices_are_contiguous_blocks_with_wrap():
     rng = np.random.default_rng(0)
-    idx = _shared_block_indices(rng, n=20, block=5)
+    idx = circular_block_indices(rng, n=20, block=5)
     assert idx.size == 20
     assert idx.min() >= 0 and idx.max() < 20
     # The first block is 5 contiguous indices mod n.
@@ -364,7 +485,7 @@ def test_shared_index_preserves_cross_column_comovement():
     n = 100
     a = rng.standard_normal(n)
     matrix = np.column_stack([a, a * 2.0, -a])  # perfectly (anti)correlated columns
-    idx = _shared_block_indices(rng, n, block=5)
+    idx = circular_block_indices(rng, n, block=5)
     sample = matrix[idx, :]
     # The exact linear relationships survive the shared resample (row-aligned).
     assert np.allclose(sample[:, 1], sample[:, 0] * 2.0)
@@ -377,14 +498,90 @@ def test_studentized_means_degenerate_column_is_zero():
     assert s[0] == 0.0  # degenerate ⇒ null value, never a reject
 
 
-def test_align_tracks_truncates_to_common_length_taking_recent_bars():
-    r1 = _row("a", [np.arange(10.0)])
-    r2 = _row("b", [np.arange(6.0)])
+def test_newey_west_lrv_reduces_to_variance_at_lag_zero():
+    """At lag 0 the HAC long-run variance is just the (1/n-normalized) sample variance — no
+    autocovariance terms. This pins the base case of the serial-correlation correction."""
+    from harness.bootstrap import newey_west_lrv
+
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(400)
+    lrv0 = newey_west_lrv(x[:, None], lag=0)[0]
+    assert lrv0 == pytest.approx(float(np.mean((x - x.mean()) ** 2)), rel=1e-12)
+
+
+def test_newey_west_lrv_inflates_under_positive_serial_correlation():
+    """The HAC long-run variance of a positively-autocorrelated series EXCEEDS its plain
+    variance (γ_0): the positive autocovariances add. This is exactly the variance inflation the
+    iid SE ignored — the root cause of the under-widening. For AR(1) φ the LRV/γ_0 ratio targets
+    ≈ (1+φ)/(1-φ)."""
+    from harness.bootstrap import newey_west_lrv, nw_lag
+
+    rng = np.random.default_rng(1)
+    n = 4000
+    phi = 0.6
+    eps = rng.standard_normal(n)
+    x = np.empty(n)
+    x[0] = eps[0]
+    for t in range(1, n):
+        x[t] = phi * x[t - 1] + eps[t]
+    lag = nw_lag(n)
+    gamma0 = float(np.mean((x - x.mean()) ** 2))
+    lrv = newey_west_lrv(x[:, None], lag)[0]
+    ratio = lrv / gamma0
+    assert ratio > 1.5  # materially inflated (iid SE would have ignored this entirely)
+    assert ratio == pytest.approx((1 + phi) / (1 - phi), rel=0.25)  # ≈ 4.0 for φ=0.6
+
+
+def test_studentized_mean_uses_hac_se_so_it_is_smaller_than_iid_under_autocorrelation():
+    """The HAC-studentized statistic on a positively-autocorrelated series is SMALLER (in
+    magnitude) than the old iid ``mean/(std/√n)`` would be — because the HAC SE is larger. This
+    is the fix: the statistic no longer over-states significance under serial correlation."""
+    rng = np.random.default_rng(2)
+    n = 2000
+    eps = rng.standard_normal(n) * 0.01 + 0.001  # small positive drift
+    x = np.empty(n)
+    x[0] = eps[0]
+    for t in range(1, n):
+        x[t] = 0.6 * x[t - 1] + eps[t]
+    hac_t = _studentized_means(x[:, None])[0]
+    iid_t = x.mean() / (x.std(ddof=1) / np.sqrt(n))  # the OLD statistic
+    assert abs(hac_t) < abs(iid_t)  # HAC SE is wider ⇒ smaller t-stat (no longer inflated)
+
+
+def test_align_tracks_intersects_on_shared_timestamp_index():
+    """Alignment is on the SHARED timestamp index (intersection of the trials' calendars), not a
+    positional last-T truncation. The two trials share hours 0..5; column values are read at
+    those contemporaneous bars."""
+    r1 = _row("a", [np.arange(10.0)])  # hours 0..9
+    r2 = _row("b", [np.arange(6.0)])  # hours 0..5
     matrix, ids = _align_tracks([r1, r2])
     assert matrix.shape == (6, 2)
     assert ids == ("a", "b")
-    # Truncation keeps the LAST (most-recent) bars of the longer track.
-    assert np.array_equal(matrix[:, 0], np.arange(10.0)[-6:])
+    # The common index is the shared calendar bars (hours 0..5), read by timestamp — column a's
+    # values at those bars are arange(10)[0:6], NOT the last 6.
+    assert np.array_equal(matrix[:, 0], np.arange(10.0)[:6])
+    assert np.array_equal(matrix[:, 1], np.arange(6.0))
+
+
+def test_align_nan_in_one_trial_does_not_misalign_the_others():
+    """A NaN in ONE trial drops that calendar bar for ALL trials consistently — it must not
+    positionally shift the other trials (the latent alignment bug). After the drop, the
+    surviving rows of every column are the SAME contemporaneous bars."""
+    a = np.arange(20.0)
+    b = np.arange(100.0, 120.0)
+    c = np.arange(200.0, 220.0)
+    a[5] = np.nan  # a single unmeasurable bar in trial "a" at hour 5
+    matrix, ids = _align_tracks([_row("a", [a]), _row("b", [b]), _row("c", [c])])
+    assert ids == ("a", "b", "c")
+    # Hour 5 dropped from EVERY column (consistent), 19 bars remain.
+    assert matrix.shape == (19, 3)
+    # The surviving bars are hours {0..19}\{5}; b and c must be their values at exactly those
+    # bars (i.e. with index 5 removed) — NOT shifted up by one to backfill the hole.
+    keep = [h for h in range(20) if h != 5]
+    assert np.array_equal(matrix[:, 1], np.arange(100.0, 120.0)[keep])
+    assert np.array_equal(matrix[:, 2], np.arange(200.0, 220.0)[keep])
+    # Co-movement preserved: b and c stay perfectly aligned (c == b + 100 row-for-row).
+    assert np.allclose(matrix[:, 2], matrix[:, 1] + 100.0)
 
 
 def test_align_drops_empty_tracks():

@@ -47,10 +47,11 @@ from typing import Literal
 
 import numpy as np
 
+from harness.bootstrap import circular_block_indices, politis_white_block
 from harness.data.lockbox_book import LockboxBook, lockbox_dataset_id
-from harness.foundation import FoldReturns, FoundationGateway
+from harness.foundation import FoundationGateway
 from harness.objective import metrics
-from harness.profiler import AssetProfile, _DEFAULT_CONFIDENCE_Z
+from harness.profiler import AssetProfile
 from harness.protocol import Experiment, Protocol
 
 Verdict = Literal["confirmed", "rejected", "insufficient_evidence"]
@@ -115,13 +116,6 @@ def _lockbox_seed(dataset_id: str, fingerprint: str) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _block_length(n: int) -> int:
-    """Circular-block length ``b ≈ n**(1/3)`` (standard stationary-bootstrap rule)."""
-    if n <= 1:
-        return 1
-    return int(min(max(1, round(n ** (1.0 / 3.0))), n))
-
-
 def _bootstrap_sharpe_lower_bound(
     values: np.ndarray,
     periods_per_year: float,
@@ -132,10 +126,15 @@ def _bootstrap_sharpe_lower_bound(
 ) -> tuple[float | None, float | None]:
     """One-sided lower confidence bound on the ANNUALIZED Sharpe via a circular block bootstrap.
 
-    Respects serial correlation (returns have memory) by resampling whole circular blocks. The
-    lower bound is the ``(1 - confidence)`` quantile of the bootstrap Sharpe distribution — the
-    binding test for ``confirmed`` is whether this lower bound clears 0. Returns
-    ``(point_sharpe, lower_bound)``; ``(None, None)`` if the series cannot yield a Sharpe.
+    Respects serial correlation (returns have memory) by resampling whole circular blocks with a
+    **data-driven (Politis-White) block length** — the same root fix the audit uses. A fixed
+    ``n**(1/3)`` block was too short to carry within-trial serial correlation once φ≥0.3, so the
+    bootstrap CI under-widened and noise could spuriously ``confirm`` (false-confirm rate above
+    the one-sided ``1-confidence`` level); the automatic block length grows with the dependence
+    and restores control. The lower bound is the ``(1 - confidence)`` quantile of the bootstrap
+    Sharpe distribution — the binding test for ``confirmed`` is whether this lower bound clears
+    0. Returns ``(point_sharpe, lower_bound)``; ``(None, None)`` if the series cannot yield a
+    Sharpe.
     """
     v = np.asarray(values, dtype=np.float64)
     v = v[np.isfinite(v)]
@@ -143,14 +142,11 @@ def _bootstrap_sharpe_lower_bound(
     if point is None or v.size < 2:
         return None, None
     n = v.size
-    block = _block_length(n)
-    n_blocks = int(math.ceil(n / block))
-    offsets = np.arange(block)
+    block = politis_white_block(v)
     boot = np.empty(n_bootstrap, dtype=np.float64)
     valid = 0
     for b in range(n_bootstrap):
-        starts = rng.integers(0, n, size=n_blocks)
-        idx = ((starts[:, None] + offsets[None, :]) % n).reshape(-1)[:n]
+        idx = circular_block_indices(rng, n, block)
         s = metrics.sharpe(v[idx], periods_per_year=periods_per_year)
         if s is not None:
             boot[valid] = s

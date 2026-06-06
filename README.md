@@ -21,6 +21,11 @@ guarded screens. The important point is not that one backtest number improved;
 it is that the workbench rejected tempting one-window gains and only promoted
 candidates that survived a compact robustness screen.
 
+> Note (rebuild P3): `results.tsv` is retired as the system-of-record — the
+> append-only Trial Ledger (`harness/ledger.py`) is now canonical. The
+> historical narrative below predates the rebuild and is reconciled in P5's
+> doc rewrite.
+
 Raw generated result directories are intentionally ignored, while the public
 `results.tsv` ledger records the attempt history. The latest campaign showed
 this progression:

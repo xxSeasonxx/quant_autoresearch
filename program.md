@@ -7,23 +7,23 @@ This is an experiment to have the LLM do quant strategy research.
 To set up a new strategy candidate, work with the user to:
 
 1. **Understand the candidate**: read `strategy.py` and identify the strategy
-   hypothesis before changing anything. Fine-tune and improve the strategy, but
+  hypothesis before changing anything. Fine-tune and improve the strategy, but
    do not drift away from the overarching strategy hypothesis. Keep the file
    shaped like a current `quant_strategies` decision strategy: expose
    `generate_decisions(rows, params)` and, when useful, `validate_params(params)`.
    Review the strategy to ensure it is implemented correctly.
 2. **Use the current worktree**: this workbench is intentionally run on the
-   current branch unless the human explicitly asks for a new branch.
+  current branch unless the human explicitly asks for a new branch.
 3. **Read the in-scope files**: The repo is small. Read these files for full
-   context:
-   - `README.md` — repository context.
-   - `program.md` — these instructions.
-   - `strategy.py` — the scratch strategy you modify.
-   - `experiment.toml` — the experiment configuration you modify.
-   - latest `results/` artifacts, if present.
-   - `results.tsv`, if present.
+  context:
+  - `README.md` — repository context.
+  - `program.md` — these instructions.
+  - `strategy.py` — the scratch strategy you modify.
+  - `experiment.toml` — the experiment configuration you modify.
+  - latest `results/` artifacts, if present.
+  - `results.tsv`, if present.
 4. **Check data and harness readiness**: the runner delegates execution to
-   `quant_strategies` and may depend on `quant_data`. If either upstream system
+  `quant_strategies` and may depend on `quant_data`. If either upstream system
    is missing data or fails independently of the strategy, document the
    limitation instead of mutating the strategy to hide it.
 5. **Confirm and go**: confirm setup looks good.
@@ -58,8 +58,8 @@ symbols just to rescue the last score.
 - Modify `strategy.py`.
 - Modify `experiment.toml`.
 - Add a package when the strategy genuinely needs it, but record the dependency
-  in the project configuration before using it so the run is reproducible.
-  Treat dependency changes as setup changes, not ordinary loop edits.
+in the project configuration before using it so the run is reproducible.
+Treat dependency changes as setup changes, not ordinary loop edits.
 
 Editable during a research loop:
 
@@ -80,13 +80,13 @@ Read-only during a research loop:
 **What you CANNOT do:**
 
 - Modify the evaluation harness: `runner.py`, `scoring.py`, or
-  `experiment_config.py`.
+`experiment_config.py`.
 - Modify generated artifacts in `results/` or `results.tsv`.
 - Install an unrecorded package or rely on an ad hoc local environment.
 - Add runner calls, file writes, subprocesses, network calls, or
-  autonomous loops inside `strategy.py`.
+autonomous loops inside `strategy.py`.
 - Set `decision_lag_minutes` to zero; decisions must be emitted after the
-  as-of bar can be observed.
+as-of bar can be observed.
 
 **The goal is simple: find promoted candidates for the next review step.** The runner
 keeps raw `net_return` as evidence, but the guarded score is normalized by
@@ -232,7 +232,7 @@ write down the research reason for the next attempt:
 - fill assumptions and data quality
 - overfit risk and whether the change adds unjustified complexity
 - if changing a parameter, the quant reason the new value should improve the
-  strategy rather than merely fitting the last run
+strategy rather than merely fitting the last run
 
 If an attempt fails, attribute the root source before changing anything:
 
@@ -261,24 +261,24 @@ LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
 2. Review the latest `results/` artifacts and `results.tsv`.
 3. Tune `strategy.py` or `experiment.toml` with one focused experimental idea.
 4. Run the cheap screen:
-   `conda run -n quant python runner.py --explore --description "short attempt description"`.
+  `conda run -n quant python runner.py --explore --description "short attempt description"`.
    If the primary result is plausible and a diagnostic window is useful, run:
    `conda run -n quant python runner.py --window-id WINDOW_ID --description "diagnostic: short attempt description"`.
    If both support a serious candidate with a clear quant rationale, run:
    `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
    Do not run full promotion after every idea.
 5. Read the JSON summary. For `run_kind = "promotion"`, inspect
-   `promotion_score.json`, `promotion_summary.json`, and
+  `promotion_score.json`, `promotion_summary.json`, and
    `trade_attribution.json`. For explore or guard diagnostics, inspect
    `score.json`, `summary.json`, and `evidence.json`.
 6. The runner records the results in `results.tsv`; leave it untracked by git.
 7. If promotion reports `promote`, keep that candidate as the current best.
 8. If promotion reports `reject` or the cheap screen fails, restore
-   `strategy.py` and `experiment.toml` to the previous promoted or baseline
+  `strategy.py` and `experiment.toml` to the previous promoted or baseline
    version before designing the next change. Keep generated results as the
    research record.
 9. If the run was exploration or diagnostic only, treat it as evidence for the
-    next focused change, not as best-so-far.
+  next focused change, not as best-so-far.
 
 The idea is that you are an autonomous quant researcher trying things out. If a
 promoted candidate works, keep. If it does not promote, discard. You are

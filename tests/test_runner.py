@@ -13,14 +13,18 @@ from runner import main
 
 
 @dataclass(frozen=True)
+class FakeRunOutcome:
+    completed: bool = True
+    assessment_status: str = "smoke_passed"
+    promotion_eligible: bool = False
+
+
+@dataclass(frozen=True)
 class FakeRunResult:
-    success: bool
     result_dir: Path | None
     notes_path: Path | None
     message: str
-    run_completed: bool = True
-    assessment_status: str = "smoke_passed"
-    promotion_eligible: bool = False
+    outcome: FakeRunOutcome = FakeRunOutcome()
 
 
 LEDGER_HEADER = "\t".join(runner_module.LEDGER_HEADER)
@@ -153,14 +157,19 @@ def fake_success_run(result_root: Path, *, net_return: float, trade_count: int =
             )
             + "\n"
         )
-        return FakeRunResult(True, attempt_dir, attempt_dir / "notes.md", "ok")
+        return FakeRunResult(attempt_dir, attempt_dir / "notes.md", "ok")
 
     return _run_config
 
 
 def fake_config_failure_run():
     def _run_config(config_path: Path, *, repo_root: Path):
-        return FakeRunResult(False, None, None, "invalid TOML in generated config", run_completed=False)
+        return FakeRunResult(
+            None,
+            None,
+            "invalid TOML in generated config",
+            outcome=FakeRunOutcome(completed=False),
+        )
 
     return _run_config
 
@@ -173,7 +182,7 @@ def fake_malformed_evidence_run(result_root: Path):
             json.dumps({"stage": "completed", "assessment_status": "smoke_passed"}) + "\n"
         )
         (attempt_dir / "evidence.json").write_text("{invalid json\n")
-        return FakeRunResult(False, attempt_dir, attempt_dir / "notes.md", "malformed evidence")
+        return FakeRunResult(attempt_dir, attempt_dir / "notes.md", "malformed evidence")
 
     return _run_config
 

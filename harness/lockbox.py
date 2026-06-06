@@ -196,13 +196,19 @@ def confirm_on_lockbox(
        no provider), return ``insufficient_evidence`` (``factor_panel_unwired``) — *before*
        reserving or scoring. The Lockbox must NEVER score RAW returns as residual alpha; a
        pure factor-beta basket can never be ``confirmed`` on the live path.
-    3. **Write-once reserve (FR-B4).** Reserve the Lockbox ``dataset_id`` on the ``LockboxBook``;
-       a second graduation on the same block raises ``LockboxSpentError`` here, before scoring.
+    3. **Write-once gate (FR-B4).** If the Lockbox ``dataset_id`` is already spent, raise
+       ``LockboxSpentError`` *before any evaluate* (a spent block never re-evaluates). The actual
+       reserve is deferred to step 5b.
     4. **Score once.** One ``evaluate`` over the Lockbox window via the seam (FR-J2).
     5. **Residualize (FR-C3).** Build the factor panel for the Lockbox window and residualize the
        returns against it BEFORE scoring — the confirmation is on residual alpha, not raw return.
-       If the provider does not produce a panel that COVERS the required factors,
-       ``insufficient_evidence`` (``factor_panel_unwired``) — fail-closed, never a raw pass.
+       If the provider does not produce a panel that COVERS the required factors with USABLE
+       (present + finite + non-degenerate) columns, ``insufficient_evidence``
+       (``factor_panel_unwired``/``factor_panel_degenerate``) — fail-closed, never a raw pass, and
+       BEFORE the reserve so a bad panel does not burn the block.
+    5b. **Write-once reserve (FR-B4).** The panel covers the requirement ⇒ a real forward look ⇒
+       reserve the ``dataset_id`` now (after coverage, before the scoring verdict). A crash in the
+       bootstrap still leaves the block spent (fail-safe, NFR-6).
     6. **Binding test + decision.** Pick ``forward_block`` (thick block) or ``block_bootstrap``
        (thin block) as binding; ``confirmed`` iff the binding lower CI bound on the annualized
        Sharpe clears 0 AND the point estimate is positive; else ``rejected``.
@@ -258,15 +264,20 @@ def confirm_on_lockbox(
             ),
         )
 
-    # --- 3. Write-once reserve (FR-B4): refuse a second graduation on the same block. ---
+    # --- 3. Write-once gate (FR-B4): refuse a SECOND graduation on the same block BEFORE any
+    # evaluate (a spent dataset never re-evaluates). The actual reserve mutation is deferred to
+    # step 5b — AFTER the panel is confirmed to cover the requirement — so a present-but-degenerate
+    # panel (only detectable post-evaluate) fails closed WITHOUT burning the block, mirroring the
+    # power/unwired gates' "insufficient_evidence never spends the block" contract. ---
     dataset_id = lockbox_dataset_id(
         protocol_hash=protocol.content_hash,
         lockbox_start=protocol.data_tiers.lockbox.start,
         lockbox_end=protocol.data_tiers.lockbox.end,
         symbols=experiment.symbols if experiment.symbols is not None else protocol.data_tiers.symbols,
     )
-    # reserve() raises LockboxSpentError if already spent — the gate, before any scoring.
-    book.reserve(dataset_id, trial_id=trial_id, spent_at=spent_at)
+    if book.is_spent(dataset_id):
+        # Surface the same LockboxSpentError the reserve would raise — the gate, before any evaluate.
+        book.reserve(dataset_id, trial_id=trial_id, spent_at=spent_at)
 
     # --- 4. Score once on the Lockbox window (one evaluate, FR-J2). ---
     window = _lockbox_window(protocol)
@@ -279,8 +290,9 @@ def confirm_on_lockbox(
 
     # --- 5. Residualize against the factor panel BEFORE scoring (FR-C3, AC-9/G2). The
     # confirmation is on RESIDUAL alpha — market/funding-carry beta is regressed out, never
-    # scored as edge. If the provider cannot supply a panel covering the required factors, fail
-    # closed (insufficient_evidence) rather than scoring raw returns. ---
+    # scored as edge. If the provider cannot supply a panel that COVERS the required factors with
+    # USABLE (present + non-degenerate) columns, fail closed (insufficient_evidence) rather than
+    # scoring raw returns — and BEFORE the reserve, so the block is not burned on a bad panel. ---
     raw_returns = result.returns
     panel = factor_panel_provider(window, raw_returns) if factor_panel_provider is not None else {}
     if required_factors and not factors.panel_covers(panel, required_factors):
@@ -291,11 +303,19 @@ def confirm_on_lockbox(
             binding_test=_binding_test_for(profile, claimed_edge),
             confidence=confidence,
             detail=(
-                "factor_panel_unwired: the Lockbox factor panel does not cover the "
-                f"{len(required_factors)} required factor column(s) — refusing to score raw "
-                "returns as residual alpha (insufficient_evidence, fail-closed)"
+                "factor_panel_unwired/factor_panel_degenerate: the Lockbox factor panel does not "
+                f"cover the {len(required_factors)} required factor column(s) with usable data — a "
+                "required column is missing or present-but-degenerate (all-zero/constant/NaN, "
+                "neutralizes nothing) — refusing to score raw returns as residual alpha "
+                "(insufficient_evidence, fail-closed)"
             ),
         )
+
+    # --- 5b. Write-once reserve (FR-B4): the panel covers the requirement, so this is a real
+    # forward look — spend the block now (after coverage, before the scoring verdict). A crash in
+    # the bootstrap below still leaves the block spent (fail-safe, NFR-6). ---
+    book.reserve(dataset_id, trial_id=trial_id, spent_at=spent_at)
+
     returns = factors.residual_fold_returns(raw_returns, panel)
 
     # --- 6. Binding test + decision. ---

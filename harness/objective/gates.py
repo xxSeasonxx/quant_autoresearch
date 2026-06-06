@@ -68,22 +68,29 @@ def factor_panel_gate(panels_cover: bool, n_required: int) -> GateOutcome:
 
     The mechanical wall that makes "score raw beta as residual alpha" UNREPRESENTABLE on the live
     path: when the Protocol REQUIRES factor neutralization (``n_required > 0``) but the supplied
-    panel does not COVER those columns (empty/identity — e.g. an unwired provider), the candidate
-    is infeasible. ``passed`` is True only when every required column is present for every fold;
-    otherwise it fails with ``factor_panel_unwired`` — never a silent raw-returns pass. Never
-    passes by default (an unmeasurable requirement is a failing requirement)."""
+    panel does not COVER those columns with USABLE data, the candidate is infeasible. Coverage means
+    each required column is present AND non-degenerate (all-finite, sample std above the floor — the
+    column actually VARIES so beta is genuinely removable; see ``factors.column_is_usable``).
+    ``passed`` is True only when that holds for every required column in every fold; otherwise it
+    fails — the reason is ``factor_panel_unwired`` when a column is missing (empty/identity panel,
+    e.g. an unwired provider) and ``factor_panel_degenerate`` when a column is present but
+    all-zero/constant/NaN (neutralizes nothing, so scoring against it would launder raw beta as
+    residual alpha). Either way it is never a silent raw-returns pass; never passes by default."""
     return GateOutcome(
         name="factor_panel",
         passed=panels_cover,
         value=1.0 if panels_cover else 0.0,
         threshold=1.0,
         detail=(
-            f"required factor columns covered for every fold ({n_required} required)"
+            f"required factor columns covered (present + non-degenerate) for every fold "
+            f"({n_required} required)"
             if panels_cover
             else (
-                "factor_panel_unwired: the Protocol requires neutralization of "
-                f"{n_required} factor column(s) but the supplied panel does not cover them "
-                "(empty/identity) — infeasible (fail-closed), NOT a raw-returns pass"
+                "factor_panel_unwired/factor_panel_degenerate: the Protocol requires "
+                f"neutralization of {n_required} factor column(s) but the supplied panel does not "
+                "cover them with usable data — a required column is missing (empty/identity panel) "
+                "or present-but-degenerate (all-zero/constant/NaN, neutralizes nothing) — "
+                "infeasible (fail-closed), NOT a raw-returns pass"
             )
         ),
     )

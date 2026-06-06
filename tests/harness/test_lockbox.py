@@ -11,6 +11,8 @@ so the verdict is deterministic with synthetic returns (no live data, no engine 
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pytest
 
@@ -25,7 +27,7 @@ from harness.lockbox import (
 )
 from harness.profiler import AssetProfile, profile_asset
 from harness.protocol import Experiment, Protocol
-from harness.testing import make_returns
+from harness.testing import benign_funding_carry, make_returns
 
 HOURLY = 8760.0
 
@@ -55,15 +57,25 @@ def _experiment() -> Experiment:
 def _gateway_returning(values: np.ndarray):
     """A FoundationGateway whose single Lockbox evaluate returns the given return series.
 
-    ``panel_for`` returns a COVERING panel of zero columns (market + funding_carry) aligned to
-    the series: it satisfies the Protocol's required-factor coverage (so the fail-closed wiring
-    gate does not fire) while leaving the residual equal to the raw series (zero factor columns
-    have zero beta), so the confirmed/rejected assertions are about the same return distribution.
-    The synthetic series has no real factor driver, so neutralizing against zeros is a no-op —
-    the honest thing for a driverless fixture."""
+    ``panel_for`` returns a COVERING panel of benign NON-DEGENERATE columns (market +
+    funding_carry) aligned to the series: each column is present, finite, and genuinely varies
+    (small noise) so it satisfies the Protocol's required-factor coverage (the factor wall requires
+    columns be USABLE — actually removable — not merely present, AC-9/G2). The columns are small
+    (sd≈1e-4) and INDEPENDENT of the synthetic return series, so their estimated beta is ≈0 and the
+    residual ≈ the raw series — the confirmed/rejected assertions remain about the same return
+    distribution. The driverless synthetic series has no real factor exposure, so an independent
+    benign panel neutralizes ≈nothing while staying honest (no degenerate fake-covering column).
+    Seeds are derived deterministically from the series so the verdict stays bit-for-bit
+    reproducible (NFR-1)."""
     fr = make_returns(np.asarray(values, dtype=np.float64), periods_per_year=HOURLY)
-    zeros = np.zeros(fr.values.shape[0], dtype=np.float64)
-    covering_panel = {"market": zeros, "funding_carry": zeros}
+    n = fr.values.shape[0]
+    # Deterministic seed from the series (hashlib, not builtin hash — no PYTHONHASHSEED dependence)
+    # so the verdict stays bit-for-bit reproducible across processes (NFR-1).
+    seed = int.from_bytes(hashlib.sha256(fr.values.tobytes()).digest()[:4], "big")
+    covering_panel = {
+        "market": benign_funding_carry(n, seed=seed + 11),
+        "funding_carry": benign_funding_carry(n, seed=seed + 22),
+    }
 
     class _GW:
         def __init__(self):

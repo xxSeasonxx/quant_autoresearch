@@ -31,6 +31,7 @@ from harness.ledger import TrialLedger
 from harness.objective.res import GateThresholds
 from harness.protocol import Experiment, Protocol
 from harness.selection import NoLookAvailable, SelectionController, experiment_hash
+from harness.testing import benign_funding_carry
 
 PPY = 8760.0
 THRESHOLDS = GateThresholds(min_trades=30, max_concentration=0.6, min_effective_breadth=2.0)
@@ -117,8 +118,12 @@ class _DeterministicGateway:
             port += leg / len(self._symbols)
         ts = (np.arange(n, dtype="timedelta64[h]") + np.datetime64("2024-04-01")).astype("datetime64[ns]")
         fold = FoldReturns(timestamps=ts, values=port, periods_per_year=PPY, by_symbol=by_symbol)
-        # COVERING panel (market + funding_carry, the Protocol-required columns; funding ~0 here).
-        self._panels[id(fold)] = {"market": market, "funding_carry": np.zeros_like(market)}
+        # COVERING panel (market + funding_carry, the Protocol-required columns). funding_carry is a
+        # benign NON-DEGENERATE column (usable for neutralization; negligible PnL). Seed is derived
+        # from the same fingerprint so regeneration is bit-for-bit identical (AC-7).
+        self._panels[id(fold)] = {
+            "market": market, "funding_carry": benign_funding_carry(n, seed=seed + 5000)
+        }
         return FoldEvalResult(
             succeeded=True, causal_ok=True, returns=fold, sharpe=1.5, sortino=1.5,
             calmar=1.0, max_drawdown=-0.1, trade_count=300, worst_period_return=-0.04,

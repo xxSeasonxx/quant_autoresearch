@@ -20,7 +20,7 @@ from harness.foundation import FoldEvalResult, FoldReturns
 from harness.objective.res import GateThresholds
 from harness.orchestrator import run_walk_forward_res
 from harness.protocol import Experiment, Protocol
-from harness.testing import make_returns
+from harness.testing import benign_funding_carry, make_returns
 
 PPY = 8760.0
 _FOLDS = {
@@ -118,10 +118,11 @@ def _genuine_fold(seed, symbols, n=240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    # A COVERING panel (market + funding_carry) — the columns the Protocol requires neutralized
-    # (funding is ~0 in this synthetic fold, but the column is present, as the real provider
-    # supplies it). The genuine idiosyncratic alpha survives neutralization.
-    return fold, {"market": market, "funding_carry": np.zeros_like(market)}, 1.5
+    # A COVERING panel (market + funding_carry) — the columns the Protocol requires neutralized.
+    # funding_carry is a benign NON-DEGENERATE column (usable for neutralization — beta removable —
+    # yet negligible PnL), as the real provider supplies a genuinely-varying funding rate. The
+    # genuine idiosyncratic alpha survives neutralization.
+    return fold, {"market": market, "funding_carry": benign_funding_carry(n, seed=seed + 5000)}, 1.5
 
 
 def test_ac1_full_diagnosed_campaign_is_infeasible_through_the_walk_forward_path():

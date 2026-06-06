@@ -24,7 +24,7 @@ from harness.ledger import TrialLedger
 from harness.lockbox import confirm_on_lockbox
 from harness.profiler import profile_asset
 from harness.protocol import Experiment, Protocol
-from harness.testing import make_returns
+from harness.testing import benign_funding_carry, make_returns
 
 PPY = 8760.0
 
@@ -148,9 +148,10 @@ def _genuine_fold(seed, symbols, n=240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    # COVERING panel (market + funding_carry, the Protocol-required columns; funding ~0 here but
-    # present, as the real provider supplies it). The genuine alpha survives neutralization.
-    return fold, {"market": market, "funding_carry": np.zeros_like(market)}
+    # COVERING panel (market + funding_carry, the Protocol-required columns). funding_carry is a
+    # benign NON-DEGENERATE column (usable for neutralization — beta removable — yet negligible
+    # PnL), as the real provider supplies a genuinely-varying funding rate. Alpha survives.
+    return fold, {"market": market, "funding_carry": benign_funding_carry(n, seed=seed + 5000)}
 
 
 class _GenuineGateway:

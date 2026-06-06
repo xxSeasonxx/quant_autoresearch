@@ -505,7 +505,9 @@ def test_real_factor_panel_provider_builds_covering_panel(monkeypatch):
     base = np.datetime64("2024-07-01")
     bench_ts = [(base + np.timedelta64(i, "h")).astype("datetime64[us]").item() for i in range(n)]
     closes = list(100.0 + np.arange(n, dtype=np.float64))  # monotone ⇒ small positive market returns
-    fundings = list(0.0001 * np.ones(n, dtype=np.float64))
+    # A genuinely-varying funding rate (a real funding column is never identically constant); the
+    # provider only emits a column that is USABLE (non-degenerate) for neutralization (AC-9/G2).
+    fundings = list(0.0001 + 1e-5 * np.sin(np.arange(n, dtype=np.float64)))
 
     def fake_loader(engine, symbol, start, end, **kw):  # noqa: ARG001
         return pl.DataFrame({"timestamp": bench_ts, "close": closes, "funding_rate": fundings}).with_columns(
@@ -520,10 +522,81 @@ def test_real_factor_panel_provider_builds_covering_panel(monkeypatch):
     assert set(panel) == {"market", "funding_carry"}
     assert panel["market"].shape[0] == n and panel["funding_carry"].shape[0] == n
     assert panel["market"].dtype == np.float64
-    # The funding_carry column carries the (forward-filled) funding rate.
-    assert np.allclose(panel["funding_carry"], 0.0001)
-    # The market column is non-trivial (close-to-close returns of the monotone benchmark).
+    # The funding_carry column carries the (forward-filled, genuinely-varying) funding rate.
+    assert np.allclose(panel["funding_carry"], fundings)
+    # Both columns are non-degenerate (the close-to-close market return and the varying funding).
     assert np.any(panel["market"] != 0.0)
+    from harness.objective import factors
+
+    assert factors.column_is_usable(panel["market"]) and factors.column_is_usable(panel["funding_carry"])
+
+
+def test_real_factor_panel_provider_flat_close_omits_degenerate_market(monkeypatch):
+    """A FLAT-close benchmark window yields an all-zero ``market`` column (pct_change of a constant
+    is 0). The provider must NOT emit that fake-covering degenerate column — it OMITS ``market`` so
+    the panel does NOT cover the requirement and the judgment layer fails closed at the source.
+
+    Pre-fix the provider returned ``{market: all-zeros, funding_carry: ...}`` (a present-but-
+    degenerate column that passed the presence-only gate and neutralized nothing). Stubbed loader,
+    no DB."""
+    import polars as pl
+
+    import quant_data.loader as ql
+
+    n = 48
+    base = np.datetime64("2024-07-01")
+    bench_ts = [(base + np.timedelta64(i, "h")).astype("datetime64[us]").item() for i in range(n)]
+    flat_closes = list(100.0 * np.ones(n, dtype=np.float64))  # FLAT ⇒ market return ≡ 0
+    fundings = list(0.0001 * np.ones(n, dtype=np.float64))
+
+    def fake_loader(engine, symbol, start, end, **kw):  # noqa: ARG001
+        return pl.DataFrame({"timestamp": bench_ts, "close": flat_closes, "funding_rate": fundings}).with_columns(
+            pl.col("timestamp").cast(pl.Datetime("us", "UTC"))
+        )
+
+    monkeypatch.setattr(ql, "load_crypto_perp_bars_with_funding", fake_loader)
+    provider = RealFactorPanelProvider(_protocol(), engine=object())
+    panel = provider.panel_for(FoldWindow("f0", "2024-07-01", "2024-08-31"), _fold_returns(n=n))
+
+    # The degenerate market column is OMITTED ⇒ the panel does not cover {market, funding_carry}.
+    assert "market" not in panel, (
+        "provider emitted a degenerate (all-zero) market column from a flat-close window — "
+        "it must omit it so the judgment-layer gate fails closed"
+    )
+    # funding_carry is still a genuine column here, but coverage of the REQUIRED set is broken,
+    # which is what the judgment gate keys on (panel_covers → False).
+    from harness.objective import factors
+
+    assert not factors.panel_covers(panel, ("market", "funding_carry"))
+
+
+def test_real_factor_panel_provider_single_bar_omits_degenerate_market(monkeypatch):
+    """A SINGLE-BAR benchmark frame cannot produce a non-degenerate close-to-close return series
+    (one bar ⇒ the only market value is the fill-null 0). The provider must OMIT ``market`` rather
+    than emit a fake-covering all-zero column. Stubbed loader, no DB."""
+    import polars as pl
+
+    import quant_data.loader as ql
+
+    n = 48
+    base = np.datetime64("2024-07-01")
+    one_ts = [(base).astype("datetime64[us]").item()]
+
+    def fake_loader(engine, symbol, start, end, **kw):  # noqa: ARG001
+        return pl.DataFrame({"timestamp": one_ts, "close": [100.0], "funding_rate": [0.0]}).with_columns(
+            pl.col("timestamp").cast(pl.Datetime("us", "UTC"))
+        )
+
+    monkeypatch.setattr(ql, "load_crypto_perp_bars_with_funding", fake_loader)
+    provider = RealFactorPanelProvider(_protocol(), engine=object())
+    panel = provider.panel_for(FoldWindow("f0", "2024-07-01", "2024-08-31"), _fold_returns(n=n))
+
+    assert "market" not in panel, (
+        "provider emitted a degenerate market column from a single-bar benchmark frame"
+    )
+    from harness.objective import factors
+
+    assert not factors.panel_covers(panel, ("market", "funding_carry"))
 
 
 def _factor_panel_db_available() -> bool:

@@ -22,6 +22,7 @@ A covering panel (the positive control) still lets a genuine idiosyncratic edge 
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from harness.data.lockbox_book import LockboxBook
 from harness.foundation import FoldEvalResult, FoldReturns
@@ -30,7 +31,7 @@ from harness.objective.res import GateThresholds, compute_res
 from harness.orchestrator import run_walk_forward_res
 from harness.profiler import profile_asset
 from harness.protocol import Experiment, Protocol
-from harness.testing import make_returns
+from harness.testing import benign_funding_carry, make_returns
 
 PPY = 8760.0
 _FOLDS = {
@@ -119,8 +120,9 @@ def _genuine_fold(seed: int, n: int = 240):
         timestamps=make_returns(port, periods_per_year=PPY).timestamps,
         values=port, periods_per_year=PPY, by_symbol=by_symbol,
     )
-    # COVERING panel: market + funding_carry (the Protocol-required columns; funding ~0 here).
-    return fold, {"market": market, "funding_carry": np.zeros_like(market)}
+    # COVERING panel: market + funding_carry (the Protocol-required columns). funding_carry is a
+    # benign NON-DEGENERATE column (small noise) — usable (beta removable) yet negligible PnL.
+    return fold, {"market": market, "funding_carry": benign_funding_carry(n, seed=seed + 5000)}
 
 
 class _BasketGateway:
@@ -227,8 +229,10 @@ def test_ac9_compute_res_with_covering_panel_still_neutralizes_and_bounces_beta(
     for s in range(1, 4):
         fold, panel = _beta_basket_fold(s)
         folds.append(fold)
-        # A covering panel: market (the true driver) + a funding_carry column (zero here).
-        panels.append({"market": panel["market"], "funding_carry": np.zeros_like(panel["market"])})
+        # A covering panel: market (the true driver) + a benign NON-DEGENERATE funding_carry column.
+        panels.append(
+            {"market": panel["market"], "funding_carry": benign_funding_carry(panel["market"].size, seed=s + 6000)}
+        )
 
     res = compute_res(
         folds, panels, trade_count=900, thresholds=THRESHOLDS,
@@ -306,3 +310,242 @@ def test_ac9_lockbox_genuine_alpha_with_covering_panel_still_confirms():
     # confirms (its idiosyncratic alpha survives neutralization).
     assert verdict.verdict != "insufficient_evidence"
     assert verdict.verdict in ("confirmed", "rejected")
+
+
+# --------------------------------------------------------------------------- #
+# CRITICAL regression — PRESENT-BUT-DEGENERATE factor columns (the re-opened hole).
+#
+# A required factor column that is PRESENT but DEGENERATE (all-zero, constant, or NaN) passed
+# the OLD presence-only wall (``all(name in panel)``). But ``residualize`` regressing against a
+# zero/constant column removes NOTHING (residual == raw), so a pure-market-beta basket (zero
+# alpha) was scored on RAW beta and GRADUATED (rank≈26.5) / CONFIRMED on the Lockbox (forward
+# Sharpe≈22.0) — the exact AC-9 hole. A NaN column additionally CRASHED ``residualize`` with an
+# unhandled ``LinAlgError``. The wall must gate on the INVARIANT "beta was actually removable":
+# each required column present AND all-finite AND non-degenerate (std ≥ ε). These tests drive the
+# decorrelated pure-beta basket through BOTH paths with each degenerate variant and assert
+# fail-closed (infeasible / insufficient_evidence), never a raw-returns graduation/confirmation.
+# --------------------------------------------------------------------------- #
+
+
+def _degenerate_market_panels(folds, *, kind: str):
+    """Build a PRESENT-BUT-DEGENERATE covering panel for each fold (market + funding_carry).
+
+    ``kind`` selects the degeneracy of the ``market`` column (the required factor whose
+    non-degeneracy was the missing invariant): ``"zero"`` (all-zero), ``"constant"`` (a non-zero
+    constant), or ``"nan"`` (a finite column with one NaN bar). ``funding_carry`` is the benign
+    all-zero column (zero here regardless). Every panel CONTAINS both required names, so the OLD
+    presence-only gate said ``covers=True`` — the point of the exploit.
+    """
+    panels = []
+    for f in folds:
+        n = np.asarray(f.values).size
+        if kind == "zero":
+            market = np.zeros(n, dtype=np.float64)
+        elif kind == "constant":
+            market = np.full(n, 0.004, dtype=np.float64)
+        elif kind == "nan":
+            market = np.full(n, 0.01, dtype=np.float64)
+            market[0] = np.nan
+        else:  # pragma: no cover - guard
+            raise ValueError(kind)
+        panels.append({"market": market, "funding_carry": np.zeros(n, dtype=np.float64)})
+    return panels
+
+
+class _DegeneratePanelProvider:
+    """A FactorPanelProvider that returns a PRESENT-BUT-DEGENERATE covering panel.
+
+    Mirrors a provider that emits a fake-covering column (e.g. an all-zero ``market`` from a flat
+    benchmark window): the names are present, so the old presence-only Lockbox gate passed, but
+    the column neutralizes nothing. Used to drive the Lockbox half of each degenerate variant.
+    """
+
+    def __init__(self, kind: str):
+        self._kind = kind
+
+    def __call__(self, window, returns):  # noqa: ARG002
+        n = np.asarray(returns.values).size
+        if self._kind == "zero":
+            market = np.zeros(n, dtype=np.float64)
+        elif self._kind == "constant":
+            market = np.full(n, 0.004, dtype=np.float64)
+        elif self._kind == "nan":
+            market = np.full(n, 0.01, dtype=np.float64)
+            market[0] = np.nan
+        else:  # pragma: no cover - guard
+            raise ValueError(self._kind)
+        return {"market": market, "funding_carry": np.zeros(n, dtype=np.float64)}
+
+
+@pytest.mark.parametrize("kind", ["zero", "constant", "nan"])
+def test_ac9_compute_res_fails_closed_on_present_but_degenerate_market(kind):
+    """compute_res: a PRESENT-BUT-DEGENERATE required column ⇒ infeasible, NOT a raw graduation.
+
+    Pre-fix (reproduced in the suite reproduction): the all-zero/constant variants GRADUATED with
+    rank_sharpe≈26.5 (the presence-only gate passed and residualize removed nothing), and the NaN
+    variant CRASHED ``residualize`` with ``LinAlgError``. Post-fix: the non-degeneracy gate fails
+    closed for every variant — feasible False, rank None, ``factor_panel`` gate failed with a
+    degenerate/unwired reason. No present-but-degenerate column can let beta-as-alpha graduate."""
+    folds = [_beta_basket_fold(s)[0] for s in range(1, 4)]
+    panels = _degenerate_market_panels(folds, kind=kind)
+
+    res = compute_res(
+        folds, panels, trade_count=900, thresholds=THRESHOLDS,
+        required_factors=("market", "funding_carry"),
+    )
+
+    assert res.feasible is False, (
+        f"pure-beta basket GRADUATED through a present-but-degenerate ({kind}) market column "
+        f"(rank_sharpe={res.rank_sharpe}) — the non-degeneracy wall is not fail-closed"
+    )
+    assert res.rank_sharpe is None
+    assert "factor_panel" in res.gate_results
+    assert not res.gate_results["factor_panel"].passed
+    assert "degenerate" in res.gate_results["factor_panel"].detail
+
+
+@pytest.mark.parametrize("kind", ["zero", "constant", "nan"])
+def test_ac9_walk_forward_fails_closed_on_present_but_degenerate_market(kind):
+    """run_walk_forward_res (live path): a provider that emits a present-but-degenerate covering
+    panel ⇒ infeasible, never a raw-beta graduation. The full orchestrator path, not just the
+    judgment layer in isolation."""
+    proto, exp = _protocol(), _experiment()
+    gw = _BasketGateway(_beta_basket_fold)
+
+    out = run_walk_forward_res(
+        exp, proto, gw, _DegeneratePanelProvider(kind), thresholds=THRESHOLDS
+    )
+
+    assert out.n_folds_evaluated >= 1
+    res = out.res
+    assert res.feasible is False, (
+        f"pure-beta basket GRADUATED on the live path via a degenerate ({kind}) panel "
+        f"(rank_sharpe={res.rank_sharpe})"
+    )
+    assert res.rank_sharpe is None
+    assert "factor_panel" in res.gate_results
+    assert not res.gate_results["factor_panel"].passed
+    assert "degenerate" in res.gate_results["factor_panel"].detail
+
+
+@pytest.mark.parametrize("kind", ["zero", "constant", "nan"])
+def test_ac9_lockbox_fails_closed_on_present_but_degenerate_market(kind):
+    """confirm_on_lockbox: a PRESENT-BUT-DEGENERATE covering panel ⇒ insufficient_evidence,
+    never CONFIRMED on raw beta.
+
+    Pre-fix (reproduced in the suite reproduction): the all-zero/constant variants CONFIRMED on a
+    powered block (forward Sharpe≈22.0) because the presence-only gate passed and residualize
+    removed nothing; the NaN variant crashed. Post-fix: the non-degeneracy gate returns
+    insufficient_evidence BEFORE the bootstrap — no Lockbox block is burned on raw beta."""
+    proto, exp = _protocol(), _experiment()
+    gw = _BasketGateway(_beta_basket_fold)
+    rp = np.concatenate([_beta_basket_fold(s)[0].values for s in range(1, 40)])
+    profile = profile_asset(rp, lockbox_periods=4000, periods_per_year=PPY)
+
+    verdict = confirm_on_lockbox(
+        exp, proto, profile, claimed_edge=5.0, gateway=gw, book=LockboxBook(),
+        trial_id="x", spent_at="2024-12-15T00:00:00Z",
+        factor_panel_provider=_DegeneratePanelProvider(kind),
+    )
+
+    assert verdict.verdict == "insufficient_evidence", (
+        f"Lockbox CONFIRMED pure-beta via a degenerate ({kind}) panel (verdict={verdict.verdict}, "
+        f"forward_sharpe={verdict.forward_sharpe}) — the non-degeneracy wall is not fail-closed"
+    )
+    assert "degenerate" in verdict.detail
+
+
+def test_ac9_lockbox_does_not_spend_block_on_degenerate_panel():
+    """The degenerate-panel insufficient_evidence must NOT burn the Lockbox dataset (the reserve
+    is a one-shot resource; a misconfigured panel must not consume it). A second confirm on the
+    same block with a covering panel must still be able to run (reserve not yet spent)."""
+    proto, exp = _protocol(), _experiment()
+    gw = _BasketGateway(_beta_basket_fold)
+    rp = np.concatenate([_beta_basket_fold(s)[0].values for s in range(1, 40)])
+    profile = profile_asset(rp, lockbox_periods=4000, periods_per_year=PPY)
+    book = LockboxBook()
+
+    first = confirm_on_lockbox(
+        exp, proto, profile, claimed_edge=5.0, gateway=gw, book=book,
+        trial_id="x", spent_at="2024-12-15T00:00:00Z",
+        factor_panel_provider=_DegeneratePanelProvider("zero"),
+    )
+    assert first.verdict == "insufficient_evidence"
+    # The reserve must not have fired: a subsequent confirm on the SAME block still reserves
+    # successfully (no LockboxSpentError), proving the degenerate path returned pre-reserve.
+    from harness.data.lockbox_book import LockboxSpentError
+
+    try:
+        confirm_on_lockbox(
+            exp, proto, profile, claimed_edge=5.0, gateway=gw, book=book,
+            trial_id="y", spent_at="2024-12-16T00:00:00Z",
+            factor_panel_provider=_DegeneratePanelProvider("constant"),
+        )
+    except LockboxSpentError:  # pragma: no cover - would mean the block was wrongly burned
+        raise AssertionError("degenerate-panel verdict burned the Lockbox block (reserve fired)")
+
+
+# --------------------------------------------------------------------------- #
+# residualize itself must be fail-closed (defense-in-depth): a degenerate / non-finite /
+# rank-deficient design matrix must signal infeasibility, NOT crash and NOT return raw.
+# --------------------------------------------------------------------------- #
+
+
+def test_residualize_fails_closed_on_nan_design_does_not_crash():
+    """residualize against a NaN-containing factor column must NOT raise LinAlgError and must NOT
+    return the raw series as if it were residual. It signals infeasibility (no usable IR)."""
+    from harness.objective.factors import residualize
+
+    rng = np.random.default_rng(7)
+    raw = 0.9 * (0.012 * rng.standard_normal(240) + 0.004) + 0.01 * rng.standard_normal(240)
+    market = np.full(240, 0.01)
+    market[0] = np.nan  # non-finite design column
+
+    result = residualize(raw, {"market": market, "funding_carry": np.zeros(240)})
+    # Fail-closed sentinel: no usable information ratio, and the series is NOT scored as raw alpha.
+    assert result.information_ratio is None
+
+
+@pytest.mark.parametrize("kind", ["zero", "constant"])
+def test_residualize_fails_closed_on_degenerate_design(kind):
+    """residualize against an all-zero / constant factor column signals infeasibility rather than
+    returning the raw beta series (which a zero/constant regressor cannot neutralize)."""
+    from harness.objective.factors import residualize
+
+    rng = np.random.default_rng(8)
+    raw = 0.9 * (0.012 * rng.standard_normal(240) + 0.004) + 0.01 * rng.standard_normal(240)
+    market = np.zeros(240) if kind == "zero" else np.full(240, 0.004)
+
+    result = residualize(raw, {"market": market, "funding_carry": np.zeros(240)})
+    assert result.information_ratio is None
+
+
+# --------------------------------------------------------------------------- #
+# Positive control (re-affirmed): a NON-degenerate market column (std≈0.011) still BOUNCES the
+# pure-beta basket (neutralization works) AND a covering non-degenerate panel still lets genuine
+# idiosyncratic alpha graduate/confirm. The non-degeneracy gate must not over-fire on real data.
+# --------------------------------------------------------------------------- #
+
+
+def test_ac9_non_degenerate_market_still_bounces_pure_beta():
+    """The reviewer's positive control: a real (non-degenerate) market column (std≈0.011) covers
+    the requirement, so the non-degeneracy gate does NOT fire, and honest neutralization still
+    residualizes the pure-beta basket to ≈0 ⇒ infeasible (no rankable residual edge)."""
+    folds, panels = [], []
+    for s in range(1, 4):
+        fold, panel = _beta_basket_fold(s)
+        folds.append(fold)
+        panels.append(
+            {"market": panel["market"], "funding_carry": benign_funding_carry(panel["market"].size, seed=s + 7000)}
+        )
+    # Sanity: the true market column is genuinely non-degenerate.
+    assert float(np.std(panels[0]["market"], ddof=1)) > 0.005
+
+    res = compute_res(
+        folds, panels, trade_count=900, thresholds=THRESHOLDS,
+        required_factors=("market", "funding_carry"),
+    )
+    # The non-degeneracy gate passes (the market column is usable), and neutralization bounces beta.
+    assert res.gate_results["factor_panel"].passed
+    assert res.feasible is False
+    assert res.rank_sharpe is None

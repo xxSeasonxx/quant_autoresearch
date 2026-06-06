@@ -495,4 +495,18 @@ class RealFactorPanelProvider:
         if market.shape[0] != n or funding.shape[0] != n:
             # Alignment did not produce a 1:1 column ⇒ fail closed (no fabricated panel).
             return {}
-        return {"market": market, "funding_carry": funding}
+
+        # Defense-in-depth (AC-9/G2): NEVER emit a degenerate column. A flat-or-single-bar benchmark
+        # window makes ``market`` (pct_change) all-zero — a present-but-degenerate column would pass a
+        # presence-only gate yet neutralize nothing, laundering raw beta as residual alpha. OMIT any
+        # column that is not usable (all-zero / constant / non-finite) so the panel honestly does NOT
+        # cover that factor and the judgment-layer gate fails closed at the source. The judgment gate
+        # is the real guarantee; this just keeps the provider from emitting a fake-covering column.
+        from harness.objective.factors import column_is_usable
+
+        panel: dict[str, np.ndarray] = {}
+        if column_is_usable(market):
+            panel["market"] = market
+        if column_is_usable(funding):
+            panel["funding_carry"] = funding
+        return panel

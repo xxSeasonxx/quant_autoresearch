@@ -150,3 +150,19 @@ def funding_carry_series(
     """
     rng = np.random.default_rng(seed)
     return loading * funding + idio_sd * rng.standard_normal(funding.size)
+
+
+def benign_funding_carry(n: int, *, sd: float = 1e-4, seed: int = 99) -> np.ndarray:
+    """A benign but NON-DEGENERATE funding-carry factor column for covering test panels.
+
+    The factor wall requires every required factor column to be USABLE — present, finite, and
+    non-degenerate (it must actually VARY so beta is genuinely removable; a present-but-constant
+    column neutralizes nothing and would launder raw beta as residual alpha, AC-9/G2). A real
+    funding-rate column always carries small variation, so test panels model ``funding_carry`` with
+    this small zero-mean noise rather than an identically-zero placeholder: it covers the
+    requirement (non-degenerate) while contributing ~no alpha (so it does not perturb the controls'
+    market-beta vs idiosyncratic-alpha assertions). ``sd`` is small (~1e-4) relative to a market
+    column (~1e-2) so the funding leg is genuinely negligible PnL, only non-degenerate.
+    """
+    rng = np.random.default_rng(seed)
+    return sd * rng.standard_normal(n)

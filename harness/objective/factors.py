@@ -27,6 +27,18 @@ from harness.foundation import FoldReturns
 
 _EPS = 1e-12
 
+# Non-degeneracy floor for a required factor column (AC-9/G2). A column is usable for
+# neutralization only if its sample std clears a floor that is the LARGER of an absolute and a
+# relative-to-scale term. The relative term (std vs the column's own |scale|) is the standard
+# conditioning notion — a column whose variation is negligible relative to its level carries no
+# information to regress against; the absolute term catches an all-zero column (scale 0). A
+# regression against a zero/constant column removes NOTHING (residual == raw), so a present-but-
+# degenerate required factor would let a pure-beta basket score as residual alpha — exactly the
+# hole this floor closes. Both are deliberately tiny: a genuine market-return column (std≈1e-2)
+# clears them by ~7 orders of magnitude, so the floor never over-fires on real data.
+_STD_FLOOR_ABS = 1e-10  # absolute std floor (catches all-zero columns; scale-free baseline)
+_STD_FLOOR_REL = 1e-8  # std floor relative to the column's |scale| (catches constant-at-level)
+
 # The canonical factor panel axes (FR-C3). Funding is carry — listed as a panel column,
 # regressed out, never additive. A panel need not supply every axis; whatever columns
 # are present are neutralized.
@@ -53,18 +65,46 @@ class ResidualResult:
     r_squared: float  # fraction of return variance explained by factor BETAS (not the intercept)
 
 
+def column_is_usable(col: np.ndarray) -> bool:
+    """Is this factor column USABLE for neutralization — i.e. is beta actually removable? (AC-9/G2).
+
+    The invariant the factor wall must guarantee (not mere presence): a column is usable iff it is
+
+    - all-finite (no NaN/inf — a non-finite design column makes the OLS undefined/crashing), AND
+    - non-degenerate: its sample std clears ``max(_STD_FLOOR_ABS, _STD_FLOOR_REL · |scale|)`` where
+      ``|scale|`` is the column's max-abs.
+
+    A zero/constant column has std 0 ⇒ NOT usable: regressing returns on it removes nothing
+    (``residual == raw``), so a pure-beta basket would be scored on RAW beta as if it were residual
+    alpha. Requiring the column to actually VARY is the irreducible condition for "the beta was
+    removed". A genuine factor-return column (std≈1e-2) clears the floor trivially.
+    """
+    arr = np.asarray(col, dtype=np.float64)
+    if arr.size == 0 or not np.all(np.isfinite(arr)):
+        return False
+    scale = float(np.max(np.abs(arr)))
+    floor = max(_STD_FLOOR_ABS, _STD_FLOOR_REL * scale)
+    return float(np.std(arr)) > floor
+
+
 def panel_covers(
     factor_panel: Mapping[str, np.ndarray], required_factors: Sequence[str]
 ) -> bool:
-    """Does this panel cover every factor the objective REQUIRES neutralized? (FR-C3, AC-9/G2).
+    """Does this panel cover every required factor with a USABLE (removable) column? (FR-C3, AC-9/G2).
 
-    The fail-closed test the judgment layer runs before trusting a residual: a panel covers the
-    requirement iff every required factor name is present as a column. An empty/identity panel
-    covers nothing, so a Protocol that requires neutralization fails closed rather than scoring
-    raw returns as residual alpha. With no required factors the requirement is vacuously met
-    (identity is then a deliberate choice, not an unwired accident).
+    The fail-closed test the judgment layer runs before trusting a residual. A panel covers the
+    requirement iff every required factor is present AND ``column_is_usable`` — present, all-finite,
+    and non-degenerate (the column actually varies, so beta is genuinely removable). Presence alone
+    is NOT enough: a present-but-degenerate column (all-zero / constant / NaN) neutralizes nothing,
+    so scoring against it would launder raw beta as residual alpha — the AC-9 hole. An
+    empty/identity panel, or any panel with a degenerate/non-finite required column, covers nothing,
+    so a Protocol that requires neutralization fails closed rather than scoring raw returns. With no
+    required factors the requirement is vacuously met (identity is then a deliberate choice).
     """
-    return all(name in factor_panel for name in required_factors)
+    return all(
+        name in factor_panel and column_is_usable(factor_panel[name])
+        for name in required_factors
+    )
 
 
 def _panel_matrix(
@@ -90,6 +130,46 @@ def _panel_matrix(
     return np.column_stack(cols), tuple(names)
 
 
+def _infeasible_residual(n: int, names: Sequence[str]) -> ResidualResult:
+    """The fail-closed sentinel for a design matrix that cannot neutralize (AC-9/G2).
+
+    Returned when the factor design is degenerate / non-finite / rank-deficient — i.e. when beta is
+    NOT actually removable. The residual is an all-NaN series so EVERY downstream statistic
+    (Sharpe/Sortino/IR via ``metrics._all_finite``) resolves to ``None``: the candidate is
+    unrankable, never scored on the RAW series as if neutralization had happened. This is what makes
+    "cannot neutralize ⇒ score raw" unrepresentable even if the upstream coverage gate is bypassed.
+    """
+    return ResidualResult(
+        residual=np.full(n, np.nan, dtype=np.float64),
+        information_ratio=None,
+        alpha=float("nan"),
+        betas={name: float("nan") for name in names},
+        r_squared=0.0,
+    )
+
+
+def _design_is_neutralizable(values: np.ndarray, x: np.ndarray) -> bool:
+    """Can this ``[intercept | factors]`` design actually neutralize SOME beta? (fail-closed precond).
+
+    Defense-in-depth precondition for ``residualize`` — distinct from the strict per-column coverage
+    GATE (``panel_covers``/``column_is_usable``), which is the live-path wall. Here we guarantee only
+    that ``residualize`` never (a) crashes or (b) returns ``residual == raw`` as if neutralization
+    happened. Both require:
+
+    - the returns and the WHOLE design to be FINITE (a NaN/inf design makes ``lstsq`` raise
+      ``LinAlgError`` — we refuse it rather than crash), AND
+    - the design to add at least ONE dimension beyond the intercept (``rank(x) ≥ 2``). If every
+      factor column is degenerate (all-zero/constant), the design collapses to the constant column
+      (rank 1) and the regression would remove NOTHING — ``residual == raw`` — which is exactly how
+      raw beta is laundered as residual alpha. Requiring rank ≥ 2 makes "remove nothing, score raw"
+      unrepresentable, while still allowing a benign extra all-zero column alongside a real one (a
+      ``[real_market, zero_funding]`` panel is rank 2 and correctly neutralizes the market leg).
+    """
+    if not np.all(np.isfinite(values)) or not np.all(np.isfinite(x)):
+        return False
+    return int(np.linalg.matrix_rank(x)) >= 2
+
+
 def residualize(
     returns: FoldReturns | np.ndarray,
     factor_panel: Mapping[str, np.ndarray],
@@ -102,6 +182,13 @@ def residualize(
     An empty panel is the identity: the residual is the returns themselves (nothing to
     neutralize). With a panel, the intercept captures the average residual; the residual
     *series* is what RES ranks on.
+
+    **Fail-closed on a bad design (AC-9/G2, defense-in-depth).** If the factor design is degenerate
+    (an all-zero/constant column), rank-deficient (collinear columns), or non-finite (a NaN/inf
+    column), beta is NOT removable: ``residualize`` returns the all-NaN ``_infeasible_residual``
+    sentinel (IR ``None``, every downstream Sharpe ``None``) rather than raising ``LinAlgError`` or
+    returning the RAW series as if it had been neutralized. The coverage gate (``panel_covers``)
+    catches this upstream; this guard makes the primitive robust regardless of caller.
     """
     values = (
         np.asarray(returns.values, dtype=np.float64)
@@ -125,6 +212,11 @@ def residualize(
     # Regress on the factor columns WITH an intercept (so beta is estimated unbiased by the
     # mean), but score the alpha-bearing residual = intercept + ε = values - factor·beta.
     x = np.column_stack([np.ones(n, dtype=np.float64), design])
+    # Fail-closed BEFORE lstsq: a design that cannot neutralize ANY beta (all factor columns
+    # degenerate ⇒ residual would == raw) or is non-finite (would crash lstsq) is refused —
+    # never crash, never score raw as residual (see _infeasible_residual).
+    if not _design_is_neutralizable(values, x):
+        return _infeasible_residual(n, names)
     coef, *_ = np.linalg.lstsq(x, values, rcond=None)
 
     alpha = float(coef[0])

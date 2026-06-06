@@ -1,25 +1,33 @@
 """Stage-1 feasibility gates — hard, binary; fail any ⇒ RES infeasible (FR-C5).
 
-P1 implements the CHEAP gates that need no significance machinery:
+The CHEAP gates that need no significance machinery (evidence/min-trade proxy,
+concentration ceiling, correlation-aware effective-breadth floor) plus the four OOS gates
+that need walk-forward folds / the real foundation:
 
-- **Evidence sufficiency (proxy):** a minimum trade count. The PSR gate is the honest
-  version at ``evaluate`` and is DEFERRED to P2 (extension point below).
+- **Evidence sufficiency (proxy):** a minimum trade count (a fast proxy on ``run``).
+- **PSR evidence sufficiency:** P(true Sharpe > benchmark) over the pooled residual clears
+  the configured confidence — the honest evidence gate at ``evaluate``.
 - **Concentration ceiling:** no single symbol may dominate PnL.
 - **Effective-breadth floor (CORRELATION-AWARE):** the edge must come from several
   *independent* bets. A basket of co-moving symbols (ADA disguised as ADA/XRP/AVAX)
-  collapses to an effective breadth of ~1 and FAILS — this is what kills the
-  "ADA-as-basket" trick (AC-1 partial).
+  collapses to an effective breadth of ~1 and FAILS — kills the "ADA-as-basket" trick.
+- **Max-drawdown ceiling:** the residual equity curve's drawdown stays survivable.
+- **Worst-fold floor + dispersion ceiling:** the edge holds in the weakest fold and is not
+  carried by a single window. A fold whose residual Sharpe is undefined (degenerate
+  near-zero variance — the ``_EPS`` carry) or non-finite is a FAILING fold, never silently
+  skipped: an unmeasurable fold cannot clear the floor.
+- **Cost-stress survival ratio:** the residual Sharpe under stressed costs holds a minimum
+  fraction of the residual Sharpe under realistic costs.
 
-DEFERRED to P2 (FR-C5, left as marked extension points, NOT fallbacks): the PSR gate,
-the max-drawdown ceiling, the worst-fold floor + dispersion ceiling, and the cost-stress
-survival ratio. They are real OOS gates that need walk-forward folds / the real
-foundation (P2), so they are intentionally absent here, not stubbed to "pass".
+All gates fail-closed when their statistic is undefined (insufficient evidence), never pass
+by default.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -174,4 +182,153 @@ def effective_breadth_gate(
         value=n_eff,
         threshold=min_breadth,
         detail=f"participation ratio of the {len(by_symbol)}-leg correlation matrix",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The OOS gates (need walk-forward folds / the real foundation). Computed, not stubbed.
+# Each fails CLOSED when its statistic is undefined — an unmeasurable edge is not a passing
+# edge (insufficient evidence), never a silent pass.
+# --------------------------------------------------------------------------- #
+
+
+def psr_gate(psr: float | None, psr_floor: float) -> GateOutcome:
+    """Evidence sufficiency: the Probabilistic Sharpe Ratio clears the confidence floor.
+
+    PSR = P(true Sharpe > benchmark) given this candidate's own Sharpe, skew, and kurtosis
+    over the pooled residual. ``None`` (degenerate / no-variance / too-small sample) means
+    the evidence is insufficient to clear the bar ⇒ FAIL. A non-finite or out-of-[0,1] value
+    is not a valid probability ⇒ FAIL (never pass on a malformed statistic).
+    """
+    valid = psr is not None and math.isfinite(psr) and 0.0 <= psr <= 1.0
+    passed = valid and psr >= psr_floor
+    return GateOutcome(
+        name="psr",
+        passed=passed,
+        value=psr,
+        threshold=psr_floor,
+        detail="P(true Sharpe > benchmark) over the pooled residual; None/non-finite ⇒ insufficient",
+    )
+
+
+def max_drawdown_gate(max_drawdown: float | None, ceiling: float) -> GateOutcome:
+    """Survival: the residual equity curve's max drawdown magnitude stays under the ceiling.
+
+    ``max_drawdown`` is the (negative-fraction) drawdown of the residual curve. ``None``
+    (empty / non-finite) fails — an unmeasurable drawdown is not a survivable one.
+    """
+    passed = max_drawdown is not None and abs(max_drawdown) <= ceiling
+    return GateOutcome(
+        name="max_drawdown",
+        passed=passed,
+        value=None if max_drawdown is None else abs(max_drawdown),
+        threshold=ceiling,
+        detail="|max drawdown| of the residual equity curve; None ⇒ fail",
+    )
+
+
+def worst_fold_gate(
+    per_fold_sharpe: Sequence[float | None],
+    worst_fold_floor: float,
+    dispersion_ceiling: float,
+) -> GateOutcome:
+    """Worst-fold floor + dispersion ceiling over the per-fold residual Sharpe set (FR-C5).
+
+    The edge must hold in the weakest fold (``min ≥ worst_fold_floor``) and not be carried
+    by a single window (dispersion ``std/|mean|`` of the per-fold Sharpes ``≤ ceiling``).
+
+    **Degenerate/None folds are gate-relevant** (the ``_EPS`` carry): a fold whose residual
+    Sharpe is ``None`` (near-zero variance) or non-finite is treated as a FAILING fold — its
+    edge is unmeasurable, so it cannot clear the floor. This prevents a near-zero-variance
+    fold from laundering a spurious "all folds positive" pass. With no folds at all the gate
+    fails (no evidence). With a single measurable fold the floor still applies; dispersion is
+    not applicable (cannot disperse one point) and does not by itself fail the gate.
+    """
+    if len(per_fold_sharpe) == 0:
+        return GateOutcome(
+            name="worst_fold",
+            passed=False,
+            value=None,
+            threshold=worst_fold_floor,
+            detail="no folds — no evidence",
+        )
+    # A None/non-finite fold is unmeasurable ⇒ it cannot clear the floor ⇒ the gate fails.
+    has_unmeasurable = any(
+        s is None or not math.isfinite(s) for s in per_fold_sharpe
+    )
+    finite = [float(s) for s in per_fold_sharpe if s is not None and math.isfinite(s)]
+    worst = min(finite) if finite else None
+    if has_unmeasurable:
+        return GateOutcome(
+            name="worst_fold",
+            passed=False,
+            value=worst,
+            threshold=worst_fold_floor,
+            detail="a fold has undefined/non-finite residual Sharpe (degenerate) — "
+            "treated as a failing fold, not skipped",
+        )
+    assert worst is not None  # all folds measurable here
+    floor_ok = worst >= worst_fold_floor
+    # Dispersion: coefficient-of-variation-style spread of the per-fold Sharpes. Only
+    # applicable with ≥2 folds (a single point has no dispersion).
+    dispersion = None
+    dispersion_ok = True
+    if len(finite) >= 2:
+        mean = float(np.mean(finite))
+        sd = float(np.std(finite, ddof=1))
+        dispersion = sd / abs(mean) if abs(mean) > _EPS else float("inf")
+        dispersion_ok = dispersion <= dispersion_ceiling
+    passed = bool(floor_ok and dispersion_ok)
+    return GateOutcome(
+        name="worst_fold",
+        passed=passed,
+        value=worst,
+        threshold=worst_fold_floor,
+        detail=(
+            f"worst fold Sharpe={worst:.3f} (floor {worst_fold_floor}); "
+            + (
+                f"dispersion={dispersion:.3f} (ceiling {dispersion_ceiling})"
+                if dispersion is not None
+                else "single fold — dispersion N/A"
+            )
+        ),
+    )
+
+
+def cost_stress_gate(
+    realistic_sharpe: float | None,
+    stressed_sharpe: float | None,
+    survival_ratio: float,
+) -> GateOutcome:
+    """Cost-stress survival: stressed-cost residual Sharpe holds a fraction of realistic.
+
+    Pass iff ``realistic_sharpe > 0`` and ``stressed_sharpe / realistic_sharpe ≥
+    survival_ratio``. A non-positive, ``None``, or non-finite realistic Sharpe is not a
+    positive edge to stress ⇒ FAIL. A ``None`` / non-finite stressed Sharpe is UNDEFINED
+    evidence ⇒ FAIL outright (it is not mapped to 0, which could otherwise slip through a
+    ``survival_ratio = 0`` Protocol — fail closed on missing evidence).
+    """
+    if realistic_sharpe is None or not math.isfinite(realistic_sharpe) or realistic_sharpe <= 0.0:
+        return GateOutcome(
+            name="cost_stress",
+            passed=False,
+            value=None,
+            threshold=survival_ratio,
+            detail="no positive realistic-cost edge to stress",
+        )
+    if stressed_sharpe is None or not math.isfinite(stressed_sharpe):
+        return GateOutcome(
+            name="cost_stress",
+            passed=False,
+            value=None,
+            threshold=survival_ratio,
+            detail="stressed-cost residual Sharpe undefined — insufficient evidence under stress",
+        )
+    ratio = stressed_sharpe / realistic_sharpe
+    return GateOutcome(
+        name="cost_stress",
+        passed=ratio >= survival_ratio,
+        value=ratio,
+        threshold=survival_ratio,
+        detail=f"stressed/realistic residual Sharpe = {ratio:.3f}",
     )

@@ -63,6 +63,9 @@ class CostModel(_Frozen):
     taker_bps: float = Field(ge=0.0)
     maker_bps: float = Field(ge=0.0)
     slippage_bps: float = Field(ge=0.0, default=0.0)
+    # The cost-stress scenario multiplies realistic costs by this factor (the cost-stress
+    # survival gate checks the edge holds under it). Protocol-owned; >1 means harsher costs.
+    stress_multiplier: float = Field(ge=1.0, default=2.0)
 
 
 class FillModel(_Frozen):
@@ -77,11 +80,27 @@ class DataTier(_Frozen):
     end: str
 
 
+class DataSource(_Frozen):
+    """The foundation data surface for the campaign (harness-owned, FR-H/FR-J3).
+
+    ``kind`` and ``dataset`` are the ``quant_data`` loader selectors the foundation's
+    ``[data]`` block needs (e.g. ``kind="crypto_perp_funding"``, or ``kind="bars"`` with
+    ``dataset="crypto_perp_1min"``). They define *what data the campaign is judged on* — part
+    of the immutable judgment config, never agent-editable. Defaults suit hourly crypto perp.
+    """
+
+    kind: str = "crypto_perp_funding"
+    dataset: str | None = None  # required by the foundation only for kind="bars"
+    entry_lag_bars: int = Field(ge=0, default=1)
+    exit_lag_bars: int = Field(ge=0, default=0)
+
+
 class DataTiers(_Frozen):
     train: DataTier
     selection: DataTier
     lockbox: DataTier
     symbols: tuple[str, ...] = ()  # the asset universe for the campaign
+    source: DataSource = DataSource()
 
 
 class FoldConfig(_Frozen):

@@ -27,6 +27,8 @@ harness/
   __init__.py
   protocol.py        # Protocol (immutable, content-hashed) + Experiment split        [P1] FR-H
   foundation.py      # FoundationGateway seam + result types (the testability seam)    [P1 iface / P2 real]  FR-J
+  foundation_real.py # RealFoundationGateway adapter — the ONLY quant_strategies importer [P2] FR-J
+  orchestrator.py    # walk-forward RES orchestration (evaluate once per fold → RES)   [P2] FR-J2
   objective/
     __init__.py
     res.py           # Robust Edge Score: rank-on-Sharpe, per-fold evidence unit       [P1] FR-C1,C2,C4,C6
@@ -65,6 +67,13 @@ the abstraction below (Dependency Inversion). This is what makes AC-1/AC-6/AC-9
 deterministically testable with synthetic returns, and it is the literal
 expression of FR-J1 ("harness orchestrates, does not re-derive engine math") and
 AC-10 ("per-fold OOS returns via a typed foundation API, no Parquet scraping").
+
+> **Single sanctioned boundary crosser (P2):** `harness/foundation_real.py`
+> (`RealFoundationGateway`) is the **only** module under `harness/` permitted to import
+> `quant_strategies`. Every other harness module — objective/, gates, metrics, factors,
+> stability, protocol, data/, profiler, orchestrator, and the P3–P5 judgment modules — stays
+> pure. The boundary test (`tests/harness/test_foundation_seam.py`) asserts both directions:
+> no judgment module imports the engine, and the adapter *is* the importer.
 
 Core return type — **numpy in the core, pandas only at the real adapter**:
 

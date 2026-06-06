@@ -56,7 +56,14 @@ def evidence_gate(trade_count: int, min_trades: int) -> GateOutcome:
 
 
 def _pnl_shares(by_symbol: Mapping[str, FoldReturns]) -> dict[str, float]:
-    """Absolute-PnL share per symbol (compounded growth - 1, by |contribution|)."""
+    """Absolute-PnL share per symbol (compounded growth - 1, by |contribution|).
+
+    Note: on near-zero-mean RESIDUAL legs the |PnL|-share basis is noisy at low SNR (the
+    compounded growth of a mean-zero series is dominated by sampling fluctuation, not
+    edge). In practice such candidates are already bounced upstream by a near-zero residual
+    IR → rank None, so this gate need not be the one that bites there. If it ever must
+    discriminate at low SNR, a variance- or |leg-mean|-based share would be a cleaner basis.
+    """
     raw: dict[str, float] = {}
     for sym, fr in by_symbol.items():
         vals = np.asarray(fr.values, dtype=np.float64)
@@ -110,6 +117,12 @@ def effective_breadth(by_symbol: Mapping[str, FoldReturns]) -> float:
     So a basket whose symbols all track one underlying (ADA/XRP/AVAX all ~ ADA) scores
     ``N_eff ≈ 1`` and does NOT pass as diversified, regardless of how many tickers it lists.
     Degenerate (zero-variance) legs contribute no independent information.
+
+    This measures the number of *independent* bets via the participation ratio of the
+    correlation matrix — NOT a simple leg count. A perfectly hedged 2-leg pair (corr −1)
+    is one independent bet, so it reads as ``N_eff ≈ 1`` (concentrated) and fails the
+    floor: a legitimate pairs strategy therefore needs ≥3 independent legs, or a
+    purpose-built pairs gate, rather than this breadth floor.
     """
     syms = list(by_symbol)
     k = len(syms)

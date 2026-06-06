@@ -154,10 +154,13 @@ def compute_res(
         effective_breadth_gate(pooled_symbols, thresholds.min_effective_breadth),
     ]
     gate_results = {g.name: g for g in gate_list}
-    feasible = all(g.passed for g in gate_list)
 
-    # An infeasible candidate has no ranking number — it cannot be ranked or graduate.
-    # A residual with no usable variance (pure factor beta) also has no rank.
+    # A candidate must clear every Stage-1 gate AND carry a usable ranking number to be
+    # feasible. ``rank_sharpe is None`` (no usable residual variance — pure factor beta —
+    # or a non-finite bar, see metrics) means there is nothing to rank, so the candidate
+    # is unrankable: feasible=False with rank_sharpe=None, never feasible with a missing
+    # or NaN rank. ResResult.rank_sharpe is therefore strictly float | None.
+    feasible = all(g.passed for g in gate_list) and rank_sharpe is not None
     effective_rank = rank_sharpe if feasible else None
 
     return ResResult(

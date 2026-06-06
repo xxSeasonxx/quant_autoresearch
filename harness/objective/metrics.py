@@ -29,6 +29,13 @@ def _as_returns(returns: FoldReturns | np.ndarray) -> tuple[np.ndarray, float]:
     return np.asarray(returns, dtype=np.float64), math.nan
 
 
+def _all_finite(values: np.ndarray) -> bool:
+    """True iff every input bar is finite. A non-finite bar makes a ratio NaN, which is
+    not a valid ``float | None`` rank (top-K ranking is position-dependent with NaN), so
+    ratio metrics return ``None`` instead — never propagate NaN as if it were a score."""
+    return bool(np.all(np.isfinite(values)))
+
+
 def sharpe(returns: FoldReturns | np.ndarray, periods_per_year: float | None = None) -> float | None:
     """Annualized Sharpe ratio (risk-free assumed 0; sizing frozen upstream).
 
@@ -40,11 +47,14 @@ def sharpe(returns: FoldReturns | np.ndarray, periods_per_year: float | None = N
         ppy = float(periods_per_year)
     if values.size < 2 or not math.isfinite(ppy) or ppy <= 0:
         return None
+    if not _all_finite(values):
+        return None
     sd = float(np.std(values, ddof=1))
     if sd < _EPS:
         return None
     mean = float(np.mean(values))
-    return mean / sd * math.sqrt(ppy)
+    result = mean / sd * math.sqrt(ppy)
+    return result if math.isfinite(result) else None
 
 
 def sortino(returns: FoldReturns | np.ndarray, periods_per_year: float | None = None) -> float | None:
@@ -57,6 +67,8 @@ def sortino(returns: FoldReturns | np.ndarray, periods_per_year: float | None = 
         ppy = float(periods_per_year)
     if values.size < 2 or not math.isfinite(ppy) or ppy <= 0:
         return None
+    if not _all_finite(values):
+        return None
     downside = np.minimum(values, 0.0)
     # Mean squared downside about the target, normalized by the full sample count
     # (the conventional Sortino denominator), then annualized.
@@ -65,20 +77,32 @@ def sortino(returns: FoldReturns | np.ndarray, periods_per_year: float | None = 
     if dd < _EPS:
         return None
     mean = float(np.mean(values))
-    return mean / dd * math.sqrt(ppy)
+    result = mean / dd * math.sqrt(ppy)
+    return result if math.isfinite(result) else None
 
 
 def max_drawdown(returns: FoldReturns | np.ndarray) -> float | None:
     """Maximum drawdown of the compounded equity curve, as a negative fraction.
 
-    A flat or rising curve returns 0.0. Returns ``None`` for an empty series.
+    A flat or rising curve returns 0.0; total ruin (a -100% bar) is -1.0 regardless of
+    where it falls in the series. Returns ``None`` for an empty or non-finite series.
     """
     values, _ = _as_returns(returns)
     if values.size == 0:
         return None
+    if not np.all(np.isfinite(values)):
+        return None
     equity = np.cumprod(1.0 + values)
     running_max = np.maximum.accumulate(equity)
-    drawdowns = equity / running_max - 1.0
+    # A -100% bar drives equity (and the running max) to 0; once the running max is 0,
+    # equity/running_max is 0/0 -> NaN with a RuntimeWarning, and ruin would only read
+    # as a clean -1.0 when the wipeout is the last bar. Default every non-positive
+    # running-max bar to total ruin (-1.0) and divide only where it is positive — so the
+    # value is order-independent and the bad division is never evaluated (no warning).
+    positive = running_max > 0.0
+    drawdowns = np.full(equity.shape, -1.0, dtype=np.float64)
+    np.divide(equity, running_max, out=drawdowns, where=positive)
+    drawdowns[positive] -= 1.0
     return float(np.min(drawdowns))
 
 
@@ -93,6 +117,8 @@ def calmar(returns: FoldReturns | np.ndarray, periods_per_year: float | None = N
         ppy = float(periods_per_year)
     if values.size < 1 or not math.isfinite(ppy) or ppy <= 0:
         return None
+    if not _all_finite(values):
+        return None
     mdd = max_drawdown(values)
     if mdd is None or abs(mdd) < _EPS:
         return None
@@ -101,7 +127,8 @@ def calmar(returns: FoldReturns | np.ndarray, periods_per_year: float | None = N
     if total_growth <= 0:
         return None
     ann_return = total_growth ** (ppy / values.size) - 1.0
-    return ann_return / abs(mdd)
+    result = ann_return / abs(mdd)
+    return result if math.isfinite(result) else None
 
 
 def probabilistic_sharpe_ratio(
@@ -123,6 +150,8 @@ def probabilistic_sharpe_ratio(
         ppy = float(periods_per_year)
     n = values.size
     if n < 3:
+        return None
+    if not _all_finite(values):
         return None
     sd = float(np.std(values, ddof=1))
     if sd < _EPS:

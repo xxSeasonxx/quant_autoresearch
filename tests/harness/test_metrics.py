@@ -67,3 +67,46 @@ def test_psr_increases_with_sample_size_for_positive_sharpe():
 
 def test_psr_none_for_tiny_sample():
     assert metrics.probabilistic_sharpe_ratio(make_returns([0.01, 0.02])) is None
+
+
+# --------------------------------------------------------------------------- #
+# Non-finite safety: a bad bar must yield None, never NaN/inf, on every ratio
+# metric (NaN would propagate to a feasible=True row with an unrankable rank).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_ratio_metrics_are_none_on_non_finite_input(bad):
+    vals = np.array([0.01, -0.005, bad, 0.02, 0.015])
+    ppy = 252.0
+    assert metrics.sharpe(make_returns(vals, periods_per_year=ppy)) is None
+    assert metrics.sortino(make_returns(vals, periods_per_year=ppy)) is None
+    assert metrics.calmar(make_returns(vals, periods_per_year=ppy)) is None
+    assert metrics.probabilistic_sharpe_ratio(make_returns(vals, periods_per_year=ppy)) is None
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_information_ratio_is_none_on_non_finite_input(bad):
+    vals = np.array([0.01, -0.005, bad, 0.02, 0.015])
+    from harness.objective import factors
+
+    assert factors._information_ratio(vals) is None
+
+
+def test_max_drawdown_total_wipeout_is_minus_one_regardless_of_position():
+    """A -100% bar drives equity to 0: ruin is exactly -1.0, no 0/0 NaN warning,
+    and the value is identical whether a bar follows the wipeout or it is last.
+
+    The 0/0 -> NaN + RuntimeWarning fires when running_max itself is 0 (i.e. the
+    wipeout is the first bar), so the discriminating case puts -1.0 first.
+    """
+    with np.errstate(all="raise"):  # any RuntimeWarning-class op would raise here
+        followed = metrics.max_drawdown(make_returns([-1.0, 0.05, 0.1]))
+        last = metrics.max_drawdown(make_returns([0.1, 0.05, -1.0]))
+    assert followed == -1.0
+    assert last == -1.0
+    assert followed == last
+
+
+def test_max_drawdown_none_on_non_finite_input():
+    assert metrics.max_drawdown(make_returns([0.01, np.nan, 0.02])) is None

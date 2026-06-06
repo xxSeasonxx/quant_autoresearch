@@ -49,23 +49,35 @@ def _alpha_basket(n, market, seed_base, alpha=0.0007, beta=0.9, idio_sd=0.004):
 
 
 def test_ac9_pure_market_beta_has_zero_residual_alpha():
-    """A pure market-beta basket (no alpha) has ≈0 residual information ratio."""
+    """A pure market-beta basket (no alpha) has ≈0 residual information ratio.
+
+    The factor carries a non-zero-mean DRIFT, so the un-neutralized (raw) IR is large
+    (~+0.36): the test only passes because beta is actually removed (residual IR within
+    finite-sample noise of zero, ~-0.06). With a zero-mean factor the raw IR would itself
+    sneak under the band and the test would not discriminate beta-removed from not-removed.
+    """
     n = 600
-    market = factor_series(n=n, sd=0.02, seed=1)
+    market = factor_series(n=n, sd=0.02, seed=1) + 0.008  # drifted (non-zero-mean) factor
     # alpha=0: pure beta + realistic idio noise (NOT a degenerate near-zero series).
     by_symbol, port = _alpha_basket(n, market, seed_base=10, alpha=0.0, idio_sd=0.004)
     fold = make_returns(port, by_symbol=by_symbol)
 
     res = compute_res([fold], [{"market": market}], trade_count=200, thresholds=THRESHOLDS)
-    # The residual-alpha magnitude (IR) is ≈ 0 — there is no edge to confirm.
+    # The residual-alpha magnitude (IR) is ≈ 0 — there is no edge to confirm. The band is
+    # the finite-sample noise floor at n=600 (~1/sqrt(n)); the raw IR if beta were NOT
+    # removed is ~+0.36, far outside it, so reverting residualization fails this test.
     assert res.residual_info_ratio is not None
-    assert abs(res.residual_info_ratio) < 0.05  # within finite-sample noise band of zero
+    assert abs(res.residual_info_ratio) < 0.10
 
 
 def test_ac9_pure_funding_carry_has_zero_residual_alpha():
-    """Funding is carry: a funding-carry collector has ≈0 residual information ratio."""
+    """Funding is carry: a funding-carry collector has ≈0 residual information ratio.
+
+    Funding carries a non-zero-mean DRIFT (carry IS a drift), so the un-neutralized IR is
+    large (~+0.68); the test discriminates only because funding beta is regressed out.
+    """
     n = 600
-    funding = factor_series(n=n, sd=0.006, seed=21)
+    funding = factor_series(n=n, sd=0.006, seed=21) + 0.004  # drifted (non-zero-mean) carry
     by_symbol, port = {}, np.zeros(n)
     for i, sym in enumerate("ABC"):
         rng = np.random.default_rng(40 + i)
@@ -76,15 +88,21 @@ def test_ac9_pure_funding_carry_has_zero_residual_alpha():
     fold = make_returns(port, by_symbol=by_symbol)
 
     res = compute_res([fold], [{"funding_carry": funding}], trade_count=200, thresholds=THRESHOLDS)
+    # Residual IR within the n=600 noise floor; raw IR if funding were NOT removed is
+    # ~+0.68, so reverting residualization fails this test.
     assert res.residual_info_ratio is not None
-    assert abs(res.residual_info_ratio) < 0.05  # within finite-sample noise band of zero
+    assert abs(res.residual_info_ratio) < 0.10
 
 
 def test_ac9_funding_pnl_is_neutralized_not_added_back():
-    """Market beta + funding carry, no alpha ⇒ residual IR ≈ 0 (neither kept as edge)."""
+    """Market beta + funding carry, no alpha ⇒ residual IR ≈ 0 (neither kept as edge).
+
+    Both factors carry a non-zero-mean DRIFT, so the un-neutralized IR is large (~+0.60);
+    the test discriminates only because BOTH betas are regressed out (neither added back).
+    """
     n = 600
-    market = factor_series(n=n, sd=0.02, seed=1)
-    funding = factor_series(n=n, sd=0.006, seed=21)
+    market = factor_series(n=n, sd=0.02, seed=1) + 0.008  # drifted market
+    funding = factor_series(n=n, sd=0.006, seed=21) + 0.004  # drifted carry
     by_symbol, port = {}, np.zeros(n)
     for i, sym in enumerate("ABC"):
         rng = np.random.default_rng(60 + i)
@@ -94,8 +112,10 @@ def test_ac9_funding_pnl_is_neutralized_not_added_back():
     fold = make_returns(port, by_symbol=by_symbol)
     panel = {"market": market, "funding_carry": funding}
     res = compute_res([fold], [panel], trade_count=200, thresholds=THRESHOLDS)
+    # Residual IR within the n=600 noise floor; raw IR if betas were NOT removed is
+    # ~+0.60, so reverting residualization fails this test.
     assert res.residual_info_ratio is not None
-    assert abs(res.residual_info_ratio) < 0.05  # within finite-sample noise band of zero
+    assert abs(res.residual_info_ratio) < 0.10
 
 
 def test_genuine_residual_alpha_ranks_positive_and_feasible():
@@ -176,6 +196,21 @@ def test_ac1_thin_trade_count_is_infeasible():
 # --------------------------------------------------------------------------- #
 # FR-C4 / FR-C6 semantics.
 # --------------------------------------------------------------------------- #
+
+
+def test_nan_bar_makes_candidate_unrankable():
+    """A non-finite bar makes the residual Sharpe None (Fix 1); the candidate is then
+    unrankable — feasible is False and rank_sharpe is None, never feasible with a
+    missing/NaN rank (ResResult.rank_sharpe is strictly float | None)."""
+    n = 600
+    market = factor_series(n=n, sd=0.02, seed=1)
+    by_symbol, port = _alpha_basket(n, market, seed_base=400, alpha=0.0009, idio_sd=0.003)
+    port = port.copy()
+    port[123] = np.nan  # one bad bar in the pooled residual
+    fold = make_returns(port, by_symbol=by_symbol)
+    res = compute_res([fold], [{"market": market}], trade_count=200, thresholds=THRESHOLDS)
+    assert res.feasible is False
+    assert res.rank_sharpe is None
 
 
 def test_per_fold_sharpe_is_the_evidence_unit():

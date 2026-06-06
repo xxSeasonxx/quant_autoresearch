@@ -144,10 +144,15 @@ def _information_ratio(residual: np.ndarray) -> float | None:
     """
     if residual.size < 2:
         return None
+    # A non-finite bar would make the ratio NaN; an unrankable NaN must not propagate
+    # as if it were an alpha magnitude (see metrics._all_finite).
+    if not np.all(np.isfinite(residual)):
+        return None
     sd = float(np.std(residual, ddof=1))
     if sd < _EPS:
         return None
-    return float(np.mean(residual)) / sd
+    result = float(np.mean(residual)) / sd
+    return result if np.isfinite(result) else None
 
 
 def residual_fold_returns(

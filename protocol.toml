@@ -1,0 +1,75 @@
+# Protocol — harness-owned, READ-ONLY to the agent (FR-H).
+#
+# This file defines HOW a candidate is judged: costs, fill, data tiers, the objective
+# metric + gates + thresholds, the factor panel, the budget, the stability perturbation
+# steps, and annualization. It is loaded from outside the agent's writable surface,
+# content-hashed, and the run FAILS CLOSED on drift (FR-H2). The agent's editable surface
+# is `experiment.toml` (strategy + params) — never this file.
+#
+# Thresholds here are P1 defaults (open decision #1); P2 calibrates against real data.
+
+name = "btc-perp-hourly-v1"
+
+[cost_model]
+taker_bps = 5.0
+maker_bps = 1.0
+slippage_bps = 1.0
+
+[fill_model]
+fill = "next_bar_open"
+participation_cap = 0.1
+
+[data_tiers]
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
+
+[data_tiers.train]
+start = "2024-01-01"
+end = "2024-09-30"
+
+[data_tiers.selection]
+start = "2024-10-01"
+end = "2025-04-30"
+
+[data_tiers.lockbox]
+start = "2025-05-01"
+end = "2025-07-31"
+
+[folds]
+scheme = "rolling"
+n_folds = 6
+train_periods = 4320
+test_periods = 1440
+purge_periods = 24
+embargo_periods = 24
+
+[objective]
+rank_metric = "sharpe"
+deflate_per_row = false
+
+[objective.gates]
+min_trades = 30
+max_concentration = 0.5
+min_effective_breadth = 2.0
+psr_floor = 0.95
+max_drawdown_ceiling = 0.35
+worst_fold_floor = 0.0
+dispersion_ceiling = 3.0
+cost_stress_ratio = 0.5
+
+[objective.factor_panel]
+axes = ["market", "momentum", "funding_carry", "size"]
+
+[budget]
+max_selection_looks = 8
+
+[stability]
+rho = 0.6
+min_positive_fraction = 0.8
+step_multipliers = [1, 2]
+
+[stability.param_steps]
+lookback = 4
+threshold = 0.1
+
+[annualization]
+periods_per_year = 8760.0

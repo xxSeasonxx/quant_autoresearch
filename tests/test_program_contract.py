@@ -1,192 +1,112 @@
+"""program.md contract — the FINAL one-page agent loop (the headline deliverable).
+
+Asserts program.md names the EXACT CLI commands the harness exposes, the editable/read-only
+split, and the new-world loop — and does NOT contain the SUPERSEDED language (the hill-climb
+"keep if the score rose", the per-family budget, or the retired `--explore`/`--promote`/
+`net_return` shell). The rigor lives in the harness; the contract stays short and explicit.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PROGRAM = ROOT / "program.md"
 
 
-def test_program_names_exactly_strategy_and_experiment_toml_as_loop_editable_files():
-    text = PROGRAM.read_text()
+def _text() -> str:
+    return PROGRAM.read_text()
 
-    assert "Editable during a research loop:" in text
-    editable_section = text.split("Editable during a research loop:", 1)[1].split(
-        "Read-only during a research loop:", 1
-    )[0]
-    editable_lines = [
-        line.strip() for line in editable_section.splitlines() if line.strip()
+
+def _normalized() -> str:
+    return " ".join(_text().split())
+
+
+def test_program_names_the_exact_cli_commands():
+    """The three agent commands, named exactly as built (conda run -n quant python -m harness.cli)."""
+    norm = _normalized()
+    assert "conda run -n quant python -m harness.cli status" in norm
+    assert 'conda run -n quant python -m harness.cli run --desc "<thesis>"' in norm
+    assert "conda run -n quant python -m harness.cli evaluate --desc" in norm
+
+
+def test_program_states_the_editable_and_read_only_split():
+    norm = _normalized()
+    # Editable: strategy.py + experiment.toml [params].
+    assert "`strategy.py`" in norm
+    assert "`experiment.toml`" in norm
+    assert "EDITABLE" in norm
+    # Read-only: the Protocol, the harness package, the ledger.
+    assert "READ-ONLY" in norm
+    assert "`protocol.toml`" in norm
+    assert "`harness/` package" in norm
+    assert "ledger" in norm
+
+
+def test_program_keeps_the_new_world_loop_semantics():
+    # Concept presence is case-insensitive (program.md uppercases some terms for emphasis).
+    norm = _normalized().lower()
+    required = [
+        "falsifiable, causal hypothesis",
+        "robust plateau",
+        "escalation gate",  # the harness-enforced gate
+        "logs the bet",
+        "swing big",
+        "quota",
+        "global to the campaign",  # the budget is global, not per-family
+        "satisfice on train",
+        "never early stop",
+        "never run the lockbox",
     ]
-    assert editable_lines == ["- `strategy.py`", "- `experiment.toml`"]
+    for phrase in required:
+        assert phrase in norm, f"missing required phrase: {phrase!r}"
 
 
-def test_program_does_not_expose_attempt_count_or_max_attempts():
-    text = PROGRAM.read_text().lower()
+def test_program_does_not_contain_superseded_hill_climb_language():
+    """The hill-climb 'keep if the score rose' is GONE (FR-D3)."""
+    norm = _normalized().lower()
+    banned = [
+        "keep if the score rose",
+        "keep if the score rises",
+        "keep it only if the score rose",
+        "best-so-far",
+        "if promotion reports",
+        "decision\": \"keep\"",
+    ]
+    for phrase in banned:
+        assert phrase not in norm, f"superseded hill-climb language present: {phrase!r}"
 
-    banned_fragments = (
-        "attempt_count",
+
+def test_program_does_not_contain_per_family_budget_language():
+    """The budget is GLOBAL; the 'fresh family gets its own budget' line is GONE."""
+    norm = _normalized().lower()
+    banned = [
+        "fresh family gets its own budget",
+        "its own budget",
+        "per-family budget",
+        "reset per family",  # only the negation "not reset per family" is allowed (checked below)
+    ]
+    for phrase in banned:
+        # Allow the explicit negation that the budget is NOT reset per family.
+        if phrase == "reset per family" and "not reset per family" in norm:
+            continue
+        assert phrase not in norm, f"superseded per-family-budget language present: {phrase!r}"
+
+
+def test_program_does_not_reference_retired_runner_shell():
+    """No `--explore` / `--promote` / `net_return` / runner.py / results.tsv (retired in P1-P5)."""
+    norm = _normalized().lower()
+    banned = [
+        "--explore",
+        "--promote",
+        "--confirm",
+        "net_return",
+        "runner.py",
+        "results.tsv",
+        "scoring.py",
+        "promotion screening",
         "max_attempts",
-        "24 attempts",
-        "attempt budget",
-        "run 24",
-    )
-    assert all(fragment not in text for fragment in banned_fragments)
-
-
-def test_program_requires_quant_research_review_not_metric_chasing():
-    text = PROGRAM.read_text()
-
-    required = [
-        "Think like a quant researcher",
-        "Evidence review",
-        "causal timing",
-        "trade count",
-        "costs",
-        "data quality",
-        "overfit",
-        "Loop feedback only",
-    ]
-    for phrase in required:
-        assert phrase in text
-
-
-def test_program_rejects_blind_parameter_sweeps():
-    text = PROGRAM.read_text()
-    normalized = " ".join(text.split())
-
-    required = [
-        "Do not default to a parameter sweep",
-        "improve the strategy hypothesis",
-        "signal construction",
-        "risk filter",
-        "timing logic",
-        "Parameter changes are valid only when",
-        "better expresses that quant idea",
-        "do not tune numbers just because",
-        "the quant reason the new value should improve the",
-        "strategy rather than merely fitting the last run",
-    ]
-    for phrase in required:
-        assert phrase in normalized
-
-
-def test_program_allows_quant_judgment_window_changes_without_cherry_picking():
-    text = PROGRAM.read_text()
-
-    required = [
-        "Choose windows from a quant research perspective",
-        "120 to 180 calendar days",
-        "`active_window_id`",
-        "`--window-id`",
-        "regime",
-        "sample quality",
-        "holdout/stress check",
-        "recent out-of-sample evidence",
-        "falsifier",
-        "Do not cherry-pick windows",
-    ]
-    for phrase in required:
-        assert phrase in text
-
-
-def test_program_allows_quant_perspective_symbol_changes_without_cherry_picking():
-    text = PROGRAM.read_text()
-
-    required = [
-        "Choose symbols from a quant research perspective",
-        "symbol universe",
-        "liquidity",
-        "data coverage",
-        "market structure",
-        "representative breadth",
-        "falsifier",
-        "Do not cherry-pick",
-        "symbols just to rescue",
-    ]
-    for phrase in required:
-        assert phrase in text
-
-
-def test_program_documents_upstream_limitation_reporting():
-    text = PROGRAM.read_text()
-
-    assert "quant_strategies" in text
-    assert "quant_data" in text
-    assert "document the limitation" in text
-
-
-def test_program_requires_confirmed_candidate_protocol():
-    text = PROGRAM.read_text()
-    normalized = " ".join(text.split())
-
-    required = [
-        "Candidate confirmation",
-        "A one-window result is exploration evidence only",
-        "`runner.py --confirm` remains available",
-        "manual recent-window bundle diagnostic",
-        "default fast loop escalates serious candidates",
-        "`runner.py --promote`",
-        "Recent windows dominate the score",
-        "Do not prune symbols or windows because of one isolated result",
-        "trade evidence changed your belief",
-        "what causal hypothesis follows",
-        "what result would falsify it",
-    ]
-    for phrase in required:
-        assert phrase in normalized
-
-
-def test_program_documents_cheap_guard_and_deliberate_promotion():
-    text = PROGRAM.read_text()
-    normalized = " ".join(text.split())
-
-    required = [
-        "Fast guard",
-        "`locked_recent_2026`",
-        "`validation_2025_h1`",
-        "Do not run full promotion after every idea",
-        "`runner.py --promote`",
-        "guard is a sanity check",
-        "not a second optimizer target",
-        "Promotion screening remains a compact robustness filter",
-        "not final validation",
-        "comprehensive validation",
-    ]
-    for phrase in required:
-        assert phrase in normalized
-
-    banned = [
-        "Every scored explore enters promotion screening",
+        "remaining_attempts",
     ]
     for phrase in banned:
-        assert phrase not in normalized
-
-    assert "Editable during a research loop:" in text
-    assert "Evidence review" in text
-    assert "The experiment loop" in text
-
-
-def test_program_loop_uses_promotion_artifacts_and_decisions():
-    text = PROGRAM.read_text()
-    normalized = " ".join(text.split())
-
-    required = [
-        "`promotion_score.json`",
-        "`promotion_summary.json`",
-        "If promotion reports `promote`, advance",
-        "If promotion reports `reject`",
-        "previous promoted or baseline commit",
-        "run_kind",
-        "promotion",
-    ]
-    for phrase in required:
-        assert phrase in normalized
-
-    banned = [
-        "For confirmation, inspect `candidate_score.json`",
-        "If a confirmed candidate reports `keep`",
-        "If a confirmed candidate reports `discard`",
-        "confirmed candidate works",
-    ]
-    for phrase in banned:
-        assert phrase not in normalized
+        assert phrase not in norm, f"retired legacy reference present: {phrase!r}"

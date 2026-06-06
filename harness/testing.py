@@ -56,7 +56,12 @@ class FakeFoundationGateway:
         self._valid = valid
         self._causal_ok = causal_ok
         self._trade_count = trade_count
-        self._slices = slices or {"by_symbol": {}, "by_month": {}, "by_hour": {}}
+        # Reconciled with the REAL adapter's diagnostic axes (P5): the foundation emits
+        # ``by_symbol`` / ``by_direction`` / ``by_exit_reason`` — there is NO ``by_month`` /
+        # ``by_hour`` calendar axis (those were invented). ``by_symbol`` is the load-bearing
+        # leg the escalation gate's cheap-robust check reads, so the Fake's default mirrors
+        # what escalation will see in production.
+        self._slices = slices or {"by_symbol": {}}
         self.quick_run_calls: list[Any] = []
         self.evaluate_calls: list[Any] = []
         self._eval_idx = 0

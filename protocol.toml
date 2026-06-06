@@ -67,9 +67,13 @@ rho = 0.6
 min_positive_fraction = 0.8
 step_multipliers = [1, 2]
 
+# Natural perturbation step per tunable param of the active strategy (strategy.py). The harness
+# perturbs each ±1/±2 steps on Train for the stability gate; these are Protocol-owned, never
+# agent-set. (base_position_pct is the FROZEN sizing param and is deliberately NOT perturbed.)
 [stability.param_steps]
-lookback = 4
-threshold = 0.1
+lookback_bars = 4
+entry_threshold = 0.005
+max_hold_bars = 4
 
 [annualization]
 periods_per_year = 8760.0

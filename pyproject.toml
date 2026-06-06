@@ -13,17 +13,11 @@ dependencies = [
 
 [tool.pytest.ini_options]
 # --import-mode=importlib is pytest's recommended mode; it avoids sys.path-prepend import
-# collisions and future-proofs the mirrored `tests/harness/` layout against shadowing the
-# real `harness/` package as that tree grows. (Not a fix for an active shadowing failure —
-# none currently reproduces; this is preventive.)
-# Default run = the new P1 harness tests + still-valid legacy tests. Deleted in P1
-# (legacy `net_return/day` judgment): tests/test_scoring.py, tests/test_runner.py,
-# tests/test_promotion.py — they tested the retired objective/`--explore`/`--promote`
-# shell (re-ported with fresh tests in P5).
-# Excluded (pre-existing, NOT P1): tests/test_research_handoff_package.py fails to collect
-# under an unrelated upstream `quant_strategies` RunConfig schema drift — both `data.strict`
-# and `output.mode` are now extra-forbidden. It tests P5-retired handoff tooling; not
-# weakened here, just not run.
-addopts = "-ra --import-mode=importlib --ignore=tests/test_research_handoff_package.py"
+# collisions and shields the mirrored `tests/harness/` layout from shadowing the real
+# `harness/` package.
+# The legacy judgment shell is fully retired (no `runner.py`/`scoring.py`/`promotion.py`/
+# `experiment_config.py`/`artifact_policy.py`/`tools/`), so there is no ignored test and no
+# legacy module left to exclude — the whole suite is the new world.
+addopts = "-ra --import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]

@@ -149,13 +149,13 @@ def test_real_strategy_param_only_change_is_the_same_family(tmp_path):
     base_id = compute_family_id(src)
 
     # A REAL literal-only edit to the source: change a hardcoded default-param value
-    # (0.08 → 0.09 for BASE_POSITION_PCT). Params live in the Experiment, not the source, so a
+    # (entry_threshold 0.01 → 0.02). Params live in the Experiment, not the source, so a
     # numeric-literal change is structure-invariant ⇒ same family. (Asserted independently of
     # ``test_literal_value_change_is_the_same_family``, which pins the same rule on a fixture.)
-    literal_edit = src.replace('"BASE_POSITION_PCT": 0.08', '"BASE_POSITION_PCT": 0.09', 1)
+    literal_edit = src.replace('"entry_threshold": 0.01', '"entry_threshold": 0.02', 1)
     assert literal_edit != src  # the edit actually changed the source (no vacuous .replace)
     # Flip a real comparison operator deep in the signal — must be a NEW family.
-    logic_edit = src.replace("if rsi > 50.0:", "if rsi < 50.0:", 1)
+    logic_edit = src.replace("if lookback_return <= threshold:", "if lookback_return >= threshold:", 1)
     assert logic_edit != src
 
     assert compute_family_id(literal_edit) == base_id

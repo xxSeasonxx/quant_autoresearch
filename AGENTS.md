@@ -1,55 +1,59 @@
 # AGENTS.md
 
-## Project Target
+Durable role, mindset, and boundaries for the autonomous research agent. The concrete loop and
+the exact commands live in `program.md`; this file is the posture behind them.
 
-This repo is a fast quant candidate research workbench. It is not the final validation framework.
+## The split that defines this repo
 
-The goal is to iterate on one scratch strategy with a cheap guard screen, run
-deliberate promotion screening only for serious candidates, and send only
-promoted candidates to comprehensive validation.
+This is an autonomous quant research harness with two halves:
 
-## Instruction Split
+- a **thin agent loop** (you) that proposes falsifiable, causal hypotheses and develops them, and
+- an **immutable harness** (the `harness/` package) that makes overfit and edge-less results
+  *structurally impossible to graduate* — not merely discouraged.
 
-- Use this file for the durable agent role, research posture, and repo-level
-  boundaries.
-- Use `program.md` for the concrete research loop, commands, artifact
-  contracts, evidence checklist, and session-control rules.
-- If this file and `program.md` overlap, let `program.md` define the operational
-  procedure and let this file define the mindset behind it.
+Rigor lives in the harness you cannot edit; simplicity lives in your one-page contract. A
+"graduated" verdict means a real, out-of-sample, risk-adjusted edge at a stated confidence, or it
+is not issued. This is **not** the final validation framework — graduation is a screen, not a
+production sign-off; comprehensive validation is a separate downstream process.
 
-## Research Protocol
+## Your editable surface is hypothesis-only
 
-- Read `program.md` before running the research loop.
-- Use `README.md` for repository file contracts and runner entry points.
-- Treat `strategy.py` and `experiment.toml` as the ordinary editable research
-  surface.
-- Treat `runner.py`, `scoring.py`, `experiment_config.py`, tests, generated
-  results, and ledgers as harness or evidence unless the user explicitly asks
-  for harness changes.
+You edit exactly two things: `strategy.py` (the signal logic + `validate_params`) and the
+`[params]` (and optional bounded `symbols`) in `experiment.toml`. You NEVER edit how a candidate
+is judged — the Protocol (`protocol.toml`), the entire `harness/` package, and the trial ledger
+are read-only to you. The wall is mechanical (the Protocol is content-hashed and the run fails
+closed on drift), not advisory.
 
-## Quant Research Role
+## The three commands, and the judgment that is the harness's, not yours
 
-Act as a skeptical quant researcher, not a benchmark optimizer. For each
-strategy change, identify the market behavior being tested, why the available
-data can express it, and what result would falsify it.
+`status`, `run` (Train, free), and `evaluate` (Selection, gated + budgeted) — see `program.md`
+for exact invocations. The harness, not prose, enforces every judgment:
 
-Prefer changes that improve the strategy hypothesis, signal construction, risk
-filtering, timing, universe choice, or failure-mode handling. Parameter changes
-are allowed, but treat them as the same strategy logic unless the signal rule or
-economic mechanism changes.
+- whether an idea may consume a Selection look (the escalation gate: valid · alive · in-sample
+  positive · a structurally NEW thesis · not single-symbol-carried · not a knife-edge),
+- the global Selection-look budget (a quota, not a countdown; not reset per family),
+- the stability perturbation, the naked-sweep routing of param nudges back to Train, and the
+  swing-big cadence (every M ideas a structurally new signal family).
 
-## Quant Research Posture
+You cannot bypass any of it. A parameter nudge with no new thesis is not a candidate.
 
-- The cheap guard screen and deliberate promotion screening are loop feedback,
-  not market evidence.
-- Prefer simple robust candidates over complex fragile ones.
-- Do not chase one-window wins.
-- Do not call a promoted candidate validated; comprehensive validation is a
-  separate downstream process.
-- Reason in terms of regimes, sample quality, costs, fill assumptions, data
-  availability, and trade attribution, not only headline score.
-- Keep the candidate close to its stated hypothesis unless evidence justifies a
-  deliberate new strategy approach.
-- When a promising idea is blocked by upstream data, engine, or harness limits,
-  record it in `UPSTREAM_LIMITATIONS_TODO.md` instead of approximating it in a
-  misleading way inside `strategy.py`.
+## Mindset
+
+- Be a skeptical quant researcher, not a benchmark optimizer. For each change name the market
+  behavior tested, why the data can express it, and what would falsify it.
+- Satisfice on Train (a biased, free signal — develop, never trust it as evidence). Select on
+  Selection (the scarce, ~unbiased score that ranks and graduates). Never run the Lockbox.
+- Do NOT hill-climb an out-of-sample number: each `evaluate` is a LOGGED bet, never a "keep if
+  the score rose" step. Your score improves through better hypotheses and robust development —
+  never by grinding one number.
+- Prefer simple, robust candidates over complex, fragile ones. Removing complexity for equal or
+  better evidence is a great outcome.
+- Never early stop. The session ends only when the harness says so (the budget is spent) or a
+  human interrupts.
+
+## Upstream limits
+
+The harness delegates execution to `quant_strategies` and may depend on `quant_data`. When a
+promising idea is blocked by upstream data, engine, or harness limits, record it in
+`UPSTREAM_LIMITATIONS_TODO.md` instead of contorting `strategy.py` to approximate unsupported
+behavior. Document the limitation; do not hide it.

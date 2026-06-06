@@ -27,17 +27,40 @@ from harness.foundation import FoldReturns
 
 _EPS = 1e-12
 
-# Non-degeneracy floor for a required factor column (AC-9/G2). A column is usable for
-# neutralization only if its sample std clears a floor that is the LARGER of an absolute and a
-# relative-to-scale term. The relative term (std vs the column's own |scale|) is the standard
-# conditioning notion — a column whose variation is negligible relative to its level carries no
-# information to regress against; the absolute term catches an all-zero column (scale 0). A
-# regression against a zero/constant column removes NOTHING (residual == raw), so a present-but-
-# degenerate required factor would let a pure-beta basket score as residual alpha — exactly the
-# hole this floor closes. Both are deliberately tiny: a genuine market-return column (std≈1e-2)
-# clears them by ~7 orders of magnitude, so the floor never over-fires on real data.
-_STD_FLOOR_ABS = 1e-10  # absolute std floor (catches all-zero columns; scale-free baseline)
-_STD_FLOOR_REL = 1e-8  # std floor relative to the column's |scale| (catches constant-at-level)
+# Instrument-validity floors for a required factor column (AC-9/G2). A required factor is only a
+# valid NEUTRALIZATION INSTRUMENT if it is a plausible, well-conditioned return-like series — a
+# COLUMN-INTRINSIC property, never a function of corr(column, returns). (A genuine market-neutral
+# alpha has LOW factor correlation by construction, so gating on the column's relationship to the
+# strategy's returns would reject exactly the strategy this product exists to graduate. We gate on
+# the instrument, not on the strategy's exposure.) The three column-intrinsic conditions:
+#
+# 1. Robust DISPERSION floor on the MEDIAN-ABSOLUTE-DEVIATION (MAD), not std. std is inflated by a
+#    single outlier (a flat column with one huge spike has std in the thousands yet neutralizes
+#    nothing — it is constant everywhere the regression can see), so std cannot tell a real return
+#    series from a spike. MAD is the median |x - median(x)|: robust to a lone outlier, ~0 for a
+#    near-constant column, O(1e-3) for a real return series. The floor is the LARGER of an absolute
+#    term (catches an all-zero/tiny-scale column) and a relative-to-robust-scale term (catches a
+#    near-constant column sitting at a non-zero level).
+# 2. Plausible-MAGNITUDE bound: reject non-physical per-bar return values. A real per-bar return is
+#    O(1e-2); even a flash crash is < 100% in a bar. A column with a |value| above a generous cap
+#    (1000% per bar) is not a return series — it is corrupt data (a price level mislabeled as a
+#    return, a units error, a sentinel spike). This single bound rejects the single-huge-outlier
+#    instrument that fools an std-only floor.
+# 3. Well-conditioned DESIGN (enforced in ``residualize``, not here): the per-fold
+#    ``[intercept | factor columns]`` matrix must have a bounded condition number, so a near-singular
+#    column cannot yield a meaningless beta with ``residual ≈ raw``.
+#
+# Constants are chosen so a real benchmark column (market MAD≈7e-3, a small funding column
+# MAD≈7e-6, |values| ≤ ~0.04) clears them with margin, while a tiny-scale (MAD≈1e-9) or
+# single-huge-spike (|value|=1e6) garbage column fails. See ``column_is_usable``.
+_MAD_FLOOR_ABS = 1e-7  # absolute MAD floor; passes a small real funding column (MAD≈7e-6) by ~70x
+_MAD_FLOOR_REL = 1e-3  # MAD floor relative to the column's robust level (median |value|)
+_MAGNITUDE_CAP = 10.0  # |per-bar return| cap: 1000% per bar — generous for crypto, rejects 1e6 spikes
+# Condition-number ceiling for the [intercept | factors] design (defense-in-depth in residualize).
+# Legitimate designs (real market + funding) condition at ~1e4–1e5; a near-singular column (tiny
+# scale) conditions at ~1e8–1e9 and a collinear pair at ~1e17, so a 1e7 ceiling separates them with
+# ~2 orders of margin above the worst legitimate case and ~1.5 orders below the garbage cases.
+_DESIGN_COND_MAX = 1e7
 
 # The canonical factor panel axes (FR-C3). Funding is carry — listed as a panel column,
 # regressed out, never additive. A panel need not supply every axis; whatever columns
@@ -66,25 +89,43 @@ class ResidualResult:
 
 
 def column_is_usable(col: np.ndarray) -> bool:
-    """Is this factor column USABLE for neutralization — i.e. is beta actually removable? (AC-9/G2).
+    """Is this factor column a VALID NEUTRALIZATION INSTRUMENT — i.e. is beta actually removable?
 
-    The invariant the factor wall must guarantee (not mere presence): a column is usable iff it is
+    The invariant the factor wall must guarantee (AC-9/G2) is NOT mere presence and NOT mere
+    variance: a column that *varies* can still be useless as an instrument (a spike-dominated or
+    tiny-scale column varies yet neutralizes nothing). A column is usable iff it is a plausible,
+    well-conditioned return-like series, judged on COLUMN-INTRINSIC properties only — never on
+    ``corr(column, returns)`` (a genuine market-neutral alpha has near-zero factor correlation by
+    construction, so a correlation floor would reject it). The conditions:
 
-    - all-finite (no NaN/inf — a non-finite design column makes the OLS undefined/crashing), AND
-    - non-degenerate: its sample std clears ``max(_STD_FLOOR_ABS, _STD_FLOOR_REL · |scale|)`` where
-      ``|scale|`` is the column's max-abs.
+    - all-finite (no NaN/inf — a non-finite design column makes the OLS undefined/crashing);
+    - plausible MAGNITUDE: ``max|value| ≤ _MAGNITUDE_CAP`` — a |per-bar return| above 1000% is not
+      a return series but corrupt data (a level mislabeled as a return, a units error, a sentinel
+      spike). This rejects the single-huge-outlier instrument whose lone spike inflates std past any
+      std-based floor while the column is constant everywhere else;
+    - robust DISPERSION: the median-absolute-deviation (MAD), not std, clears
+      ``max(_MAD_FLOOR_ABS, _MAD_FLOOR_REL · median|value|)``. MAD is outlier-robust, so a spike
+      cannot manufacture dispersion and a near-constant column reads MAD≈0. The absolute term
+      catches an all-zero/tiny-scale column; the relative term (vs the column's robust level)
+      catches a near-constant column at a non-zero level.
 
-    A zero/constant column has std 0 ⇒ NOT usable: regressing returns on it removes nothing
-    (``residual == raw``), so a pure-beta basket would be scored on RAW beta as if it were residual
-    alpha. Requiring the column to actually VARY is the irreducible condition for "the beta was
-    removed". A genuine factor-return column (std≈1e-2) clears the floor trivially.
+    A zero/constant column has MAD 0, a tiny-scale column has MAD below the absolute floor, and a
+    single-spike column trips the magnitude cap — none can neutralize beta (``residual == raw``), so
+    none may let a pure-beta basket be scored on RAW beta as residual alpha. A genuine factor-return
+    column (market MAD≈7e-3; a small real funding column MAD≈7e-6, |values| ≤ ~0.04) clears every
+    condition with margin. (Well-conditioning of the multi-column DESIGN is enforced per-fold in
+    ``residualize`` via ``_design_is_neutralizable``.)
     """
     arr = np.asarray(col, dtype=np.float64)
     if arr.size == 0 or not np.all(np.isfinite(arr)):
         return False
-    scale = float(np.max(np.abs(arr)))
-    floor = max(_STD_FLOOR_ABS, _STD_FLOOR_REL * scale)
-    return float(np.std(arr)) > floor
+    if float(np.max(np.abs(arr))) > _MAGNITUDE_CAP:
+        return False  # non-physical per-bar return ⇒ not a valid instrument (corrupt data)
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    robust_scale = float(np.median(np.abs(arr)))
+    floor = max(_MAD_FLOOR_ABS, _MAD_FLOOR_REL * robust_scale)
+    return mad > floor
 
 
 def panel_covers(
@@ -149,24 +190,39 @@ def _infeasible_residual(n: int, names: Sequence[str]) -> ResidualResult:
 
 
 def _design_is_neutralizable(values: np.ndarray, x: np.ndarray) -> bool:
-    """Can this ``[intercept | factors]`` design actually neutralize SOME beta? (fail-closed precond).
+    """Is this ``[intercept | factors]`` design a WELL-CONDITIONED neutralizer? (fail-closed precond).
 
     Defense-in-depth precondition for ``residualize`` — distinct from the strict per-column coverage
-    GATE (``panel_covers``/``column_is_usable``), which is the live-path wall. Here we guarantee only
-    that ``residualize`` never (a) crashes or (b) returns ``residual == raw`` as if neutralization
-    happened. Both require:
+    GATE (``panel_covers``/``column_is_usable``), which is the live-path wall. Here we guarantee that
+    ``residualize`` never (a) crashes, (b) returns ``residual == raw`` as if neutralization happened,
+    or (c) yields a MEANINGLESS beta from a near-singular column. The requirements:
 
-    - the returns and the WHOLE design to be FINITE (a NaN/inf design makes ``lstsq`` raise
-      ``LinAlgError`` — we refuse it rather than crash), AND
-    - the design to add at least ONE dimension beyond the intercept (``rank(x) ≥ 2``). If every
-      factor column is degenerate (all-zero/constant), the design collapses to the constant column
-      (rank 1) and the regression would remove NOTHING — ``residual == raw`` — which is exactly how
-      raw beta is laundered as residual alpha. Requiring rank ≥ 2 makes "remove nothing, score raw"
-      unrepresentable, while still allowing a benign extra all-zero column alongside a real one (a
-      ``[real_market, zero_funding]`` panel is rank 2 and correctly neutralizes the market leg).
+    - the returns and the WHOLE design are FINITE (a NaN/inf design makes ``lstsq`` raise
+      ``LinAlgError`` — we refuse it rather than crash); AND
+    - the design adds at least ONE dimension beyond the intercept (``rank(x) ≥ 2``). If every factor
+      column is degenerate (all-zero/constant), the design collapses to the constant column (rank 1)
+      and the regression removes NOTHING — ``residual == raw`` — which is exactly how raw beta is
+      laundered as residual alpha; AND
+    - the design is WELL-CONDITIONED: its condition number (ratio of largest to smallest singular
+      value) is below ``_DESIGN_COND_MAX``. A near-singular column (e.g. one whose scale is ~1e-9
+      relative to the unit intercept, or a near-collinear pair) is mathematically rank-full yet
+      numerically rank-deficient: ``lstsq`` returns an absurd, ill-determined beta (and a residual
+      that barely differs from raw), so beta is not meaningfully removable. This is COLUMN-/DESIGN-
+      INTRINSIC (it never inspects corr(column, returns)), so it cannot reject a genuine neutral
+      alpha; it only refuses a design that cannot produce a trustworthy beta. A real
+      ``[market, funding]`` design conditions at ~1e4–1e5 and passes; a near-singular one conditions
+      at ≥1e8 and fails closed.
     """
     if not np.all(np.isfinite(values)) or not np.all(np.isfinite(x)):
         return False
+    singular = np.linalg.svd(x, compute_uv=False)
+    largest = float(singular[0])
+    smallest = float(singular[-1])
+    if smallest <= 0.0 or not np.isfinite(largest):
+        return False  # exact rank-deficiency (collinear / all-zero factor column)
+    if largest / smallest > _DESIGN_COND_MAX:
+        return False  # near-singular: beta is ill-determined ⇒ not meaningfully removable
+    # rank ≥ 2: at least one real factor dimension beyond the intercept (else residual == raw).
     return int(np.linalg.matrix_rank(x)) >= 2
 
 
@@ -184,11 +240,13 @@ def residualize(
     *series* is what RES ranks on.
 
     **Fail-closed on a bad design (AC-9/G2, defense-in-depth).** If the factor design is degenerate
-    (an all-zero/constant column), rank-deficient (collinear columns), or non-finite (a NaN/inf
-    column), beta is NOT removable: ``residualize`` returns the all-NaN ``_infeasible_residual``
-    sentinel (IR ``None``, every downstream Sharpe ``None``) rather than raising ``LinAlgError`` or
-    returning the RAW series as if it had been neutralized. The coverage gate (``panel_covers``)
-    catches this upstream; this guard makes the primitive robust regardless of caller.
+    (an all-zero/constant column), rank-deficient (collinear columns), ILL-CONDITIONED (a
+    near-singular column — e.g. a tiny-scale or near-collinear column whose beta would be meaningless
+    with ``residual ≈ raw``), or non-finite (a NaN/inf column), beta is NOT removable: ``residualize``
+    returns the all-NaN ``_infeasible_residual`` sentinel (IR ``None``, every downstream Sharpe
+    ``None``) rather than raising ``LinAlgError`` or returning the RAW series as if it had been
+    neutralized. The coverage gate (``panel_covers``) catches this upstream; this guard makes the
+    primitive robust regardless of caller (see ``_design_is_neutralizable``).
     """
     values = (
         np.asarray(returns.values, dtype=np.float64)

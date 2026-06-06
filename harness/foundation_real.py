@@ -422,6 +422,21 @@ class RealFoundationGateway:
 # --------------------------------------------------------------------------- #
 
 
+# Benchmark→strategy alignment tolerance (AC-9/G2). A strategy bar is "covered" by the benchmark
+# only if its as-of-matched benchmark return is FRESH — the matched benchmark timestamp is within
+# ``_ALIGN_TOL_BARS`` benchmark-bar spacings of the strategy bar. A backward as-of join always
+# finds *some* prior observation, but a stale one (the strategy bar fell in a gap, or precedes the
+# benchmark's first bar) carries a return from a different period — silently filling it with 0.0
+# (the old behavior) FABRICATES a market column that decorrelates from the strategy and leaves beta
+# un-removed, laundering pure beta as residual alpha. We instead require fresh coverage on the
+# strategy's ACTUAL return timestamps and OMIT the market column when coverage is inadequate
+# (fail-closed), so a time-shifted / wrong-cadence benchmark cannot pass as a neutralization
+# instrument. (This makes alignment correct independently of the orchestrator's approximate
+# ``365.25/ppy`` calendar window.)
+_ALIGN_TOL_BARS = 1.5  # a fresh match is within 1.5 benchmark-bar spacings of the strategy bar
+_MIN_MARKET_COVERAGE = 0.98  # fraction of strategy bars that must have a fresh benchmark match
+
+
 class RealFactorPanelProvider:
     """A ``FactorPanelProvider`` (callable seam) backed by ``quant_data``.
 
@@ -448,20 +463,46 @@ class RealFactorPanelProvider:
         return self._engine
 
     def panel_for(self, window, returns: FoldReturns) -> Mapping[str, np.ndarray]:
-        """Load the benchmark bars+funding over ``window`` and align market + funding_carry to the
-        strategy's return timestamps. Returns numpy columns of the same length as ``returns``.
+        """Build market + funding_carry aligned to the strategy's ACTUAL per-fold return timestamps.
 
-        Alignment is as-of (the last benchmark observation at or before each strategy bar): the
-        benchmark return is the close-to-close return; the funding rate is forward-filled between
-        funding events. polars (a ``quant_data`` dependency) lives only here, never in the core.
+        Alignment is timestamp-exact and fail-closed (AC-9/G2):
+
+        - The benchmark is loaded over a span derived from the strategy's actual return timestamps
+          (their min/max, padded), UNIONED with the orchestrator's ``window`` — so alignment does
+          not depend on the orchestrator's approximate ``365.25/ppy`` calendar bounds (a latent
+          misalignment source, worst on irregular cadences).
+        - The benchmark close-to-close return (the market beta proxy) is as-of aligned (the last
+          benchmark observation at or before each strategy bar). A match is COUNTED only if it is
+          FRESH — the matched benchmark timestamp is within ``_ALIGN_TOL_BARS`` benchmark-bar
+          spacings of the strategy bar. If fewer than ``_MIN_MARKET_COVERAGE`` of the strategy bars
+          have a fresh match (a time-shifted or wrong-cadence benchmark whose bars do not line up
+          with the strategy's actual timestamps), the ``market`` column is OMITTED — never filled
+          with 0.0 and passed off as a neutralization instrument. The judgment layer then fails
+          closed rather than scoring a pure-beta strategy as residual alpha against a benchmark that
+          was never aligned.
+        - The funding rate is forward-filled between funding events (funding is sparse by design, so
+          a stale-by-design forward fill is correct for it — the freshness gate is market-only).
+
+        polars (a ``quant_data`` dependency) lives only here, never in the core.
         """
         import polars as pl
 
         from quant_data.loader import load_crypto_perp_bars_with_funding
 
-        n = int(np.asarray(returns.timestamps).shape[0])
-        start = _dt.date.fromisoformat(window.start)
-        end = _dt.date.fromisoformat(window.end)
+        ts_ns = np.asarray(returns.timestamps).astype("datetime64[ns]")
+        n = int(ts_ns.shape[0])
+        if n == 0:
+            return {}
+
+        # Load span from the ACTUAL return timestamps (padded to capture the prior close for the
+        # first bar's return and any boundary), unioned with the orchestrator's window so we never
+        # load a SHORTER span than either source asks for.
+        ts_dates = ts_ns.astype("datetime64[D]")
+        pad = _dt.timedelta(days=2)
+        actual_start = ts_dates.min().astype(_dt.date) - pad
+        actual_end = ts_dates.max().astype(_dt.date) + pad
+        start = min(_dt.date.fromisoformat(window.start), actual_start)
+        end = max(_dt.date.fromisoformat(window.end), actual_end)
 
         bars = load_crypto_perp_bars_with_funding(self._get_engine(), self._benchmark, start, end)
         if bars.is_empty():
@@ -469,44 +510,69 @@ class RealFactorPanelProvider:
             # closed (we return an empty panel rather than fabricate a synthetic factor).
             return {}
 
-        # Benchmark close-to-close return (the market beta proxy) + the funding-carry column.
+        # Benchmark close-to-close return (market) + forward-filled funding (carry), carrying the
+        # benchmark timestamp so freshness of each strategy match can be checked. ``market`` is NOT
+        # null-filled here — a null means "no benchmark return at/before this bar", which must count
+        # as uncovered rather than be fabricated as a 0 return.
         bench = (
             bars.select(["timestamp", "close", "funding_rate"])
             .sort("timestamp")
             .with_columns(
                 pl.col("close").pct_change().alias("market"),
                 pl.col("funding_rate").fill_null(strategy="forward").fill_null(0.0).alias("funding_carry"),
+                pl.col("timestamp").alias("bench_ts"),
             )
-            .with_columns(pl.col("market").fill_null(0.0))
-            .select(["timestamp", "market", "funding_carry"])
+            .select(["timestamp", "market", "funding_carry", "bench_ts"])
         )
 
-        # As-of align to the strategy's per-bar timestamps (datetime64[ns] → UTC microseconds).
-        ts = pl.Series(
-            "timestamp", np.asarray(returns.timestamps).astype("datetime64[us]")
-        ).cast(pl.Datetime("us", "UTC"))
+        bench_ts_int = bench.get_column("bench_ts").cast(pl.Int64).to_numpy()
+        if bench_ts_int.shape[0] >= 2:
+            bench_bar = float(np.median(np.diff(bench_ts_int.astype(np.float64))))
+        else:
+            bench_bar = 0.0
+
+        # As-of align to the strategy's ACTUAL per-bar timestamps.
+        ts = pl.Series("timestamp", ts_ns.astype("datetime64[us]")).cast(pl.Datetime("us", "UTC"))
         strat = pl.DataFrame({"timestamp": ts}).sort("timestamp")
-        aligned = strat.join_asof(bench, on="timestamp", strategy="backward").with_columns(
-            pl.col("market").fill_null(0.0), pl.col("funding_carry").fill_null(0.0)
-        )
+        aligned = strat.join_asof(bench, on="timestamp", strategy="backward")
 
         market = aligned.get_column("market").to_numpy().astype(np.float64)
-        funding = aligned.get_column("funding_carry").to_numpy().astype(np.float64)
+        funding = aligned.get_column("funding_carry").fill_null(0.0).to_numpy().astype(np.float64)
         if market.shape[0] != n or funding.shape[0] != n:
             # Alignment did not produce a 1:1 column ⇒ fail closed (no fabricated panel).
             return {}
 
-        # Defense-in-depth (AC-9/G2): NEVER emit a degenerate column. A flat-or-single-bar benchmark
-        # window makes ``market`` (pct_change) all-zero — a present-but-degenerate column would pass a
-        # presence-only gate yet neutralize nothing, laundering raw beta as residual alpha. OMIT any
-        # column that is not usable (all-zero / constant / non-finite) so the panel honestly does NOT
-        # cover that factor and the judgment-layer gate fails closed at the source. The judgment gate
-        # is the real guarantee; this just keeps the provider from emitting a fake-covering column.
+        # Freshness coverage of the MARKET column measures ALIGNMENT QUALITY: a strategy bar is
+        # covered iff its matched benchmark TIMESTAMP is fresh — finite, not in the future, within
+        # ``_ALIGN_TOL_BARS`` benchmark-bar spacings. (This is timestamp proximity only; whether the
+        # matched RETURN happens to be the benchmark's first-bar null is a separate, benign edge
+        # effect handled below — it is not a misalignment.) A time-shifted/wrong-cadence benchmark
+        # fails freshness on the boundary (strategy bars precede the benchmark) and across gaps,
+        # dropping coverage below the floor ⇒ OMIT market (fail-closed).
+        strat_ts_int = strat.get_column("timestamp").cast(pl.Int64).to_numpy().astype(np.float64)
+        matched_ts_int = aligned.get_column("bench_ts").cast(pl.Int64).to_numpy().astype(np.float64)
+        gap = strat_ts_int - matched_ts_int  # microseconds since the matched benchmark bar
+        tol = _ALIGN_TOL_BARS * bench_bar if bench_bar > 0 else 0.0
+        fresh = np.isfinite(gap) & (gap >= 0.0) & (gap <= tol)
+        coverage = float(np.mean(fresh)) if n else 0.0
+
+        # Defense-in-depth (AC-9/G2): NEVER emit a column that is not a valid neutralization
+        # instrument. OMIT any column that fails ``column_is_usable`` (degenerate / non-physical /
+        # tiny-scale), AND omit ``market`` when its alignment coverage is below the floor — so the
+        # panel honestly does NOT cover that factor and the judgment-layer gate fails closed at the
+        # source. The judgment gate is the real guarantee; this keeps the provider from emitting a
+        # fake-covering column (degenerate OR misaligned).
         from harness.objective.factors import column_is_usable
 
         panel: dict[str, np.ndarray] = {}
-        if column_is_usable(market):
-            panel["market"] = market
+        if coverage >= _MIN_MARKET_COVERAGE:
+            # A fresh bar with a non-finite return (only the benchmark's first-bar null) and the rare
+            # not-fresh bar (≤2% by the coverage gate) are the honest "no move observed" ⇒ 0; the
+            # coverage gate (not this fill) is what bars systematic misalignment.
+            usable_value = fresh & np.isfinite(market)
+            market_clean = np.where(usable_value, market, 0.0)
+            if column_is_usable(market_clean):
+                panel["market"] = market_clean
         if column_is_usable(funding):
             panel["funding_carry"] = funding
         return panel

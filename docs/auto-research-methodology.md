@@ -395,9 +395,8 @@ development, and caps OOS questions with the budget.
 
 Consequently **keep/discard differs by tier**: on Train, iterate and discard freely (free,
 in-sample); on Selection, do **not** "keep if the score rose" — each eval is a logged bet,
-and graduation is top-K over the ledger. *(Appendix A reflects this; the live `program.md`
-still hill-climbs ("keep if the score rises") and must be updated to match when the harness
-phases land.)*
+and graduation is top-K over the ledger. *(The shipped `program.md` and Appendix A both reflect
+this; the agent contract no longer hill-climbs — the harness enforces it mechanically.)*
 
 ### The loop
 
@@ -560,71 +559,17 @@ change at a time via `/feature-workflow`. Requirements are in **[PRD.md](./PRD.m
 
 ---
 
-## Appendix A — draft `program.md` (the one-page loop)
+## Appendix A — the agent contract
 
-> *(Sketch — to be finalized when the harness phases land. Commands show the **proposed**
-> CLI for the refactored runner: today's `runner.py` uses `--explore`/`--promote`; Phases 1–3
-> rename it to `run`/`evaluate`, mirroring the engine's own surfaces. The point is that the agent's contract
-> stays this short **and the commands are exact**; the rigor is in the evaluator it can't edit.)*
+The one-page agent loop is the shipped **[`program.md`](../program.md)** (canonical). It is
+enforced **mechanically** by the `harness/` package — the escalation gate, the global budget,
+the stability check, naked-sweep routing, and the swing-big cadence all live in the harness the
+agent cannot edit, exactly as this methodology argues ("rigor in the harness, simplicity in the
+contract").
 
-```
-You are an autonomous quant researcher. Improve ONE strategy candidate, in this worktree.
-
-EDITABLE:  strategy.py (signal logic + validate_params) and experiment.toml ([params]).
-READ-ONLY: protocol.toml (costs, data tiers, objective, gates, lockbox), runner.py,
-           scoring.py, the trial ledger. You change the strategy, never how it is judged.
-
-Run every command with `conda run -n quant`. Three commands, nothing else:
-
-  python runner.py status
-      → current best candidate + the last few ledger rows.
-  python runner.py run --desc "<thesis>"
-      → quick run on TRAIN: causal diagnostic (contract + hidden-lookahead replay) +
-        a cheap plausibility band. Free — use it as much as you like.
-  python runner.py evaluate --desc "<thesis> | falsifier: <what kills it>"
-      → out-of-sample score + gate results on the Selection data. Costs ONE trial.
-
-TWO NUMBERS, DIFFERENT JOBS:
-  `run` (TRAIN) is a BIASED, FREE plausibility signal — develop against it, never trust it
-       as evidence. A bigger Train number above the floor is mostly overfit, not edge.
-  `evaluate` (SELECTION) is the ~unbiased, SCARCE, leaky score that ranks and graduates.
-       Leverage, turnover, and one-coin bets can't move it; only a real, transferable edge should.
-  Satisfice on Train. Select on Selection. The Lockbox (you never touch it) confirms.
-
-THE LOOP, until the session ends:
-  1. `status`, then read strategy.py, experiment.toml, the latest results/, and the ledger.
-  2. Write ONE falsifiable, causal hypothesis: what effect, what observable, what would
-     prove it wrong. A parameter nudge with no thesis is not a candidate.
-  3. Edit strategy.py and/or experiment.toml [params] for that one idea.
-  4. `run` it on TRAIN (free, unlimited). If it fails causal replay or the contract it is
-     INVALID — fix or drop. Develop to faithfully express the thesis (sane scale), then to a
-     ROBUST PLATEAU — the harness perturbs your params ±steps and the result must stay flat-
-     and-positive. Stop when further edits only move the number: that's tuning, not developing.
-  5. `evaluate` ONLY if it clears the gate: valid · enough trades · positive after costs ·
-     a FRESH thesis (not a nudge of something already in the ledger) · edge not carried by
-     one symbol / window / hour · not a knife-edge (stability gate). A higher Train number
-     does not earn a trial; a robust, faithful expression of a new thesis does.
-  6. Read the `evaluate` result — score, gates, and the spread across paths, not just the
-     median — and LOG it. Do NOT "keep it only if the score rose": each evaluate is a
-     recorded bet, not a step in a hill-climb. Never re-evaluate tweaks of one idea to push
-     its number up — that is how you manufacture an overfit.
-  7. Move to a DISTINCT thesis. Every M ideas, swing big: a structurally new signal family.
-
-Your score improves two ways only: BETTER HYPOTHESES (the ledger teaches you what survives
-out-of-sample) and more robust development on TRAIN — never by grinding one out-of-sample
-number. There is no free lunch in tuning; the budget is small on purpose.
-
-When this family's evaluate budget is used up, `evaluate` stops running for it — a quota, not
-a rejection of your strategy. Graduate the family's best candidates (top-K), then start a NEW
-thesis (a fresh family gets its own budget). A redirect, not a stop.
-You never run the lockbox — that confirmation is human-gated and one-shot.
-
-NEVER EARLY STOP. While the harness reports session capacity, do not pause and do not ask
-"should I keep going?" or "is this a good stopping point?". Out of ideas? Re-read the
-artifacts and the ledger, combine near-misses, simplify accidental complexity, or try a
-bolder causal hypothesis. The loop runs until the harness ends the session or the human
-interrupts.
-```
+The earlier *draft* of this appendix — which still used the pre-rebuild `runner.py
+--explore/--promote` commands and a per-family budget, and predated the `run`/`evaluate`/`status`
+CLI — has been superseded by the shipped `program.md` and lives in git history.
 
 ---
 

@@ -94,6 +94,32 @@ requirements.
 conda run -n quant python -m pytest        # the harness + contract test suite
 ```
 
+## Before a live campaign (known limitations)
+
+The harness logic is fully verified in-process — the test suite covers AC-1..AC-10
+deterministically against a fake foundation gateway and synthetic return series. A few things
+must still be checked before pointing it at live capital:
+
+- **Live data is required for real verdicts.** Real end-to-end paths (a real foundation fold, the
+  live factor-panel build, bit-for-bit metric reproduction from a real `quant_data` snapshot) are
+  exercised only by data-gated smoke tests, which *skip* without database access. Run them against
+  a live `quant_data` before trusting a real campaign.
+- **Configure the correct, aligned benchmark for the factor panel.** Residual-alpha scoring
+  neutralizes market/funding beta against an operator-supplied benchmark. The harness fails closed
+  unless each required factor column is a legitimate, well-conditioned, correctly time-aligned
+  return series — but it cannot verify the benchmark is *semantically* the right factor. Supply the
+  real market/funding benchmark for the asset (e.g. BTC-PERP for alts); a wrong-but-valid benchmark
+  would silently fail to neutralize.
+- **Audit FWER has a small near-unit-root residual.** The Romano-Wolf graduation audit controls
+  the false-graduation rate at the configured level across realistic serial correlation; at extreme
+  persistence (AR1 ≈ 0.8) the finite-sample rate sits modestly above nominal (~0.077 vs 0.05) and
+  shrinks with sample size. Documented in `harness/audit.py`.
+- **`profile` and `lockbox` are operator-invoked.** The agent CLI wires `status`/`run`/`evaluate`
+  plus the admin `graduate`; asset profiling and the human-gated, one-shot Lockbox confirmation are
+  invoked programmatically by the operator (Lockbox is human-gated by design).
+- **Single supplied factor panel.** The panel is the operator's benchmark (market + funding-carry);
+  auto-derived multi-factor panels are out of scope.
+
 ## Caveats
 
 - These are research-bench results, not live trading claims.

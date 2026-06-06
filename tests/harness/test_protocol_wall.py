@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from harness.protocol import (
     CostModel,
+    DataSource,
     Experiment,
     FoundationCallConfig,
     Protocol,
@@ -205,6 +206,19 @@ def test_experiment_is_frozen_extra_forbid():
         Experiment(strategy_path="s", params={}, unknown_field=1)  # type: ignore[call-arg]
     with pytest.raises(Exception):
         exp.strategy_path = "other"  # frozen
+
+
+def test_entry_lag_bars_floor_matches_foundation(tmp_path):
+    """DataSource.entry_lag_bars must be ge=1 to match the foundation's FillModelConfig.
+
+    The foundation's FillModelConfig.entry_lag_bars is Field(ge=1); a 0 here would derive a
+    config the foundation rejects, so the harness boundary must reject it too (fail closed at
+    parse, not at the engine).
+    """
+    with pytest.raises(ValidationError):
+        DataSource(entry_lag_bars=0)
+    # ge=1 still admits the minimum the foundation accepts.
+    assert DataSource(entry_lag_bars=1).entry_lag_bars == 1
 
 
 def test_protocol_is_frozen():

@@ -91,7 +91,9 @@ class DataSource(_Frozen):
 
     kind: str = "crypto_perp_funding"
     dataset: str | None = None  # required by the foundation only for kind="bars"
-    entry_lag_bars: int = Field(ge=0, default=1)
+    # ge=1 to match the foundation's FillModelConfig.entry_lag_bars (Field(ge=1)); a 0 would
+    # derive a config the foundation rejects, so fail closed at the harness boundary instead.
+    entry_lag_bars: int = Field(ge=1, default=1)
     exit_lag_bars: int = Field(ge=0, default=0)
 
 

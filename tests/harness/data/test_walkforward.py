@@ -59,13 +59,49 @@ def test_anchored_train_expands_from_origin():
     assert lengths[-1] > lengths[0]
 
 
-def test_embargo_offsets_consecutive_test_windows():
-    # Consecutive test windows are offset by test_periods + embargo (the embargo is the
-    # training data after a test window that the next fold must not train on).
+def test_embargo_is_the_gap_between_consecutive_test_windows():
+    # The embargo's REAL, mechanically-enforced effect is the gap separating consecutive OOS
+    # test windows: no two test windows are adjacent — exactly `embargo_periods` of untested
+    # bars sit between one test's end and the next test's start. (Asserted directly on the
+    # inter-test GAP, not merely the stride, so the guarantee is pinned, not inferred.)
     cfg = _cfg(test_periods=30, embargo_periods=4)
     folds = generate_folds(n_periods=2000, config=cfg)
-    offsets = [folds[i + 1].test.start - folds[i].test.start for i in range(len(folds) - 1)]
-    assert all(o == 30 + 4 for o in offsets)
+    gaps = [folds[i + 1].test.start - folds[i].test.end for i in range(len(folds) - 1)]
+    assert all(g == 4 for g in gaps)
+
+
+def test_embargo_does_not_carve_the_per_fold_train():
+    """The honest `Fold.train` contract: a purged pre-fold-test window, NOT embargo-carved.
+
+    With the forward-chaining test schedule (consecutive tests separated only by the embargo),
+    there is no clean per-fold training window left to carve an embargo out of — a genuine
+    embargo-carve would leave every fold after the first with an empty train. So the embargo's
+    effect lives on the TEST schedule (the inter-test gap, asserted above), and `train` stays
+    the full `train_periods` window ending exactly `purge` before its own test. Nothing in the
+    harness fits per-fold (the orchestrator uses only `fold.test`); this pins that real
+    guarantee. It FAILS the old docstring's false claim that the prior test's embargo is
+    "already removed" from this fold's train (a carve would shorten the train below
+    train_periods or move its end off the purge boundary).
+    """
+    train_p, purge, embargo = 100, 5, 4
+    folds = generate_folds(
+        n_periods=2000, config=_cfg(train_periods=train_p, purge_periods=purge, embargo_periods=embargo)
+    )
+    for f in folds:
+        # train is purged from its OWN test: end sits exactly `purge` before the test start.
+        assert f.test.start - f.train.end == purge
+        # rolling train is the full train_periods window — the embargo did NOT carve it.
+        assert f.train.length == train_p
+
+    # Changing ONLY the embargo widens the inter-test gap but leaves the train window length
+    # untouched (the embargo is not carved out of train).
+    more_embargo = generate_folds(
+        n_periods=2000, config=_cfg(train_periods=train_p, purge_periods=purge, embargo_periods=embargo + 10)
+    )
+    for f in more_embargo:
+        assert f.train.length == train_p  # still uncarved despite a larger embargo
+    gaps = [more_embargo[i + 1].test.start - more_embargo[i].test.end for i in range(len(more_embargo) - 1)]
+    assert all(g == embargo + 10 for g in gaps)
 
 
 def test_no_test_fold_overlaps_another():

@@ -240,10 +240,31 @@ class RealFoundationGateway:
         # single grouped path; the wall guarantees these come from the Protocol, not params.
         return {"fee_bps_per_side": float(cost.taker_bps), "slippage_bps_per_side": float(cost.slippage_bps)}
 
+    # Foundation FillModelConfig.price is Literal["open", "close", "quote"]; the next-bar
+    # timing is carried by entry_lag_bars, not the price label. The harness fill vocabulary
+    # adds the "next_bar_open" alias (FillModel docstring) for the same open reference.
+    _FILL_PRICES = ("open", "close", "quote")
+
+    def _fill_price(self, fill: str) -> str:
+        """Map a harness fill label to a valid foundation price (open|close|quote).
+
+        Passes the three foundation prices through unchanged (so a valid ``open`` is no longer
+        silently downgraded to ``close``); resolves the ``next_bar_open`` harness alias to the
+        ``open`` reference; raises on a genuinely unsupported value rather than masking it.
+        """
+        if fill in self._FILL_PRICES:
+            return fill
+        if fill == "next_bar_open":
+            return "open"
+        raise ValueError(
+            f"unsupported fill {fill!r}: foundation accepts {self._FILL_PRICES} "
+            "(harness alias 'next_bar_open' maps to 'open')"
+        )
+
     def _fill_block(self, cfg) -> dict[str, Any]:
         source = cfg.data_tiers.source
         return {
-            "price": "close" if cfg.fill_model.fill not in ("close", "quote") else cfg.fill_model.fill,
+            "price": self._fill_price(cfg.fill_model.fill),
             "entry_lag_bars": int(source.entry_lag_bars),
             "exit_lag_bars": int(source.exit_lag_bars),
         }
@@ -322,12 +343,16 @@ class RealFoundationGateway:
             return {}
 
     def _coarse_metric(self, result) -> float | None:
+        # ``average_trade_net`` is the foundation's after-costs, sign-meaningful per-trade
+        # economic figure (``quant_strategies.runner.economic_metrics.summary_metrics``):
+        # positive ⇒ an in-sample edge survives costs. That is exactly the COARSE plausibility
+        # band the Train signal needs (open decision #3, "lean coarse") — not a composite.
+        # Returns None only when the run genuinely produced no average (no trades / key absent).
         econ = self._summary(result).get("economic_metrics") or {}
         if isinstance(econ, Mapping):
-            for key in ("net_return", "total_return", "mean_return", "return_per_period"):
-                v = econ.get(key)
-                if isinstance(v, (int, float)):
-                    return float(v)
+            v = econ.get("average_trade_net")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return float(v)
         return None
 
     def _trade_count(self, result) -> int:
@@ -336,8 +361,17 @@ class RealFoundationGateway:
         return int(v) if isinstance(v, (int, float)) else 0
 
     def _slices(self, result) -> Mapping[str, Mapping[str, float]]:
+        # Cheap-robust slices come from the foundation's diagnostics.json, whose REAL slice
+        # axes are the top-level group maps ``by_symbol`` / ``by_direction`` / ``by_exit_reason``
+        # (``quant_strategies.runner.diagnostics.diagnostic_payload``) plus the per-group
+        # economic summaries under nested ``economic_slices`` (which carry ``average_trade_net``
+        # etc. per group, from ``economic_metrics.diagnostic_slices``). There is no ``slices``
+        # wrapper and no ``by_month`` / ``by_hour`` axis in the foundation — those were invented.
+        # ``by_symbol`` (the breadth / concentration leg cares about it) is sourced from the
+        # economic_slices view when present so its values are sign-meaningful per-symbol scalars,
+        # falling back to the top-level group map otherwise.
+        empty: dict[str, dict[str, float]] = {"by_symbol": {}}
         d = getattr(result, "result_dir", None)
-        empty = {"by_symbol": {}, "by_month": {}, "by_hour": {}}
         if d is None:
             return empty
         path = Path(d) / "diagnostics.json"
@@ -347,5 +381,18 @@ class RealFoundationGateway:
             diag = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return empty
-        slices = diag.get("slices") if isinstance(diag, Mapping) else None
-        return slices if isinstance(slices, Mapping) else empty
+        if not isinstance(diag, Mapping):
+            return empty
+        econ_slices = diag.get("economic_slices")
+        econ_slices = econ_slices if isinstance(econ_slices, Mapping) else {}
+        out: dict[str, Mapping[str, float]] = {}
+        for axis in ("by_symbol", "by_direction", "by_exit_reason"):
+            # Prefer the economic_slices view (sign-meaningful per-group scalars); fall back to
+            # the top-level group map (count/gross/funding/cost/net) so the axis still populates.
+            group = econ_slices.get(axis)
+            if not isinstance(group, Mapping):
+                group = diag.get(axis)
+            if isinstance(group, Mapping):
+                out[axis] = group
+        out.setdefault("by_symbol", {})
+        return out

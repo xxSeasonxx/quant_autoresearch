@@ -11,6 +11,7 @@ Two layers:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -201,6 +202,187 @@ def test_single_symbol_universe_has_no_by_symbol(tmp_path, monkeypatch):
     # A single-symbol universe makes no per-symbol decomposition.
     assert out.returns is not None
     assert out.returns.by_symbol is None
+
+
+# --------------------------------------------------------------------------- #
+# quick_run coarse band + slices — read against the foundation's REAL artifact
+# schema (summary.json economic_metrics + diagnostics.json), not invented keys.
+#
+# The fixtures below mirror the foundation's actual output:
+#   summary.json   -> economic_metrics from quant_strategies.runner.economic_metrics
+#                     .summary_metrics (top-level key "economic_metrics"; the coarse
+#                     after-costs number is "average_trade_net").
+#   diagnostics.json -> quant_strategies.runner.diagnostics.diagnostic_payload
+#                       (top-level "by_symbol"/"by_direction"/"by_exit_reason" + nested
+#                       "economic_slices"; NO "slices"/"by_month"/"by_hour" wrapper).
+# --------------------------------------------------------------------------- #
+
+
+# Real summary.json shape: economic_metrics is a TOP-LEVEL key; the sign-meaningful
+# after-costs coarse number is average_trade_net (positive ⇒ in-sample edge after costs).
+_REAL_SUMMARY = {
+    "strategy_id": "crypto_perp_funding_crowding_reversal",
+    "status": "completed",
+    "economic_metrics": {
+        "schema_version": "quant_strategies.runner.economic_metrics/v1",
+        "basis": "engine_trade_ledger",
+        "trade_count": 142,
+        "winning_trade_count": 81,
+        "losing_trade_count": 60,
+        "flat_trade_count": 1,
+        "hit_rate": 0.5704,
+        "average_trade_net": 0.00037,
+        "average_win_net": 0.0042,
+        "average_loss_net": -0.0049,
+        "profit_factor": 1.16,
+        "cost_share_of_abs_gross": 0.21,
+        "funding_share_of_abs_gross": 0.34,
+    },
+}
+
+# Real diagnostics.json shape: by_symbol/by_direction/by_exit_reason are TOP-LEVEL
+# group maps; economic_slices is nested. No "slices"/"by_month"/"by_hour".
+_REAL_DIAGNOSTICS = {
+    "strategy_id": "crypto_perp_funding_crowding_reversal",
+    "artifact_profile": "diagnostic",
+    "trade_count": 142,
+    "by_symbol": {
+        "BTC-PERP": {"count": 70, "gross": 0.9, "funding": 0.1, "cost": -0.2, "net": 0.8},
+        "ETH-PERP": {"count": 72, "gross": 0.6, "funding": 0.05, "cost": -0.18, "net": 0.47},
+    },
+    "by_direction": {
+        "long": {"count": 80, "gross": 0.8, "funding": 0.09, "cost": -0.2, "net": 0.69},
+        "short": {"count": 62, "gross": 0.7, "funding": 0.06, "cost": -0.18, "net": 0.58},
+    },
+    "by_exit_reason": {
+        "max_hold": {"count": 100, "gross": 1.0, "funding": 0.12, "cost": -0.3, "net": 0.82},
+        "signal_flip": {"count": 42, "gross": 0.5, "funding": 0.03, "cost": -0.08, "net": 0.45},
+    },
+    "economic_slices": {
+        "schema_version": "quant_strategies.runner.economic_slices/v1",
+        "basis": "engine_trade_ledger",
+        "by_symbol": {
+            "BTC-PERP": {"count": 70, "average_trade_net": 0.011, "hit_rate": 0.6, "net_sum": 0.8},
+            "ETH-PERP": {"count": 72, "average_trade_net": 0.0065, "hit_rate": 0.55, "net_sum": 0.47},
+        },
+        "by_direction": {
+            "long": {"count": 80, "average_trade_net": 0.0086},
+            "short": {"count": 62, "average_trade_net": 0.0094},
+        },
+        "by_exit_reason": {
+            "max_hold": {"count": 100, "average_trade_net": 0.0082},
+            "signal_flip": {"count": 42, "average_trade_net": 0.0107},
+        },
+    },
+}
+
+
+def _write_real_artifacts(result_dir):
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / "summary.json").write_text(json.dumps(_REAL_SUMMARY), encoding="utf-8")
+    (result_dir / "diagnostics.json").write_text(json.dumps(_REAL_DIAGNOSTICS), encoding="utf-8")
+
+
+def test_quick_run_reads_real_summary_and_diagnostics_schema(tmp_path, monkeypatch):
+    """quick_run surfaces a NON-None coarse metric + populated by_symbol slices from the
+    foundation's REAL artifact keys (average_trade_net; top-level by_symbol).
+
+    Pre-fix this FAILS: _coarse_metric probed economic_metrics for net_return/total_return/
+    mean_return/return_per_period (none exist ⇒ None) and _slices read diag["slices"] (no
+    such key ⇒ empty by_symbol). Both must resolve against the schema the foundation emits.
+    """
+    result_dir = tmp_path / "results" / "harness_quick_f0"
+    _write_real_artifacts(result_dir)
+
+    # A minimal real-shaped run result: verified causality + result_dir pointing at the
+    # artifacts above. (quick_run uses run_config, not run_evaluation.)
+    class _Causality:
+        verified = True
+
+    class _Evidence:
+        causality = _Causality()
+
+    class _Outcome:
+        failure_stage = None
+
+    artifacts_dir = str(result_dir)
+
+    class _Result:
+        evidence = _Evidence()
+        outcome = _Outcome()
+        result_dir = artifacts_dir
+
+        @property
+        def succeeded(self):
+            return True
+
+    monkeypatch.setattr(fr_mod, "run_config", lambda *a, **k: _Result())
+
+    gw = RealFoundationGateway(repo_root=tmp_path, workdir=tmp_path)
+    out = gw.quick_run(_experiment(), _protocol(), FoldWindow("f0", "2024-01-01", "2024-06-30"))
+
+    # Coarse after-costs plausibility number is the real average_trade_net (sign-meaningful).
+    assert out.in_sample_metric is not None
+    assert out.in_sample_metric == pytest.approx(0.00037)
+    # trade_count comes off the same real economic_metrics block.
+    assert out.trade_count == 142
+    assert out.valid is True
+    assert out.causal_ok is True
+    # by_symbol slices are populated from the real diagnostics (the breadth/robustness leg).
+    assert "by_symbol" in out.slices
+    assert set(out.slices["by_symbol"]) == {"BTC-PERP", "ETH-PERP"}
+    assert out.slices["by_symbol"]["BTC-PERP"]  # non-empty per-symbol scalars
+    # The invented by_month/by_hour keys are gone; only real slice axes are present.
+    assert "by_month" not in out.slices
+    assert "by_hour" not in out.slices
+
+
+# --------------------------------------------------------------------------- #
+# Fix 5 — fill-price mapping is not lossy: a valid foundation fill ("open") must
+# reach the written config, not be silently downgraded to "close".
+# (Foundation FillModelConfig.price accepts open|close|quote.)
+# --------------------------------------------------------------------------- #
+
+
+def test_fill_block_preserves_open(tmp_path):
+    proto = _protocol().model_copy(update={"fill_model": _protocol().fill_model.model_copy(update={"fill": "open"})})
+    gw = RealFoundationGateway(repo_root=tmp_path, workdir=tmp_path)
+    cfg = fr_mod.derive_foundation_config(proto, _experiment())
+    block = gw._fill_block(cfg)
+    # Pre-fix this is "close" (open collapsed); post-fix the valid "open" survives.
+    assert block["price"] == "open"
+
+
+def test_fill_block_passthrough_close_and_quote(tmp_path):
+    gw = RealFoundationGateway(repo_root=tmp_path, workdir=tmp_path)
+    for fill in ("close", "quote"):
+        proto = _protocol().model_copy(
+            update={"fill_model": _protocol().fill_model.model_copy(update={"fill": fill})}
+        )
+        cfg = fr_mod.derive_foundation_config(proto, _experiment())
+        assert gw._fill_block(cfg)["price"] == fill
+
+
+def test_fill_block_maps_harness_next_bar_open_alias(tmp_path):
+    # The harness vocabulary includes "next_bar_open" (FillModel docstring); the foundation
+    # expresses the next-bar timing via entry_lag_bars and only accepts open|close|quote, so
+    # the alias maps to the "open" price reference rather than the foundation rejecting it.
+    proto = _protocol().model_copy(
+        update={"fill_model": _protocol().fill_model.model_copy(update={"fill": "next_bar_open"})}
+    )
+    gw = RealFoundationGateway(repo_root=tmp_path, workdir=tmp_path)
+    cfg = fr_mod.derive_foundation_config(proto, _experiment())
+    assert gw._fill_block(cfg)["price"] == "open"
+
+
+def test_fill_block_rejects_genuinely_unsupported_fill(tmp_path):
+    proto = _protocol().model_copy(
+        update={"fill_model": _protocol().fill_model.model_copy(update={"fill": "perfect"})}
+    )
+    gw = RealFoundationGateway(repo_root=tmp_path, workdir=tmp_path)
+    cfg = fr_mod.derive_foundation_config(proto, _experiment())
+    with pytest.raises(ValueError, match="fill"):
+        gw._fill_block(cfg)
 
 
 # --------------------------------------------------------------------------- #

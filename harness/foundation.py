@@ -44,7 +44,10 @@ class QuickRunResult:
     causal_ok: bool
     in_sample_metric: float | None  # coarse plausibility, AFTER costs (None if infeasible)
     trade_count: int
-    # {"by_symbol": {...}, "by_month": {...}, "by_hour": {...}} — cheap-robust slices.
+    # Cheap-robust slices keyed by the foundation's real diagnostic axes, e.g.
+    # {"by_symbol": {...}, "by_direction": {...}, "by_exit_reason": {...}}; each axis maps a
+    # group name to its scalar summary. by_symbol is the leg the breadth/concentration logic
+    # reads. (The foundation emits no calendar by_month/by_hour axis.)
     slices: Mapping[str, Mapping[str, float]]
     failure_stage: str | None
 

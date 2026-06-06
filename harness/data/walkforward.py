@@ -2,14 +2,25 @@
 
 Selection is a rolling (default) or anchored walk-forward: train on a window, score the
 next (strictly later) window, roll forward. Every test fold sits **after** its training
-window. Adjacent blocks are separated by:
+window. The two mechanically-enforced separations (each pinned by a test):
 
 - a **purge** gap of ``purge_periods`` immediately *before* each test window, removed from
-  that fold's training window (no label/position straddles the boundary — sized to the
-  holding/label horizon), and
-- an **embargo** of ``embargo_periods`` immediately *after* a test window, removed from the
-  *following* fold's training window (AFML: embargo applies to training data that follows a
-  test window, mattering most under combinatorial folds).
+  that fold's training window so no label/position straddles the boundary (sized to the
+  holding/label horizon). ``train.end`` is exactly ``purge_periods`` before ``test.start``.
+- an **embargo** of ``embargo_periods`` that spaces **consecutive test windows**: the gap
+  between one test window's end and the next test window's start is exactly
+  ``embargo_periods``, so no two OOS windows are adjacent (AFML: untested bars trail each
+  test window before fresh evidence resumes).
+
+What the embargo is NOT here: it does **not** carve a zone out of any following fold's
+``train``. Under this forward-chaining schedule consecutive test windows are only
+``test_periods + embargo`` apart, so there is no clean per-fold training window left between
+them to carve an embargo out of — a genuine carve would leave every fold after the first with
+an empty train. The harness never fits per-fold anyway (the orchestrator consumes only
+``fold.test``; candidates are frozen; P5 uses the Train data TIER, not a per-fold train), so
+``train`` is the honest purged pre-test window, not an "embargoed usable train". (Combinatorial
+purged CV, where a post-test embargo would carve interleaved train folds, is deferred —
+PRD §12.)
 
 Pure integer-period arithmetic: a fold is a set of ``[start, end)`` index ranges over a
 span of ``n_periods`` bars. Mapping indices to calendar timestamps (for the foundation's
@@ -54,9 +65,13 @@ class IndexRange:
 class Fold:
     """One walk-forward fold: a training range and a strictly-later test range.
 
-    ``train`` is the *purged/embargoed* training window actually usable for this fold
-    (the purge gap before the test window and any embargo from the prior test window are
-    already removed). ``test`` is the OOS Selection window the foundation scores.
+    ``train`` is the **purged** pre-test training window: a ``train_periods`` window (rolling)
+    or an origin-anchored expanding window (anchored) whose end is exactly ``purge_periods``
+    before ``test.start``. It is NOT embargo-carved — see the module docstring: the embargo
+    spaces consecutive *test* windows, and nothing in the harness fits per-fold, so there is no
+    usable per-fold window to carve. (Anchored ``train`` therefore overlaps earlier test windows
+    by construction, as anchored walk-forward does; do not treat ``train`` as a leakage-clean
+    fit set.) ``test`` is the OOS Selection window the foundation scores.
     """
 
     index: int
@@ -86,10 +101,12 @@ def generate_folds(
     Spacing per fold ``i`` (test windows tile forward with an embargo between them):
       - ``test_start_i`` = ``train_periods + purge + i * (test_periods + embargo)``  (rolling)
         so the first test window sits after one full train block + purge, and each later
-        test window is offset by its own length plus the embargo applied to the training
-        data that follows the previous test window.
+        test window is offset by its own length plus the embargo — leaving exactly
+        ``embargo`` untested bars between one test window's end and the next's start.
       - ``train_i`` ends at ``test_start_i - purge`` (purge gap before test). Rolling train
-        starts at ``test_start_i - purge - train_periods``; anchored train starts at 0.
+        starts at ``test_start_i - purge - train_periods``; anchored train starts at 0. The
+        embargo is NOT subtracted from ``train_i`` (see the class/module docstrings — there is
+        no clean per-fold window to carve, and nothing fits per-fold).
 
     Raises if not even one forward-only fold fits.
     """

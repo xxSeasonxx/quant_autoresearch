@@ -1,7 +1,3 @@
-# Agent-editable bounded params for the active thesis.
-# Protocol-owned fields such as symbols, dates, costs, fills, gates, objective,
-# and loop constants do not belong here.
-
 [params]
 lookback_bars = 3
 threshold_bps = 50.0

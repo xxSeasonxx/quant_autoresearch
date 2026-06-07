@@ -16,6 +16,12 @@ def test_results_log_initializes_header_and_appends_one_row_per_attempt(tmp_path
         trade_count=12,
         concentration=0.5,
         cost_stress=0.2,
+        net_return_sum=0.20,
+        avg_trade_net=0.10,
+        win_rate=1.0,
+        profit_factor=None,
+        gross_return_sum=0.25,
+        cost_return_sum=0.05,
         complexity_count=2,
         status="keep",
         stop_reason="",
@@ -45,6 +51,12 @@ def test_status_summary_excludes_retired_harness_fields(tmp_path: Path):
             trade_count=3,
             concentration=0.4,
             cost_stress=0.0,
+            net_return_sum=0.1,
+            avg_trade_net=0.1,
+            win_rate=1.0,
+            profit_factor=None,
+            gross_return_sum=0.12,
+            cost_return_sum=0.02,
             complexity_count=1,
             status="keep",
             stop_reason="",
@@ -62,4 +74,3 @@ def test_status_summary_excludes_retired_harness_fields(tmp_path: Path):
     assert summary["subwindows"] == 3
     for retired in ["selection_budget", "family_id", "ledger", "graduation", "lockbox"]:
         assert retired not in summary
-

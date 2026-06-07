@@ -14,7 +14,7 @@ This is not a trading system, investment advice, or proof of deployability.
 | `strategy.py` | Agent-editable pure signal logic. |
 | `experiment.toml` | Agent-editable bounded strategy params. |
 | `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
-| `rationale.md` | Mechanism / observable / falsifier entries for signal components. |
+| `rationale.md` | Working thesis, signal components, and variant log. |
 | `loop.py` | Thin status and climb entry point. |
 | `protocol.py` | Protocol loading and public quick-run config materialization. |
 | `objective.py` | Train robustness objectives and plateau math. |
@@ -28,7 +28,7 @@ The agent may edit:
 
 - `strategy.py`
 - `experiment.toml` `[params]`
-- `rationale.md` when signal components change
+- `rationale.md` when variants are tried or signal components change
 
 The agent does not edit:
 
@@ -47,21 +47,25 @@ Those live in `protocol.toml` and are chosen before a thesis starts.
 
 For one thesis:
 
-1. Establish a feasible baseline.
-2. Modify `strategy.py` or bounded params.
-3. Run a Train quick run through public `quant_strategies.runner.run_config`.
-4. Score the configured Train robustness objective.
-5. Apply binary gates.
-6. Keep only if all gates pass and the score improves beyond:
+1. Set the working thesis in `rationale.md`.
+2. Establish a feasible baseline.
+3. Modify `strategy.py` or bounded params.
+4. Run a Train quick run through public `quant_strategies.runner.run_config`.
+5. Review diagnostic output and update `rationale.md`.
+6. Score the configured Train robustness objective.
+7. Apply binary gates.
+8. Let the loop decide keep/discard with the implemented keep rule:
 
    ```text
-   best + max(eps, rho * max(1, abs(best)))
+   all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
    ```
 
-7. Append one row to `results.tsv`.
-8. Stop on plateau, max iterations, complexity cap, or baseline failure.
+9. Append one row to `results.tsv`.
+10. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop.
+
+`results.tsv` records both control metrics and intuitive diagnostics: objective score, gate flags, trade count, concentration, cost stress, net return sum, average trade net, win rate, profit factor, gross return sum, and cost return sum.
 
 ## Commands
 
@@ -72,6 +76,8 @@ conda run -n quant python -m loop climb --mechanism "<why it should work>" --fal
 ```
 
 The `climb` command runs the current candidate once and logs the attempt. The autonomous editing loop is driven by the agent contract in `program.md`.
+
+The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.
 
 ## Upstream Boundary
 

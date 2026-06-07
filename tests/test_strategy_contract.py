@@ -37,7 +37,7 @@ def test_validate_params_rejects_unknown_and_out_of_bounds_params():
 
 def test_generate_decisions_emits_causal_long_decision():
     decisions = strategy.generate_decisions(
-        _bars("BTC-PERP", [100, 101, 102, 104]),
+        _bars("BTC-PERP", [100, 101, 102, 104, 105]),
         {"lookback_bars": 3, "threshold_bps": 50, "weight": 0.1, "max_hold_bars": 2},
     )
 
@@ -46,10 +46,11 @@ def test_generate_decisions_emits_causal_long_decision():
     assert decision.instrument.symbol == "BTC-PERP"
     assert decision.target.direction == "long"
     assert decision.as_of_time < decision.decision_time
+    assert decision.decision_time == decision.as_of_time + timedelta(minutes=1)
 
 
 def test_generate_decisions_scans_history_and_suppresses_overlap():
-    rows = _bars("BTC-PERP", [100, 102, 104, 106, 108, 110, 112])
+    rows = _bars("BTC-PERP", [100, 102, 104, 106, 108, 110, 112, 114, 116, 118])
 
     decisions = strategy.generate_decisions(
         rows,

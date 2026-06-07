@@ -1,46 +1,122 @@
-# Operator-owned Train-loop protocol. The agent reads this file but does not
-# change it during a thesis run.
+# Operator-owned Train-loop protocol.
+#
+# This file is the source of truth for HOW a thesis is run and judged on Train.
+# The agent reads these values but does not change them during a thesis run.
+#
+# Where these settings come from:
+# - symbols / dates / data kind: Season chooses them from quant_data readiness and
+#   the thesis's intended market. They define the Train-only sample handed to the
+#   loop. OOS windows are deliberately absent.
+# - costs / fills: Season chooses realistic execution assumptions for the market.
+#   Strategy params cannot zero costs or change fill timing.
+# - objective / gates / loop constants: Season chooses the robustness target,
+#   minimum evidence bars, and stopping behavior before the thesis starts. The
+#   agent optimizes only strategy.py and bounded params against this frozen setup.
+#
+# Recommendation:
+# - Active default below is the normal thesis-development setup: 2 years of Train,
+#   6 robustness subwindows, and a 100-trade floor.
+# - For a quick local smoke run, temporarily use 2025-01-01 -> 2025-01-14,
+#   subwindows = 2, and min_trades = 4.
+# - For a heavier overnight run, use 2023-01-01 -> 2025-12-31 if runtime is
+#   acceptable. Keep 2026+ reserved for downstream OOS while local data ends near
+#   2026-04-13.
+# - Change plateau_patience / max_iterations only to control research budget:
+#   smaller for fast checks, larger for overnight runs. Do not change them after
+#   seeing a thesis's result.
 
+# The pure strategy file and strategy id passed through to quant_strategies.
 strategy_path = "strategy.py"
 strategy_id = "strategy"
 
 [data]
+# Public quant_strategies data loader kind. This is protocol-owned because data
+# source choice changes what information the strategy can see.
 kind = "bars"
+# Dataset name for kind = "bars". Must exist in quant_data for the local setup.
 dataset = "crypto_perp_1min"
+# Fixed Train universe. The agent must not cherry-pick symbols in params.
 symbols = ["BTC-PERP", "ETH-PERP"]
-start = "2025-01-01"
-end = "2025-02-01"
+# Train-only date range. Date-only end is interpreted like the upstream loader:
+# the loop includes the full end date by using a half-open [start, end + 1 day)
+# objective window.
+#
+# Smoke/debug alternative:
+# start = "2025-01-01"
+# end = "2025-01-14"
+#
+# Heavier overnight alternative:
+# start = "2023-01-01"
+# end = "2025-12-31"
+start = "2024-01-01"
+end = "2025-12-31"
 
 [fill_model]
+# Fill price used by quant_strategies. For bar data, close is the simple public
+# runner-compatible choice; quote-based fills belong to quote datasets.
 price = "close"
+# Entry lag of 1 means a signal emitted after a bar is available fills on the
+# next bar, not the signal bar. This protects close-derived signals from lookahead.
 entry_lag_bars = 1
+# Exit lag is kept at 0 so max_hold exits occur at the configured hold boundary.
 exit_lag_bars = 0
 
 [cost_model]
+# Per-side fee in basis points. 5 bps is intentionally conservative for a crypto
+# perp smoke protocol.
 fee_bps_per_side = 5.0
+# Per-side slippage in basis points. The loop's cost-stress gate applies an
+# additional round-trip bump derived from fee + slippage.
 slippage_bps_per_side = 1.0
 
 [output]
+# Must stay under results/ because quant_strategies rejects non-generated output
+# directories.
 results_dir = "results"
-artifact_profile = "summary"
+# diagnostic gives diagnostics.json with economic slices and sampled trades,
+# which is more useful for the agent's next edit than summary-only output.
+artifact_profile = "diagnostic"
+# Let quant_strategies run its lightweight quick checks.
 quick_checks = true
+# Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
 
 [loop]
+# M: stop after this many consecutive completed non-improving attempts once a
+# feasible baseline exists.
 plateau_patience = 4
-max_iterations = 60
+# N: hard cap on completed attempts for this thesis.
+max_iterations = 80
+# eps: absolute score improvement required to reset plateau patience.
 min_abs_improvement = 0.01
+# rho: relative score improvement required. 0 disables the relative component;
+# the effective threshold is max(eps, rho * max(1, abs(best_score))).
 min_rel_improvement = 0.0
-baseline_grace_iterations = 3
+# Initial attempts allowed to find any feasible baseline before the thesis dies
+# on Train.
+baseline_grace_iterations = 6
 
 [objective]
+# Robustness target selected before the thesis starts. The agent cannot pick a
+# friendlier objective after seeing results.
 kind = "worst_subwindow"
-subwindows = 2
+# K: number of contiguous Train time slices for worst_subwindow. Six slices over
+# two years gives roughly quarterly robustness checks.
+# Smoke/debug alternative: subwindows = 2
+subwindows = 6
 
 [gates]
-min_trades = 4
+# Minimum completed trades required before the score can be considered alive.
+# Smoke/debug alternative: min_trades = 4
+min_trades = 100
+# Maximum share of absolute net trade activity carried by one symbol. Lower is
+# stricter diversification; 0.80 is permissive for a two-symbol smoke protocol.
 max_symbol_concentration = 0.80
+# Minimum stressed objective score after applying the extra cost bump.
 min_cost_stress_score = 0.0
+# Simplicity cap: maximum declared signal components in rationale.md.
 max_components = 3
+# Simplicity cap: maximum bounded params in experiment.toml [params].
 max_params = 8
+# Minimum base Train score required to pass the Train floor gate.
 train_score_floor = 0.0

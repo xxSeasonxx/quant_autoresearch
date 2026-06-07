@@ -30,7 +30,7 @@ parameter tuning, reject this baseline thesis.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import isfinite
 from typing import Any
 
@@ -128,8 +128,9 @@ def generate_decisions(
             if ret <= threshold:
                 continue
 
-            as_of_time = _as_datetime(current.get("available_at", current["timestamp"]))
-            decision_time = as_of_time + timedelta(microseconds=1)
+            as_of_time = _as_datetime(current["timestamp"])
+            available_at = _as_datetime(current.get("available_at", current["timestamp"]))
+            decision_time = available_at
             decisions.append(
                 StrategyDecision(
                     strategy_id="strategy",

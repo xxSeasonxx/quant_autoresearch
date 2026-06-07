@@ -34,6 +34,29 @@ def test_program_states_thin_editable_surface_and_read_only_protocol():
     assert "cost" in text
     assert "fill" in text
     assert "loop constants" in text
+    assert "symbols are special" in text
+    assert "fixed symbol universe" in text
+    assert "protocol/universe variant" in text
+
+
+def test_program_states_objective_and_autonomy_boundary():
+    text = _normalized()
+    assert "senior quant researcher" in text
+    assert "profitable in the real world" in text
+    assert "the harness guides the experiment" in text
+    assert "the goal is simple" in text
+    assert "best gated train survivor" in text
+    assert "do not pause once the loop has begun" in text
+    assert "protocol stop rule fires" in text
+
+
+def test_program_requires_rationale_foundation_and_variant_refresh():
+    text = _normalized()
+    assert "set the working thesis in `rationale.md`" in text
+    assert "thesis-guided variants" in text
+    assert "refresh `rationale.md`" in text
+    assert "bold thesis-guided variant" in text
+    assert "update `upstream_limitations_todo.md`" in text
 
 
 def test_program_forbids_in_loop_evaluate_and_old_harness_commands():

@@ -65,6 +65,8 @@ def _trades_from_result(result: object) -> tuple[TradeSample, ...]:
                 decision_time=getattr(trade, "decision_time"),
                 net_return=float(getattr(trade, "net_return")),
                 weight=float(getattr(trade, "weight", 1.0)),
+                gross_return=getattr(trade, "gross_return", None),
+                cost_return=getattr(trade, "cost_return", None),
             )
         )
     return tuple(samples)
@@ -105,6 +107,12 @@ def _append_crash(
             trade_count=0,
             concentration=None,
             cost_stress=None,
+            net_return_sum=None,
+            avg_trade_net=None,
+            win_rate=None,
+            profit_factor=None,
+            gross_return_sum=None,
+            cost_return_sum=None,
             complexity_count=max(len(params), len(tuple(components))),
             status="crash",
             stop_reason="",
@@ -112,6 +120,23 @@ def _append_crash(
             note=note,
         ),
     )
+
+
+def _profit_factor(trades: Sequence[TradeSample]) -> float | None:
+    wins = sum(trade.net_return for trade in trades if trade.net_return > 0.0)
+    losses = -sum(trade.net_return for trade in trades if trade.net_return < 0.0)
+    if wins <= 0.0 and losses <= 0.0:
+        return None
+    if losses <= 0.0:
+        return None
+    return wins / losses
+
+
+def _sum_optional(values: Sequence[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return float(sum(present))
 
 
 def run_iteration(
@@ -238,6 +263,20 @@ def run_iteration(
             trade_count=len(trades),
             concentration=symbol_concentration(trades) if trades else None,
             cost_stress=cost_stress_score,
+            net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
+            avg_trade_net=(
+                float(sum(trade.net_return for trade in trades) / len(trades))
+                if trades
+                else None
+            ),
+            win_rate=(
+                sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
+                if trades
+                else None
+            ),
+            profit_factor=_profit_factor(trades),
+            gross_return_sum=_sum_optional(tuple(trade.gross_return for trade in trades)),
+            cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
             complexity_count=max(len(params), len(tuple(components))),
             status=status,
             stop_reason="",

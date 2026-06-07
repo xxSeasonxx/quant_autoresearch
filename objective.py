@@ -28,6 +28,8 @@ class TradeSample:
     decision_time: datetime
     net_return: float
     weight: float = 1.0
+    gross_return: float | None = None
+    cost_return: float | None = None
 
 
 @dataclass(frozen=True)

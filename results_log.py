@@ -15,6 +15,12 @@ class ResultRow:
     trade_count: int
     concentration: float | None
     cost_stress: float | None
+    net_return_sum: float | None
+    avg_trade_net: float | None
+    win_rate: float | None
+    profit_factor: float | None
+    gross_return_sum: float | None
+    cost_return_sum: float | None
     complexity_count: int
     status: str
     stop_reason: str
@@ -32,6 +38,12 @@ class ResultRow:
             "trade_count",
             "concentration",
             "cost_stress",
+            "net_return_sum",
+            "avg_trade_net",
+            "win_rate",
+            "profit_factor",
+            "gross_return_sum",
+            "cost_return_sum",
             "complexity_count",
             "status",
             "stop_reason",
@@ -49,6 +61,12 @@ class ResultRow:
             "trade_count": str(self.trade_count),
             "concentration": "" if self.concentration is None else str(self.concentration),
             "cost_stress": "" if self.cost_stress is None else str(self.cost_stress),
+            "net_return_sum": "" if self.net_return_sum is None else str(self.net_return_sum),
+            "avg_trade_net": "" if self.avg_trade_net is None else str(self.avg_trade_net),
+            "win_rate": "" if self.win_rate is None else str(self.win_rate),
+            "profit_factor": "" if self.profit_factor is None else str(self.profit_factor),
+            "gross_return_sum": "" if self.gross_return_sum is None else str(self.gross_return_sum),
+            "cost_return_sum": "" if self.cost_return_sum is None else str(self.cost_return_sum),
             "complexity_count": str(self.complexity_count),
             "status": self.status,
             "stop_reason": self.stop_reason,
@@ -71,6 +89,12 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         trade_count=int(row["trade_count"]),
         concentration=_parse_float(row["concentration"]),
         cost_stress=_parse_float(row["cost_stress"]),
+        net_return_sum=_parse_float(row["net_return_sum"]),
+        avg_trade_net=_parse_float(row["avg_trade_net"]),
+        win_rate=_parse_float(row["win_rate"]),
+        profit_factor=_parse_float(row["profit_factor"]),
+        gross_return_sum=_parse_float(row["gross_return_sum"]),
+        cost_return_sum=_parse_float(row["cost_return_sum"]),
         complexity_count=int(row["complexity_count"]),
         status=row["status"],
         stop_reason=row["stop_reason"],
@@ -124,4 +148,3 @@ def status_summary(
         "plateau_patience": plateau_patience,
         "subwindows": subwindows,
     }
-

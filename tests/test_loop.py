@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loop import run_iteration, validate_thesis
+from gates import GateConfig
 from objective import ObjectiveConfig
 from protocol import load_protocol
 from results_log import read_results
@@ -16,6 +17,8 @@ class _Trade:
     symbol: str
     decision_time: datetime
     net_return: float
+    gross_return: float | None = None
+    cost_return: float | None = None
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,17 @@ def test_validate_thesis_requires_mechanism_and_falsifier():
 
 def test_run_iteration_uses_mocked_public_run_config_and_logs(tmp_path: Path):
     cfg = load_protocol(Path("protocol.toml"))
-    cfg = cfg.with_output(results_dir=str(tmp_path / "artifacts"))
+    cfg = replace(
+        cfg.with_output(results_dir=str(tmp_path / "artifacts")),
+        gates=GateConfig(
+            min_trades=4,
+            max_symbol_concentration=0.8,
+            min_cost_stress_score=0.0,
+            max_components=3,
+            max_params=8,
+            train_score_floor=0.0,
+        ),
+    )
     results_path = tmp_path / "results.tsv"
 
     def fake_run_config(config_path, *, repo_root=None, event_sink=None):
@@ -48,10 +61,10 @@ def test_run_iteration_uses_mocked_public_run_config_and_logs(tmp_path: Path):
             succeeded=True,
             economics=_Economics(
                 trades=(
-                    _Trade("BTC-PERP", datetime(2025, 1, 1, tzinfo=timezone.utc), 0.10),
-                    _Trade("ETH-PERP", datetime(2025, 1, 2, tzinfo=timezone.utc), 0.08),
-                    _Trade("BTC-PERP", datetime(2025, 1, 3, tzinfo=timezone.utc), 0.06),
-                    _Trade("ETH-PERP", datetime(2025, 1, 4, tzinfo=timezone.utc), 0.04),
+                    _Trade("BTC-PERP", datetime(2025, 1, 1, tzinfo=timezone.utc), 0.10, 0.11, 0.01),
+                    _Trade("ETH-PERP", datetime(2025, 1, 2, tzinfo=timezone.utc), 0.08, 0.09, 0.01),
+                    _Trade("BTC-PERP", datetime(2025, 1, 3, tzinfo=timezone.utc), 0.06, 0.07, 0.01),
+                    _Trade("ETH-PERP", datetime(2025, 1, 4, tzinfo=timezone.utc), 0.04, 0.05, 0.01),
                 ),
                 trade_count=4,
             ),
@@ -73,10 +86,26 @@ def test_run_iteration_uses_mocked_public_run_config_and_logs(tmp_path: Path):
     rows = read_results(results_path)
     assert len(rows) == 1
     assert rows[0].status == "keep"
+    assert rows[0].net_return_sum == 0.28
+    assert rows[0].avg_trade_net == 0.07
+    assert rows[0].win_rate == 1.0
+    assert rows[0].gross_return_sum == 0.32
+    assert rows[0].cost_return_sum == 0.04
 
 
 def test_run_iteration_includes_entire_protocol_end_date(tmp_path: Path):
-    cfg = replace(load_protocol(Path("protocol.toml")), objective=ObjectiveConfig(kind="worst_subwindow", subwindows=1))
+    cfg = replace(
+        load_protocol(Path("protocol.toml")),
+        objective=ObjectiveConfig(kind="worst_subwindow", subwindows=1),
+        gates=GateConfig(
+            min_trades=4,
+            max_symbol_concentration=0.8,
+            min_cost_stress_score=0.0,
+            max_components=3,
+            max_params=8,
+            train_score_floor=0.0,
+        ),
+    )
     results_path = tmp_path / "results.tsv"
 
     def fake_run_config(config_path, *, repo_root=None, event_sink=None):
@@ -107,6 +136,7 @@ def test_run_iteration_includes_entire_protocol_end_date(tmp_path: Path):
     assert outcome.status == "keep"
     assert outcome.score == 0.1
     assert read_results(results_path)[0].trade_count == 4
+    assert read_results(results_path)[0].net_return_sum == 0.4
 
 
 def test_run_iteration_logs_crash_when_runner_raises(tmp_path: Path):

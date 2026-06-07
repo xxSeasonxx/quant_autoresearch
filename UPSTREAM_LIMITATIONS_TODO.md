@@ -18,9 +18,3 @@ Each note should include:
   - *Missing upstream capability:* `quant_strategies.runner.run_config` accepts a config path and loads rows internally. It does not expose a public parameter for preloaded normalized rows.
   - *Why the current loop cannot test it faithfully today:* importing engine internals would create a private execution contract. The clean loop therefore uses public quick-run configs, which may reload data per attempt.
   - *Validation it would unlock:* Karpathy-style high-throughput Train iteration while preserving the public `quant_strategies` strategy contract and causal replay behavior.
-
-- **Live `quant_data` access for real smoke runs.**
-  - *Idea / what it unlocks:* running the thin loop against the configured Train window with real market rows.
-  - *Missing upstream capability:* a reachable local data environment with the configured datasets and symbols.
-  - *Why the current loop cannot test it faithfully today:* unit tests can mock `run_config`, but real quick runs still depend on local `quant_data` readiness.
-  - *Validation it would unlock:* end-to-end confidence that protocol materialization, data loading, strategy execution, objective scoring, gates, and `results.tsv` logging work on live data.

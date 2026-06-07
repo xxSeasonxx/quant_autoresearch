@@ -11,13 +11,10 @@ dependencies = [
     "quant-strategies",
 ]
 
+[project.scripts]
+quant-autoresearch = "loop:main"
+
 [tool.pytest.ini_options]
-# --import-mode=importlib is pytest's recommended mode; it avoids sys.path-prepend import
-# collisions and shields the mirrored `tests/harness/` layout from shadowing the real
-# `harness/` package.
-# The legacy judgment shell is fully retired (no `runner.py`/`scoring.py`/`promotion.py`/
-# `experiment_config.py`/`artifact_policy.py`/`tools/`), so there is no ignored test and no
-# legacy module left to exclude — the whole suite is the new world.
 addopts = "-ra --import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]

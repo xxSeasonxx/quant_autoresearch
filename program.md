@@ -1,87 +1,91 @@
-# program.md — the agent loop
+# autoresearch program
 
-You are an autonomous quant researcher. Improve ONE strategy candidate in this worktree. The
-**harness** (the `harness/` package) is immutable and enforces every gate, the budget, the
-stability check, naked-sweep routing, and the swing-big cadence — mechanically, not on trust.
-Your job is to propose good hypotheses. Keep it simple; the rigor lives in the harness.
+This file is the one-page operating contract for an autonomous quant research run. Its shape intentionally mirrors the reference `autoresearch` repo: setup, experimentation, output format, logging, and loop. The content is trading-specific.
 
-## What you may edit
+## Setup
 
-EDITABLE:  `strategy.py` (the signal logic + `validate_params`) and `experiment.toml` (`[params]`,
-           and the optional bounded `symbols` set).
-READ-ONLY: the Protocol (`protocol.toml`: costs, data tiers, objective, gates, stability steps,
-           budget, the Lockbox), the entire `harness/` package, and the trial ledger
-           (`ledger.jsonl`). You change the strategy, never how it is judged.
+To start a new thesis run, work with Season to:
 
-## The three commands
+1. Agree on a run tag and a thesis: one mechanism sentence plus one falsifier.
+2. Start from a clean branch or a clearly named working branch for this run.
+3. Read the in-scope files:
+   - `README.md` for the project map.
+   - `program.md` for this operating contract.
+   - `protocol.toml` for fixed Train data, objective, gates, costs, fills, and loop constants.
+   - `experiment.toml` for bounded params.
+   - `strategy.py` for the editable signal logic.
+4. Verify the configured Train data is available through `quant_data` / `quant_strategies`.
+5. Initialize `results.tsv` with only the header row if it does not exist.
+6. Confirm setup, then begin.
 
-Run every command with `conda run -n quant`. There are three, and nothing else:
+## Experimentation
 
-```bash
-conda run -n quant python -m harness.cli status
-    → best logged candidate + the last few ledger rows + the budget as a QUOTA
-      (looks remaining). Never a countdown.
+The loop uses Train-only quick runs. It is a development filter, not proof of an edge.
 
-conda run -n quant python -m harness.cli run --desc "<thesis>"
-    → Train quick run: causal diagnostic (decision contract + hidden-lookahead replay) + a
-      coarse plausibility band + your idea's family id. FREE and unlimited — use it freely.
-      Spends NO Selection look.
+**What you can edit:**
 
-conda run -n quant python -m harness.cli evaluate --desc "<thesis> | falsifier: <what kills it>"
-    → Selection. The harness applies the ESCALATION GATE + the BUDGET, and ONLY if the gate
-      passes AND budget remains does it run the walk-forward RES and LOG the bet. It refuses
-      with a clear reason if the gate routes you back to Train, or if the budget is spent
-      (a quota, not a rejection). Each evaluate that runs spends ONE look.
+- `strategy.py`: pure signal logic via `generate_decisions(rows, params)`.
+- `experiment.toml` bounded params under `[params]`.
+- `rationale.md`: required when a signal component is added or materially changed.
+
+**What is read-only:**
+
+- `protocol.toml`: symbols, Train window, data kind, costs, fills, objective, gates, and loop constants.
+- OOS and forward testing surfaces. They are downstream and human-gated.
+- Generated artifacts under `.autoresearch/` and `results/`.
+
+Do not change symbols, hours, dates, costs, fills, objective kind, gate thresholds, `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement` from strategy params. If these need to change, Season changes the protocol before the thesis starts.
+
+Do not run `evaluate` inside auto-research. Do not import evaluation APIs. Do not read or create OOS windows from this loop.
+
+## Output Format
+
+A quick run is summarized by:
+
+```text
+score: <objective score or blank>
+gates: <gate=pass/fail,...>
+trade_count: <integer>
+concentration: <0..1 or blank>
+cost_stress: <number or blank>
+complexity_count: <integer>
+status: keep | discard | crash
+elapsed_seconds: <float>
 ```
 
-## Two numbers, different jobs
+`score` is the configured Train robustness objective. Gates are binary and separate from the score.
 
-- `run` (TRAIN) is a BIASED, FREE plausibility signal — develop against it, never trust it as
-  evidence. A bigger Train number above the floor is mostly overfit, not edge.
-- `evaluate` (SELECTION) is the ~unbiased, SCARCE, leaky score that ranks and graduates.
-  Leverage, turnover, and one-coin bets cannot move it; only a real, transferable edge should.
+## Logging Results
 
-Satisfice on Train. Select on Selection. The Lockbox (you never touch it) confirms.
+Append every attempted iteration to `results.tsv`. It is tab-separated, not comma-separated.
 
-## The loop, until the session ends
+```text
+commit	iteration	score	gates_passed	gate_flags	trade_count	concentration	cost_stress	complexity_count	status	stop_reason	elapsed_seconds	note
+```
 
-1. `status`, then read `strategy.py`, `experiment.toml`, and the recent ledger rows.
-2. Write ONE falsifiable, causal hypothesis: what effect, what observable, what would prove it
-   wrong. A parameter nudge with no thesis is not a candidate.
-3. Edit `strategy.py` and/or `experiment.toml` `[params]` for that one idea.
-4. `run` it on TRAIN (free, unlimited). If it fails causal replay or the contract it is INVALID
-   — fix or drop. Develop it to a ROBUST PLATEAU — the harness perturbs your params ±steps and
-   the in-sample metric must stay flat-and-positive. Stop when further edits only move the
-   number: that is tuning, not developing.
-5. `evaluate` it. The harness applies the ESCALATION GATE and lets the candidate through ONLY if
-   it clears every condition: valid · enough trades · positive after costs · a FRESH thesis (a
-   structurally new signal family, not a nudge of one already in the ledger) · the edge is not
-   carried by one symbol · not a knife-edge (stability). A higher Train number does not earn a
-   look; a robust, faithful expression of a new thesis does.
-6. The harness LOGS the bet (config, thesis, full OOS return series, RES). Do NOT hill-climb:
-   each evaluate is a recorded bet, not a step in an improvement loop — you never discard a bet
-   just because its number did not rise. Re-evaluating tweaks of one idea cannot push its number
-   up: a same-family tweak is routed back to Train (free), and across families the budget caps
-   total looks.
-7. Move to a DISTINCT thesis. Every M ideas, SWING BIG: a structurally new signal family — the
-   harness requires it and will refuse to escalate an old family until you do.
+Use `status=keep` only when the candidate passes all gates and improves beyond the configured plateau threshold. Use `discard` for a valid but non-keepable attempt. Use `crash` for failed runs or invalid candidates.
 
-Your score improves two ways only: BETTER HYPOTHESES (the ledger teaches you what survives
-out-of-sample) and more robust development on TRAIN — never by grinding one out-of-sample
-number. There is no free lunch in tuning; the budget is small on purpose.
+## The Experiment Loop
 
-When the budget is spent, `evaluate` stops running — a QUOTA, not a rejection of your strategy.
-The budget is GLOBAL to the campaign (it is not reset per family): when looks are spent,
-graduate the best logged candidates or move on. You never run the Lockbox — confirmation is
-human-gated and one-shot.
+Loop for the current thesis until a configured stop rule fires:
 
-NEVER EARLY STOP. While the harness reports session capacity, do not pause and do not ask
-"should I keep going?" or "is this a good stopping point?". Out of ideas? Re-read the artifacts
-and the ledger, combine near-misses, simplify accidental complexity, or try a bolder causal
-hypothesis. The loop runs until the harness ends the session or the human interrupts.
+1. Read `protocol.toml`, `experiment.toml`, `strategy.py`, `rationale.md`, and recent `results.tsv`.
+2. Establish or inspect the feasible baseline.
+3. Make one simple change to express the thesis better.
+4. If the change adds or materially changes a signal component, update `rationale.md` with mechanism, observable, and falsifier.
+5. Run the Train quick run through the local `climb` command or an equivalent focused test helper.
+6. Parse the objective score and gate flags.
+7. Keep only if:
+   ```text
+   all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
+   ```
+   where `eps = min_abs_improvement` and `rho = min_rel_improvement`.
+8. Otherwise revert to the prior best kept candidate.
+9. Append exactly one `results.tsv` row.
+10. Stop when one fires:
+    - `plateau_patience` consecutive completed non-improving attempts after a feasible baseline.
+    - `max_iterations` completed attempts.
+    - complexity cap exhausted.
+    - no feasible baseline within `baseline_grace_iterations`.
 
-## Upstream limits
-
-The harness delegates execution to `quant_strategies` and may depend on `quant_data`. If either
-upstream system is missing data or fails independently of the strategy, document the limitation
-instead of mutating the strategy to hide it.
+At stop, hand Season the frozen Train survivor or say the thesis died on Train. A Train survivor is not a promotion signal; it is only a candidate for downstream OOS, paper, and small-live review.

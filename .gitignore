@@ -2,14 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Generated campaign state (the harness owns these at runtime; never source).
-/.autoresearch_session.json
-/results
-/ledger.jsonl
-/lockbox_book.json
-/evaluation_results
-/harness_quick_*.toml
-/harness_eval_*.toml
+# Generated autoresearch state; never source.
+/.autoresearch/
+/results/
+/results.tsv
 
 # Local agent/editor state.
 /.claude/

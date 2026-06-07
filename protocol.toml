@@ -1,79 +1,46 @@
-# Protocol — harness-owned, READ-ONLY to the agent (FR-H).
-#
-# This file defines HOW a candidate is judged: costs, fill, data tiers, the objective
-# metric + gates + thresholds, the factor panel, the budget, the stability perturbation
-# steps, and annualization. It is loaded from outside the agent's writable surface,
-# content-hashed, and the run FAILS CLOSED on drift (FR-H2). The agent's editable surface
-# is `experiment.toml` (strategy + params) — never this file.
-#
-# Thresholds here are P1 defaults (open decision #1); P2 calibrates against real data.
+# Operator-owned Train-loop protocol. The agent reads this file but does not
+# change it during a thesis run.
 
-name = "btc-perp-hourly-v1"
+strategy_path = "strategy.py"
+strategy_id = "strategy"
 
-[cost_model]
-taker_bps = 5.0
-maker_bps = 1.0
-slippage_bps = 1.0
+[data]
+kind = "bars"
+dataset = "crypto_perp_1min"
+symbols = ["BTC-PERP", "ETH-PERP"]
+start = "2025-01-01"
+end = "2025-02-01"
 
 [fill_model]
-fill = "next_bar_open"
-participation_cap = 0.1
+price = "close"
+entry_lag_bars = 1
+exit_lag_bars = 0
 
-[data_tiers]
-symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
+[cost_model]
+fee_bps_per_side = 5.0
+slippage_bps_per_side = 1.0
 
-[data_tiers.train]
-start = "2024-01-01"
-end = "2024-09-30"
+[output]
+results_dir = "results"
+artifact_profile = "summary"
+quick_checks = true
+diagnostic_sample_trades = 5
 
-[data_tiers.selection]
-start = "2024-10-01"
-end = "2025-04-30"
-
-[data_tiers.lockbox]
-start = "2025-05-01"
-end = "2025-07-31"
-
-[folds]
-scheme = "rolling"
-n_folds = 6
-train_periods = 4320
-test_periods = 1440
-purge_periods = 24
-embargo_periods = 24
+[loop]
+plateau_patience = 4
+max_iterations = 60
+min_abs_improvement = 0.01
+min_rel_improvement = 0.0
+baseline_grace_iterations = 3
 
 [objective]
-rank_metric = "sharpe"
-deflate_per_row = false
+kind = "worst_subwindow"
+subwindows = 2
 
-[objective.gates]
-min_trades = 30
-max_concentration = 0.5
-min_effective_breadth = 2.0
-psr_floor = 0.95
-max_drawdown_ceiling = 0.35
-worst_fold_floor = 0.0
-dispersion_ceiling = 3.0
-cost_stress_ratio = 0.5
-
-[objective.factor_panel]
-axes = ["market", "momentum", "funding_carry", "size"]
-
-[budget]
-max_selection_looks = 8
-
-[stability]
-rho = 0.6
-min_positive_fraction = 0.8
-step_multipliers = [1, 2]
-
-# Natural perturbation step per tunable param of the active strategy (strategy.py). The harness
-# perturbs each ±1/±2 steps on Train for the stability gate; these are Protocol-owned, never
-# agent-set. (base_position_pct is the FROZEN sizing param and is deliberately NOT perturbed.)
-[stability.param_steps]
-lookback_bars = 4
-entry_threshold = 0.005
-max_hold_bars = 4
-
-[annualization]
-periods_per_year = 8760.0
+[gates]
+min_trades = 4
+max_symbol_concentration = 0.80
+min_cost_stress_score = 0.0
+max_components = 3
+max_params = 8
+train_score_floor = 0.0

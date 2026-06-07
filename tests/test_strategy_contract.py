@@ -1,10 +1,3 @@
-"""The agent-editable strategy surface contract (the new world).
-
-``strategy.py`` exposes the foundation's pure decision contract (``generate_decisions`` /
-``validate_params``) and expresses ONE simple causal hypothesis (time-series momentum). It is
-pure (no data loading / I/O), validates its params, and emits causally-stamped decisions.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -14,59 +7,54 @@ import pytest
 import strategy
 
 
-def test_strategy_exports_decision_contract_only():
-    assert callable(strategy.generate_decisions)
-    assert callable(strategy.validate_params)
-    assert "generate_decisions" in strategy.__all__
-    assert "validate_params" in strategy.__all__
-    assert "generate_signals" not in strategy.__all__
-
-
-def test_validate_params_returns_defensive_copy_with_defaults():
-    source = {"lookback_bars": 12}
-    validated = strategy.validate_params(source)
-    assert validated is not source
-    assert validated["lookback_bars"] == 12
-    # Defaults fill the rest.
-    assert validated["base_position_pct"] == 0.05
-    assert validated["decision_lag_minutes"] == 60
-
-
-def test_validate_params_rejects_zero_decision_lag():
-    """A zero decision lag is hidden lookahead — must be rejected (causal contract)."""
-    with pytest.raises(ValueError):
-        strategy.validate_params({"decision_lag_minutes": 0})
-
-
-def test_generate_decisions_empty_bars_is_empty():
-    assert strategy.generate_decisions([], {}) == []
-
-
-def _bars(symbol, closes, start="2024-01-01T00:00:00+00:00"):
-    t0 = datetime.fromisoformat(start)
+def _bars(symbol: str, closes: list[float]):
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     return [
-        {"symbol": symbol, "timestamp": t0 + timedelta(hours=i), "close": c}
-        for i, c in enumerate(closes)
+        {
+            "symbol": symbol,
+            "timestamp": start + timedelta(minutes=i),
+            "available_at": start + timedelta(minutes=i + 1),
+            "close": close,
+        }
+        for i, close in enumerate(closes)
     ]
 
 
-def test_emits_long_on_up_trend_with_causal_decision_time():
-    """A clear up-trend over the lookback window emits a LONG decision stamped strictly after
-    the as-of bar (no lookahead)."""
-    closes = [100.0] * 24 + [130.0]  # +30% over the 24-bar lookback at the last bar
-    params = {"lookback_bars": 24, "entry_threshold": 0.01, "decision_lag_minutes": 60, "max_hold_bars": 24}
-    decisions = strategy.generate_decisions(_bars("BTCUSDT", closes), params)
+def test_strategy_exports_pure_decision_contract():
+    assert strategy.__all__ == ["validate_params", "generate_decisions"]
+    assert callable(strategy.validate_params)
+    assert callable(strategy.generate_decisions)
+
+
+def test_validate_params_rejects_unknown_and_out_of_bounds_params():
+    with pytest.raises(ValueError):
+        strategy.validate_params({"unknown": 1})
+    with pytest.raises(ValueError):
+        strategy.validate_params({"lookback_bars": 1})
+    with pytest.raises(ValueError):
+        strategy.validate_params({"weight": 2.0})
+
+
+def test_generate_decisions_emits_causal_long_decision():
+    decisions = strategy.generate_decisions(
+        _bars("BTC-PERP", [100, 101, 102, 104]),
+        {"lookback_bars": 3, "threshold_bps": 50, "weight": 0.1, "max_hold_bars": 2},
+    )
+
     assert len(decisions) == 1
-    d = decisions[0]
-    assert d.target.direction == "long"
-    assert d.target.sizing_kind == "target_weight"
-    assert d.instrument.symbol == "BTCUSDT"
-    # decision_time is strictly after as_of_time (the lag) — causal.
-    assert d.decision_time == d.as_of_time + timedelta(minutes=60)
+    decision = decisions[0]
+    assert decision.instrument.symbol == "BTC-PERP"
+    assert decision.target.direction == "long"
+    assert decision.as_of_time < decision.decision_time
 
 
-def test_no_decision_when_trend_below_threshold():
-    """A flat series never clears the entry threshold ⇒ no long, no decision (stays flat)."""
-    closes = [100.0] * 30
-    params = {"lookback_bars": 24, "entry_threshold": 0.01}
-    assert strategy.generate_decisions(_bars("ETHUSDT", closes), params) == []
+def test_generate_decisions_scans_history_and_suppresses_overlap():
+    rows = _bars("BTC-PERP", [100, 102, 104, 106, 108, 110, 112])
+
+    decisions = strategy.generate_decisions(
+        rows,
+        {"lookback_bars": 2, "threshold_bps": 50, "weight": 0.1, "max_hold_bars": 2},
+    )
+
+    assert len(decisions) >= 2
+    assert decisions[1].decision_time > decisions[0].decision_time

@@ -1,127 +1,80 @@
 # quant_autoresearch
 
-`quant_autoresearch` is an autonomous quant research harness. An LLM agent proposes one strategy
-hypothesis at a time and develops it; an **immutable evaluator** decides — mechanically — whether
-the result is a real, out-of-sample, risk-adjusted edge worth graduating.
+`quant_autoresearch` is a small autonomous research workbench for developing one quant strategy thesis at a time.
 
-A backtest score is a *biased* estimator of future performance, and the bias *grows with the
-number of trials*. An agent that "optimizes one number, keep/discard, loop" therefore converges on
-the most overfit strategy. This repo's answer is to put the rigor in a harness the agent cannot
-edit, and keep the agent's contract a one-page loop:
+The shape is intentionally close to Karpathy's `autoresearch`: a short `program.md`, one narrow editable strategy surface, fixed read-only run configuration, and an append-only `results.tsv`. The trading-specific difference is that the loop never tunes against OOS. It only develops on Train and hands survivors to Season for downstream OOS, paper, and small-live review.
 
-- **Rigor in the harness** — the `harness/` package enforces the data wall, the Robust Edge Score,
-  every gate, the trial budget, the stability check, the escalation gate, and the graduation audit.
-- **Simplicity in the contract** — the agent edits only `strategy.py` and `experiment.toml`
-  `[params]`, and runs three commands. See `program.md`.
+This is not a trading system, investment advice, or proof of deployability.
 
-This is **not** a production trading system, investment advice, or a final validation framework.
-Graduation is a screen, not a production sign-off.
+## Repository Map
 
-## The two halves
+| Path | Role |
+| --- | --- |
+| `program.md` | One-page agent operating contract. |
+| `strategy.py` | Agent-editable pure signal logic. |
+| `experiment.toml` | Agent-editable bounded strategy params. |
+| `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
+| `rationale.md` | Mechanism / observable / falsifier entries for signal components. |
+| `loop.py` | Thin status and climb entry point. |
+| `protocol.py` | Protocol loading and public quick-run config materialization. |
+| `objective.py` | Train robustness objectives and plateau math. |
+| `gates.py` | Binary Train gates. |
+| `results_log.py` | Append-only `results.tsv` helpers. |
+| `tests/` | Focused tests for the thin loop contract. |
 
-| Half | What it is | Editable by the agent? |
-| --- | --- | --- |
-| **The harness** (`harness/`) | The immutable evaluator: Protocol/Experiment wall, RES objective, data tiers + walk-forward, trial ledger + global budget + family fingerprint, escalation gate + stability, graduation audit + power-aware Lockbox, the CLI and session shell. | No — read-only, content-hashed, fails closed on drift. |
-| **The candidate** (`strategy.py`, `experiment.toml`) | One scratch strategy + its params (+ an optional bounded symbol set). | Yes — this is the whole editable surface. |
+## Editable Surface
 
-## The data wall
+The agent may edit:
 
-Every candidate is developed, selected, and confirmed on three disjoint partitions fixed in the
-Protocol and never editable by the agent:
+- `strategy.py`
+- `experiment.toml` `[params]`
+- `rationale.md` when signal components change
 
-- **Train** — optimize freely and fast; the agent sees full diagnostics. FREE, unlimited.
-- **Selection** — a forward-only walk-forward; the agent sees only the summary Robust Edge Score.
-  Each look costs ONE from a small, global, data-derived budget.
-- **Lockbox** — a one-shot, human-gated, write-once-per-dataset confirmation. The agent never
-  touches it.
+The agent does not edit:
 
-## The verdict ladder
+- symbols
+- Train start/end
+- data kind
+- cost model
+- fill model
+- objective kind
+- gate thresholds
+- `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
 
-`feedback → graduate → lockbox → human promotion`. The loop only ever *graduates* a candidate up
-the ladder; "promotion" is the human step above the Lockbox. The Lockbox verdict is **trichotomous**:
+Those live in `protocol.toml` and are chosen before a thesis starts.
 
-- **confirmed** — a real edge at the stated confidence;
-- **rejected** — a powered look that came back flat or negative;
-- **insufficient-evidence** — the data cannot support a verdict (the harness never lowers the bar
-  to manufacture one).
+## Loop
 
-## The loop
+For one thesis:
 
-The agent runs three commands (all under `conda run -n quant`):
+1. Establish a feasible baseline.
+2. Modify `strategy.py` or bounded params.
+3. Run a Train quick run through public `quant_strategies.runner.run_config`.
+4. Score the configured Train robustness objective.
+5. Apply binary gates.
+6. Keep only if all gates pass and the score improves beyond:
 
-```bash
-conda run -n quant python -m harness.cli status
-conda run -n quant python -m harness.cli run --desc "<thesis>"
-conda run -n quant python -m harness.cli evaluate --desc "<thesis> | falsifier: <what kills it>"
-```
+   ```text
+   best + max(eps, rho * max(1, abs(best)))
+   ```
 
-`run` is the free Train sandbox; `evaluate` is the gated, budgeted Selection look — the harness
-applies the escalation gate (valid · alive · in-sample positive · a structurally NEW thesis ·
-not single-symbol-carried · not a knife-edge) and the budget, and only then logs the bet. There
-is no hill-climb: each `evaluate` is a recorded bet, never a "keep if the score rose" step. See
-`program.md` for the full one-page contract.
+7. Append one row to `results.tsv`.
+8. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
-## Repository map
+A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop.
 
-- `strategy.py` — the active scratch strategy candidate (a simple time-series momentum example).
-- `experiment.toml` — the agent-editable hypothesis surface: `strategy_path` + `[params]` (+ optional `symbols`).
-- `protocol.toml` — the harness-owned, read-only judgment config (costs, tiers, objective, gates, budget, stability, Lockbox).
-- `harness/` — the immutable evaluator (see `docs/harness-architecture.md`).
-- `program.md` — the one-page agent loop.
-- `AGENTS.md` — the durable agent role and boundaries.
-- `docs/` — the methodology, PRD, and the diagnosed-overfit case study that motivated the rebuild.
-- `tests/` — harness + contract tests (each names the acceptance criterion it covers).
-
-## The diagnosed campaign (why this exists)
-
-An earlier version of this bench optimized an in-sample, leverage-inflated, zero-cost,
-single-regime number with an unlimited trial budget. Over ~100 attempts it produced a textbook
-overfit — an ADA-only, short-only, six-excluded-clock-hours bet with sizing cranked to 0.20,
-dressed up as a diversified basket. That number rose; the edge was not real. Replaying that
-campaign through this harness yields *infeasible / rejected / insufficient-evidence* — never a
-graduation (the headline acceptance test, AC-1). The full diagnosis lives in
-`docs/auto-research-methodology.md`; the historical `results.tsv`-based showcase is retired (the
-append-only trial ledger is now the system of record).
-
-## Running locally
-
-This repo delegates execution to `quant_strategies` and expects local market-data access via
-`quant_data`. A fresh public clone is useful for reading the workflow and the harness, but it will
-not run unless your environment can resolve the `quant-strategies` dependency and its data
-requirements.
+## Commands
 
 ```bash
-conda run -n quant python -m pytest        # the harness + contract test suite
+conda run -n quant python -m pytest
+conda run -n quant python -m loop status
+conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
 ```
 
-## Before a live campaign (known limitations)
+The `climb` command runs the current candidate once and logs the attempt. The autonomous editing loop is driven by the agent contract in `program.md`.
 
-The harness logic is fully verified in-process — the test suite covers AC-1..AC-10
-deterministically against a fake foundation gateway and synthetic return series. A few things
-must still be checked before pointing it at live capital:
+## Upstream Boundary
 
-- **Live data is required for real verdicts.** Real end-to-end paths (a real foundation fold, the
-  live factor-panel build, bit-for-bit metric reproduction from a real `quant_data` snapshot) are
-  exercised only by data-gated smoke tests, which *skip* without database access. Run them against
-  a live `quant_data` before trusting a real campaign.
-- **Configure the correct, aligned benchmark for the factor panel.** Residual-alpha scoring
-  neutralizes market/funding beta against an operator-supplied benchmark. The harness fails closed
-  unless each required factor column is a legitimate, well-conditioned, correctly time-aligned
-  return series — but it cannot verify the benchmark is *semantically* the right factor. Supply the
-  real market/funding benchmark for the asset (e.g. BTC-PERP for alts); a wrong-but-valid benchmark
-  would silently fail to neutralize.
-- **Audit FWER has a small near-unit-root residual.** The Romano-Wolf graduation audit controls
-  the false-graduation rate at the configured level across realistic serial correlation; at extreme
-  persistence (AR1 ≈ 0.8) the finite-sample rate sits modestly above nominal (~0.077 vs 0.05) and
-  shrinks with sample size. Documented in `harness/audit.py`.
-- **`profile` and `lockbox` are operator-invoked.** The agent CLI wires `status`/`run`/`evaluate`
-  plus the admin `graduate`; asset profiling and the human-gated, one-shot Lockbox confirmation are
-  invoked programmatically by the operator (Lockbox is human-gated by design).
-- **Single supplied factor panel.** The panel is the operator's benchmark (market + funding-carry);
-  auto-derived multi-factor panels are out of scope.
+`quant_autoresearch` consumes `quant_strategies` through public APIs only. Strategy execution uses `quant_strategies.runner.run_config`; private engine modules are not part of this contract.
 
-## Caveats
-
-- These are research-bench results, not live trading claims.
-- Graduation is a screening step, not comprehensive validation.
-- Cost, fill, data availability, and sample quality assumptions matter, and live in the Protocol.
+Quick-run economics expose trade-unit after-cost samples, not NAV or period-return series. That is enough for the v1 Train filter, but not enough for final validation.

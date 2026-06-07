@@ -1,21 +1,25 @@
-# experiment.toml — the agent-editable hypothesis surface (FR-H1).
-#
-# This is HALF of the two-file editable surface (the other is strategy.py). It carries ONLY the
-# strategy reference + its params (+ an optional bounded discovery `symbols` set). It says nothing
-# about how the candidate is judged — that lives in protocol.toml (harness-owned, read-only).
-# The schema is strict (`extra = "forbid"`): the legacy keys (windows, scoring, promotion,
-# max_attempts, cost_model, fill_model) are GONE and would be rejected here — judgment config is
-# the Protocol's, not the agent's.
-
-strategy_path = "strategy.py"
-
-# Optional bounded discovery universe. Omit to use the Protocol's `data_tiers.symbols`.
-symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
+# Agent-editable bounded params for the active thesis.
+# Protocol-owned fields such as symbols, dates, costs, fills, gates, objective,
+# and loop constants do not belong here.
 
 [params]
-# The agent tunes these (the harness perturbs them for the stability gate; sizing is frozen).
-lookback_bars = 24
-entry_threshold = 0.01
-base_position_pct = 0.05
-max_hold_bars = 24
-decision_lag_minutes = 60
+lookback_bars = 3
+threshold_bps = 50.0
+weight = 0.10
+max_hold_bars = 4
+
+[bounds.lookback_bars]
+min = 2
+max = 240
+
+[bounds.threshold_bps]
+min = 1.0
+max = 1000.0
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+
+[bounds.max_hold_bars]
+min = 1
+max = 240

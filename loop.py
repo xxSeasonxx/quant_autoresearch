@@ -12,7 +12,13 @@ from typing import Callable, Mapping, Sequence
 
 from gates import GateSet, evaluate_gates, symbol_concentration
 from objective import TradeSample, is_improvement, score_cost_stress, score_objective
-from protocol import ProtocolConfig, load_params, load_protocol, write_quick_run_config
+from protocol import (
+    ExperimentConfig,
+    ProtocolConfig,
+    load_experiment,
+    load_protocol,
+    write_quick_run_config,
+)
 from results_log import ResultRow, append_result, read_results, status_summary
 
 
@@ -137,6 +143,80 @@ def _source_snapshot(
         "protocol_sha256": _sha256_path(root / protocol_path),
         "rationale_sha256": _sha256_path(root / rationale_path),
     }
+
+
+def _normalize_thesis_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _bounds_sha256(experiment: ExperimentConfig) -> str:
+    payload = {
+        name: {"min": bound.min, "max": bound.max}
+        for name, bound in sorted(experiment.bounds.items())
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _lock_path(root: Path) -> Path:
+    return root / ".autoresearch" / "thesis_lock.json"
+
+
+def _normalize_lock_path(root: Path, path: str | Path) -> str:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        try:
+            return candidate.relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return candidate.resolve().as_posix()
+    return candidate.as_posix().removeprefix("./")
+
+
+def _ensure_active_thesis_lock(
+    root: Path,
+    *,
+    rows: Sequence[ResultRow],
+    mechanism: str,
+    falsifier: str,
+    protocol_sha256: str,
+    bounds_sha256: str,
+    results_path: str | Path,
+) -> None:
+    lock_path = _lock_path(root)
+    normalized_mechanism = _normalize_thesis_text(mechanism)
+    normalized_falsifier = _normalize_thesis_text(falsifier)
+    result_path_text = _normalize_lock_path(root, results_path)
+    if not lock_path.exists():
+        if rows:
+            raise ValueError(
+                "active thesis lock missing for existing results; start a new thesis lifecycle"
+            )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "mechanism": normalized_mechanism,
+            "falsifier": normalized_falsifier,
+            "protocol_sha256": protocol_sha256,
+            "bounds_sha256": bounds_sha256,
+            "results_path": result_path_text,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        lock_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        return
+
+    try:
+        payload = json.loads(lock_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("active thesis lock is unreadable; start a new thesis lifecycle") from exc
+
+    if payload.get("mechanism") != normalized_mechanism or payload.get("falsifier") != normalized_falsifier:
+        raise ValueError("active thesis identity changed; start a new thesis lifecycle")
+    if payload.get("protocol_sha256") != protocol_sha256:
+        raise ValueError("active thesis protocol changed; start a new thesis lifecycle")
+    if payload.get("bounds_sha256") != bounds_sha256:
+        raise ValueError("active thesis bounds changed; start a new thesis lifecycle")
+    if payload.get("results_path") != result_path_text:
+        raise ValueError("active thesis results path changed; start a new thesis lifecycle")
 
 
 def _ensure_can_attempt(rows: Sequence[ResultRow], snapshot: Mapping[str, str]) -> None:
@@ -298,11 +378,54 @@ def _copy_if_present(source: Path, destination: Path) -> str | None:
     return str(destination)
 
 
+def _attempt_snapshot_dir(root: Path, artifact_dir: str | Path) -> Path:
+    return root / artifact_dir / "snapshot"
+
+
+def _snapshot_paths_for_attempt(root: Path, row: ResultRow) -> dict[str, str] | None:
+    snapshot_dir = _attempt_snapshot_dir(root, row.artifact_dir)
+    paths = {
+        "strategy": snapshot_dir / "strategy.py",
+        "experiment": snapshot_dir / "experiment.toml",
+        "protocol": snapshot_dir / "protocol.toml",
+        "rationale": snapshot_dir / "rationale.md",
+        "quick_config": snapshot_dir / "quick_config.toml",
+    }
+    if not all(path.exists() for path in paths.values()):
+        return None
+    return {name: str(path) for name, path in paths.items()}
+
+
+def _write_attempt_snapshot(
+    root: Path,
+    *,
+    run_id: str,
+    artifact_dir: str | Path,
+    strategy_path: str | Path = "strategy.py",
+    protocol_path: str | Path = "protocol.toml",
+    experiment_path: str | Path = "experiment.toml",
+    rationale_path: str | Path = "rationale.md",
+) -> dict[str, str]:
+    snapshot_dir = _attempt_snapshot_dir(root, artifact_dir)
+    paths = {
+        "strategy": _copy_if_present(root / strategy_path, snapshot_dir / "strategy.py"),
+        "experiment": _copy_if_present(root / experiment_path, snapshot_dir / "experiment.toml"),
+        "protocol": _copy_if_present(root / protocol_path, snapshot_dir / "protocol.toml"),
+        "rationale": _copy_if_present(root / rationale_path, snapshot_dir / "rationale.md"),
+        "quick_config": _copy_if_present(
+            root / ".autoresearch" / "quick" / f"{run_id}.toml",
+            snapshot_dir / "quick_config.toml",
+        ),
+    }
+    return {name: path for name, path in paths.items() if path is not None}
+
+
 def _write_terminal_manifest(
     root: Path,
     *,
     row: ResultRow,
     rows: Sequence[ResultRow],
+    strategy_path: str | Path = "strategy.py",
     protocol_path: str | Path = "protocol.toml",
     experiment_path: str | Path = "experiment.toml",
     rationale_path: str | Path = "rationale.md",
@@ -310,22 +433,41 @@ def _write_terminal_manifest(
     best = _best_row(rows)
     status = "train_survivor" if best is not None else "train_failure"
     manifest_dir = root / row.artifact_dir
-    snapshot_dir = manifest_dir / "snapshot"
-    snapshot_paths = {
-        "strategy": _copy_if_present(root / "strategy.py", snapshot_dir / "strategy.py"),
-        "experiment": _copy_if_present(root / experiment_path, snapshot_dir / "experiment.toml"),
-        "protocol": _copy_if_present(root / protocol_path, snapshot_dir / "protocol.toml"),
-        "rationale": _copy_if_present(root / rationale_path, snapshot_dir / "rationale.md"),
-    }
-    snapshot_paths["quick_config"] = _copy_if_present(
-        root / ".autoresearch" / "quick" / f"{row.run_id}.toml",
-        snapshot_dir / "quick_config.toml",
-    )
-    if best is not None:
-        snapshot_paths["best_quick_config"] = _copy_if_present(
-            root / ".autoresearch" / "quick" / f"{best.run_id}.toml",
-            snapshot_dir / "best_quick_config.toml",
+    terminal_snapshot = _snapshot_paths_for_attempt(root, row)
+    if terminal_snapshot is None:
+        terminal_snapshot = _write_attempt_snapshot(
+            root,
+            run_id=row.run_id,
+            artifact_dir=row.artifact_dir,
+            strategy_path=strategy_path,
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
         )
+    best_snapshot = None if best is None else _snapshot_paths_for_attempt(root, best)
+    snapshot_paths: dict[str, str | None] = dict(terminal_snapshot)
+    if best is not None:
+        snapshot_paths["best_quick_config"] = (
+            None if best_snapshot is None else best_snapshot["quick_config"]
+        )
+        if snapshot_paths["best_quick_config"] is None:
+            snapshot_paths["best_quick_config"] = _copy_if_present(
+                root / ".autoresearch" / "quick" / f"{best.run_id}.toml",
+                manifest_dir / "snapshot" / "best_quick_config.toml",
+            )
+    else:
+        snapshot_paths["best_quick_config"] = None
+    results_snapshot = _copy_if_present(
+        root / "results.tsv",
+        manifest_dir / "snapshot" / "results.tsv",
+    )
+    if best_snapshot is not None:
+        best_snapshot = dict(best_snapshot)
+    terminal_snapshot = dict(terminal_snapshot)
+    if results_snapshot is not None:
+        terminal_snapshot["results_tsv"] = results_snapshot
+    if best_snapshot is not None and results_snapshot is not None:
+        best_snapshot["results_tsv"] = results_snapshot
     destination = manifest_dir / "terminal_manifest.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -335,6 +477,8 @@ def _write_terminal_manifest(
         "attempt": row.as_record(),
         "best_attempt": None if best is None else best.as_record(),
         "snapshot_paths": snapshot_paths,
+        "terminal_attempt_snapshot": terminal_snapshot,
+        "best_survivor_snapshot": best_snapshot,
         "results_tsv": "results.tsv",
         "disclaimer": "Train evidence only; not OOS, paper, live, or deployability evidence.",
     }
@@ -383,6 +527,15 @@ def run_iteration(
         quick_config_sha256=_sha256_path(config_path),
         **source_hashes,
     )
+    _write_attempt_snapshot(
+        root,
+        run_id=provenance.run_id,
+        artifact_dir=provenance.artifact_dir,
+        strategy_path=protocol.strategy_path,
+        protocol_path=protocol_path,
+        experiment_path=experiment_path,
+        rationale_path=rationale_path,
+    )
 
     run = runner or _default_runner
     commit = _current_commit(root)
@@ -427,6 +580,7 @@ def run_iteration(
                 root,
                 row=row,
                 rows=(*prior_rows, row),
+                strategy_path=protocol.strategy_path,
                 protocol_path=protocol_path,
                 experiment_path=experiment_path,
                 rationale_path=rationale_path,
@@ -478,6 +632,7 @@ def run_iteration(
                 root,
                 row=row,
                 rows=(*prior_rows, row),
+                strategy_path=protocol.strategy_path,
                 protocol_path=protocol_path,
                 experiment_path=experiment_path,
                 rationale_path=rationale_path,
@@ -549,6 +704,7 @@ def run_iteration(
                 root,
                 row=row,
                 rows=(*prior_rows, row),
+                strategy_path=protocol.strategy_path,
                 protocol_path=protocol_path,
                 experiment_path=experiment_path,
                 rationale_path=rationale_path,
@@ -673,6 +829,7 @@ def run_iteration(
             root,
             row=row,
             rows=(*prior_rows, row),
+            strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
             rationale_path=rationale_path,
@@ -724,12 +881,22 @@ def climb_once(
         rationale_path="rationale.md",
     )
     _ensure_can_attempt(rows, snapshot)
-    params = load_params(params_path)
+    experiment = load_experiment(params_path)
     declared_components = (
         tuple(components)
         if components is not None
         else components_from_rationale("rationale.md")
     )
+    _ensure_active_thesis_lock(
+        Path("."),
+        rows=rows,
+        mechanism=mechanism,
+        falsifier=falsifier,
+        protocol_sha256=snapshot["protocol_sha256"],
+        bounds_sha256=_bounds_sha256(experiment),
+        results_path=results_path,
+    )
+    params = experiment.params
     best_score = max(
         (row.score for row in rows if row.status == "keep" and row.score is not None),
         default=None,

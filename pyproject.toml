@@ -19,6 +19,12 @@ addopts = "-ra --import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.mypy]
+exclude = [
+    "^results/",
+    "^\\.autoresearch/",
+]
+
 [[tool.mypy.overrides]]
 module = ["quant_strategies.*"]
 ignore_missing_imports = true

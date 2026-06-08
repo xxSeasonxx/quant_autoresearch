@@ -10,7 +10,7 @@ The loop SHALL maintain a tab-separated `results.tsv` for the active thesis. It 
 - **THEN** exactly one row is appended to `results.tsv`
 
 ### Requirement: results.tsv has stable columns
-`results.tsv` SHALL include stable columns for run id, commit, candidate/protocol/artifact provenance, iteration, score, gate flags, subwindow trade counts, trade count, breadth/concentration summary, cost-stress result, complexity count, status, best status, continuation state, stop reason, elapsed seconds, and note.
+`results.tsv` SHALL include stable columns for run id, commit, candidate/protocol/artifact provenance, iteration, score, gate flags, subwindow trade counts, trade count, breadth/concentration summary, cost-stress result, complexity count, status, best status, continuation state, stop reason, elapsed seconds, and note. The `climb` command SHALL print the latest appended row using these same fields in a parseable `key: value` format.
 
 #### Scenario: header is initialized
 - **WHEN** a thesis run starts without `results.tsv`
@@ -23,6 +23,10 @@ The loop SHALL maintain a tab-separated `results.tsv` for the active thesis. It 
 #### Scenario: row identifies generated artifacts
 - **WHEN** an iteration appends a result row
 - **THEN** the row includes the generated artifact directory for that attempt
+
+#### Scenario: climb output mirrors result row
+- **WHEN** `climb` completes an attempt and appends a result row
+- **THEN** command output includes each result-row field as a parseable `key: value` line
 
 ### Requirement: status summarizes current thesis state
 The status command SHALL read `results.tsv` and current protocol state to report best kept score, last attempts, stop state, configured `M`, `N`, `K`, and remaining attempts before max-iterations. It SHALL NOT report Selection budget, graduation state, or Lockbox state.

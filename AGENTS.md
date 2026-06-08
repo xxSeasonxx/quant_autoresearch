@@ -17,3 +17,4 @@ You are an autonomous quant research agent working on one human-seeded thesis at
 ## If Instructions Conflict
 
 Prefer the more specific active contract in `program.md`, `protocol.toml`, and the current thesis files. Ask Season before changing protocol-owned research assumptions in ways the active contract does not already allow.
+Do not use any skills during experiment.

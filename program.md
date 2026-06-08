@@ -1,6 +1,6 @@
 # autoresearch program
 
-This file is the one-page operating contract for an autonomous quant research run. Its shape intentionally mirrors the reference `autoresearch` repo: setup, experimentation, output format, logging, and loop. The content is trading-specific.
+This file is the compact operating contract for an autonomous quant research run. Its shape intentionally mirrors the reference `autoresearch` repo: setup, experimentation, output format, logging, and loop. The content is trading-specific.
 
 ## Core Principle
 
@@ -19,6 +19,7 @@ To start a new thesis run, work with Season to:
    - `experiment.toml` for bounded params.
    - `strategy.py` for the editable signal logic.
    - `rationale.md` for the working thesis and variant log.
+   - `/Users/Season_Yang/Personal/quant-data/docs/consumer/` for data readiness and data-boundary context. Do not browse outside that folder unless Season asks.
 4. Set the working thesis in `rationale.md`: mechanism, observable, falsifier, and any assumptions worth tracking.
 5. Verify the configured Train data is available through `quant_data` / `quant_strategies`.
 6. Initialize `results.tsv` with only the header row if it does not exist.
@@ -54,13 +55,19 @@ The score improves only through better thesis expression and robust simplificati
 
 **What is read-only:**
 
-- `protocol.toml`: symbols, Train window, data kind, costs, fills, objective, gates, and loop constants.
+- `protocol.toml`: Train window, data kind, costs, fills, objective, gates, and loop constants.
 - OOS and forward testing surfaces. They are downstream and human-gated.
 - Generated artifacts under `.autoresearch/` and `results/`.
 
 Do not change hours, dates, costs, fills, objective kind, gate thresholds, `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement` from strategy params. If these need to change, Season changes the protocol before the thesis starts.
 
-Symbols are special: you may propose or test a different fixed symbol universe when there is a real profitability or robustness reason, but treat it as a protocol/universe variant, not a hidden strategy parameter. Record the reason in `rationale.md`, keep the universe fixed for that run, and do not churn symbols just because the last score moved.
+Symbols are protocol-owned, but the agent may change them when it has a research reason. The goal is to find robust, tradable strategy candidates with plausible real-world profitability, not to preserve a fixed universe for its own sake.
+
+A symbol or universe change must be explicit: update `protocol.toml`, record the rationale in `rationale.md`, and interpret later results as evidence about the strategy-universe combination, not pure strategy improvement. Scores across different universes may be compared, but the comparison should acknowledge that the research surface changed.
+
+For relatively large symbol universes, define the universe rule before scoring when possible, then freeze the resulting symbol snapshot while testing the candidate. Symbol-specific strategy logic is allowed when it expresses the thesis: per-symbol normalization, volatility scaling, cross-sectional ranking, market-family features, and similar transformations are valid inside a fixed universe. Logic that effectively drops, favors, or isolates named symbols should be visible in `rationale.md`; if it changes the effective universe, treat it as a symbol/universe change rather than hiding it as ordinary signal logic.
+
+Do not churn symbols mechanically just because the last score moved; use quant research judgment. If changing symbols is the cleanest way to test the thesis or find a tradable market surface, do it explicitly and record why.
 
 Do not run `evaluate`. Do not import evaluation APIs. Do not read or create OOS windows from this loop.
 

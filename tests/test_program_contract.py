@@ -13,6 +13,7 @@ def _normalized() -> str:
 
 def test_program_mirrors_reference_autoresearch_sections():
     text = _normalized()
+    assert "compact operating contract" in text
     for section in [
         "## setup",
         "## experimentation",
@@ -34,9 +35,11 @@ def test_program_states_thin_editable_surface_and_read_only_protocol():
     assert "cost" in text
     assert "fill" in text
     assert "loop constants" in text
-    assert "symbols are special" in text
-    assert "fixed symbol universe" in text
-    assert "protocol/universe variant" in text
+    assert "symbols are protocol-owned, but the agent may change them" in text
+    assert "symbol or universe change must be explicit" in text
+    assert "strategy-universe combination" in text
+    assert "scores across different universes may be compared" in text
+    assert "do not churn symbols mechanically" in text
 
 
 def test_program_states_objective_and_autonomy_boundary():
@@ -53,6 +56,8 @@ def test_program_states_objective_and_autonomy_boundary():
 def test_program_requires_rationale_foundation_and_variant_refresh():
     text = _normalized()
     assert "set the working thesis in `rationale.md`" in text
+    assert "/users/season_yang/personal/quant-data/docs/consumer/" in text
+    assert "do not browse outside that folder unless season asks" in text
     assert "thesis-guided variants" in text
     assert "refresh `rationale.md`" in text
     assert "bold thesis-guided variant" in text

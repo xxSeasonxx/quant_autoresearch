@@ -39,6 +39,7 @@ kind = "crypto_perp_funding"
 symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP"]
 start = "2025-01-01"
 end = "2025-02-01"
+load_end = "2025-02-05"
 
 [fill_model]
 price = "close"
@@ -80,6 +81,7 @@ train_score_floor = 0.1
 
     assert cfg.data.symbols == ("BTC-PERP", "ETH-PERP", "DOGE-PERP")
     assert cfg.data.dataset is None
+    assert cfg.data.load_end == "2025-02-05"
     assert cfg.loop.plateau_patience == 4
     assert cfg.loop.max_iterations == 25
     assert cfg.loop.min_abs_improvement == 0.02
@@ -199,12 +201,26 @@ def test_write_quick_run_config_uses_public_runner_sections(tmp_path: Path):
         "output",
     }
     assert parsed["data"]["start"] == cfg.data.start
+    assert parsed["data"]["load_end"] == cfg.data.load_end
     assert parsed["output"]["artifact_profile"] == cfg.output.artifact_profile
     assert parsed["output"]["diagnostic_sample_trades"] >= 1
     assert parsed["output"]["causality_check"] == "emitted"
     loaded = load_runner_config(out, repo_root=Path.cwd())
     assert loaded.output.results_dir.name == "autoresearch-test"
     assert loaded.output.causality_check == "emitted"
+
+
+def test_protocol_normalizes_unquoted_load_dates(tmp_path: Path):
+    path = _write(
+        tmp_path / "protocol.toml",
+        _protocol_text(**{'load_end = "2026-01-07"': "load_end = 2026-01-07"}),
+    )
+
+    cfg = load_protocol(path)
+    materialized = build_quick_run_config(cfg, {}, results_dir="results/autoresearch-test")
+
+    assert cfg.data.load_end == "2026-01-07"
+    assert materialized["data"]["load_end"] == "2026-01-07"
 
 
 def test_experiment_loads_params_and_bounds():

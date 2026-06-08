@@ -160,7 +160,6 @@ def _generate_signal_payloads(
     if selection_score not in {"funding", "return", "product"}:
         raise ValueError("selection_score must be one of: funding, return, product")
     require_exit_horizon = _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
-    last_entry_time = _optional_datetime_param(params.get("last_entry_time"), "last_entry_time")
     weight = float(params.get("weight", 1.0))
     hold_bars = _positive_int(params.get("hold_bars", params.get("hold_minutes", 480)), "hold_bars")
     short_hold_bars = _positive_int(params.get("short_hold_bars", hold_bars), "short_hold_bars")
@@ -213,8 +212,6 @@ def _generate_signal_payloads(
             continue
         market_return_bps = sum(candidate["return_extension_bps"] for candidate in candidates) / len(candidates)
         decision_time = as_of_time + timedelta(minutes=decision_lag_minutes)
-        if last_entry_time is not None and decision_time > last_entry_time:
-            continue
         candidates = _filter_exit_horizon(
             candidates,
             rows_by_symbol,
@@ -428,7 +425,6 @@ def _validate_scalar_params(params: Mapping[str, object]) -> None:
     if selection_score not in {"funding", "return", "product"}:
         raise ValueError("selection_score must be one of: funding, return, product")
     _bool_param(params.get("require_exit_horizon", False), "require_exit_horizon")
-    _optional_datetime_param(params.get("last_entry_time"), "last_entry_time")
     weight = float(params.get("weight", 1.0))
     if not math.isfinite(weight) or weight <= 0.0:
         raise ValueError("weight must be finite and positive")
@@ -474,23 +470,6 @@ def _optional_positive_float(value: object, name: str) -> float | None:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
-    return parsed
-
-
-def _optional_datetime_param(value: object, name: str) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        parsed = value
-    elif isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError(f"{name} must be an ISO datetime") from exc
-    else:
-        raise ValueError(f"{name} must be an ISO datetime")
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{name} must be timezone-aware")
     return parsed
 
 

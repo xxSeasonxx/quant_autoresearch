@@ -19,6 +19,8 @@ class DataConfig:
     symbols: tuple[str, ...]
     start: str
     end: str
+    load_start: str | None = None
+    load_end: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,10 @@ def _symbols(value: object) -> tuple[str, ...]:
     return tuple(symbols)
 
 
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
 def load_protocol(path: str | Path) -> ProtocolConfig:
     data = tomllib.loads(Path(path).read_text())
     raw_data = _required(data, "data")
@@ -214,6 +220,8 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             symbols=symbols,
             start=str(_required(raw_data, "start")),
             end=str(_required(raw_data, "end")),
+            load_start=_optional_text(raw_data.get("load_start")),
+            load_end=_optional_text(raw_data.get("load_end")),
         ),
         fill_model=FillModel(
             price=fill_price,
@@ -374,6 +382,10 @@ def build_quick_run_config(
     }
     if protocol.data.dataset is not None:
         data_block["dataset"] = protocol.data.dataset
+    if protocol.data.load_start is not None:
+        data_block["load_start"] = protocol.data.load_start
+    if protocol.data.load_end is not None:
+        data_block["load_end"] = protocol.data.load_end
     output_block: dict[str, object] = {
         "results_dir": str(results_dir or protocol.output.results_dir),
         "artifact_profile": protocol.output.artifact_profile,

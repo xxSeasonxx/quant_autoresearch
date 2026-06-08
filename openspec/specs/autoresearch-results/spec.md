@@ -10,7 +10,7 @@ The loop SHALL maintain a tab-separated `results.tsv` for the active thesis. It 
 - **THEN** exactly one row is appended to `results.tsv`
 
 ### Requirement: results.tsv has stable columns
-`results.tsv` SHALL include stable columns for run id, commit, candidate/protocol/artifact provenance, iteration, score, gate flags, subwindow trade counts, trade count, breadth/concentration summary, cost-stress result, complexity count, status, best status, continuation state, stop reason, elapsed seconds, and note. The `climb` command SHALL print the latest appended row using these same fields in a parseable `key: value` format.
+`results.tsv` SHALL include stable columns for run id, commit, candidate/protocol/artifact provenance, iteration, score, gate flags, subwindow trade counts, trade count, net-return contribution concentration, cost-stress result, complexity count, status, best status, continuation state, stop reason, elapsed seconds, and note. The `climb` command SHALL print the latest appended row using these same fields in a parseable `key: value` format.
 
 #### Scenario: header is initialized
 - **WHEN** a thesis run starts without `results.tsv`
@@ -112,4 +112,3 @@ The result log reader SHALL reject result chains with duplicate run ids, duplica
 #### Scenario: Terminal row before final row fails
 - **WHEN** a row with `continuation=terminal` is followed by another result row
 - **THEN** reading results fails with a clear `ValueError`
-

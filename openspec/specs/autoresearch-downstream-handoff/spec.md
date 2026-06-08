@@ -1,7 +1,7 @@
 # autoresearch-downstream-handoff Specification
 
 ## Purpose
-TBD - created by archiving change clarify-downstream-handoff-contract. Update Purpose after archive.
+Define the human-owned downstream handoff after a frozen Train survivor exists, including one-look OOS drift review, paper-test review, and small-live review boundaries.
 ## Requirements
 ### Requirement: OOS drift review is downstream and human-owned
 The project SHALL provide a downstream OOS drift review template for Season to use after a frozen Train survivor exists. The auto-research loop SHALL NOT read, write, or optimize against this template.
@@ -23,7 +23,7 @@ The downstream OOS drift review template SHALL include fields for frozen candida
 
 #### Scenario: template captures drift comparison
 - **WHEN** the OOS drift review template is read
-- **THEN** it includes fields for score, trade count, concentration, cost-stress, and drawdown/return drift when available
+- **THEN** it includes fields for score, trade count, net-return contribution concentration, cost-stress, and drawdown/return drift when available
 
 ### Requirement: Curated-few regime is recorded
 The project SHALL record an ADR that chooses the curated-few thesis-driven research regime and defines when heavier automated-many controls are required.
@@ -43,4 +43,3 @@ The downstream handoff contract SHALL state that OOS drift reviews, OOS artifact
 - **WHEN** an agent reads active docs or the OOS drift template
 - **THEN** it is told that OOS review is for Season after a frozen Train survivor exists
 - **AND** the auto-research loop must not read or optimize against OOS review artifacts
-

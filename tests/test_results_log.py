@@ -23,7 +23,7 @@ def _row(**overrides) -> ResultRow:
         "gate_flags": "trade_floor=pass",
         "subwindow_trade_counts": (4, 4, 4),
         "trade_count": 12,
-        "concentration": 0.5,
+        "net_return_contribution_concentration": 0.5,
         "cost_stress": 0.2,
         "net_return_sum": 0.20,
         "avg_trade_net": 0.10,
@@ -60,6 +60,8 @@ def test_results_log_initializes_header_and_appends_one_row_per_attempt(tmp_path
 
     lines = path.read_text().splitlines()
     assert lines[0].split("\t") == ResultRow.header()
+    assert "net_return_contribution_concentration" in ResultRow.header()
+    assert "concentration" not in ResultRow.header()
     assert len(lines) == 3
     assert len(read_results(path)) == 2
 
@@ -100,6 +102,7 @@ def test_result_rows_record_attempt_provenance_and_lifecycle(tmp_path: Path):
     assert row.artifact_dir == "results/autoresearch/attempt-0001"
     assert row.strategy_sha256 == "a" * 64
     assert row.subwindow_trade_counts == (10, 0, 2)
+    assert row.net_return_contribution_concentration == 0.5
     assert row.best_status == "unchanged"
     assert row.continuation == "allowed"
 

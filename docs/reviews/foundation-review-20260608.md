@@ -334,13 +334,13 @@ Right-sized:
 
 ## Missing Docs, PRD, ADR, Or Decision Records
 
-- Missing active-thesis/protocol-lock decision: how a run tag, mechanism/falsifier, protocol hash, and bounds hash are created and enforced.
-- Missing terminal handoff contract: whether terminal manifest snapshots current attempt, best survivor, or both.
+- Addressed active-thesis/protocol-lock decision: run identity, protocol hash, bounds hash, and result path are now generated lock state.
+- Addressed terminal handoff contract: terminal manifests distinguish terminal attempt snapshots from best survivor snapshots.
 - Missing OOS look-consumption record tied to terminal manifest.
-- Missing protocol rationale fields for Train window and symbol universe.
-- Active spec placeholder: `openspec/specs/autoresearch-downstream-handoff/spec.md:3-4` says `TBD`.
-- `.gitignore` ignores `/openspec/` while active specs live under `openspec/specs/`; tracked files remain visible, but new active specs can be missed.
-- Historical design doc is labeled historical, but still contains stale implementation sketches such as cache plumbing, `git revert`, and `params.toml` wording.
+- Addressed protocol rationale fields for Train window and symbol universe.
+- Addressed downstream handoff spec placeholder purpose.
+- Addressed active OpenSpec tracking hygiene for current/future OpenSpec files.
+- Addressed historical design doc warning around stale implementation sketches such as cache plumbing, `git revert`, and `params.toml` wording.
 
 ## ASCII Architecture And Lifecycle Diagrams
 
@@ -405,13 +405,13 @@ OOS review consumes terminal survivor id once
 | 4   | Addressed | P1       | Add          | Add result-chain validation before deriving best/stop state.                                                                  | Medium positive impact; protects control flow from stale rows. | Validate enums, booleans, iterations, hashes. Avoid full audit ledger.                  |
 | 5   | Deferred | P1       | Add          | Bind downstream OOS drift review to terminal manifest identity and record one-look consumption.                               | Low workflow cost, high audit value.                           | Template fields only. Avoid automated OOS loop.                                         |
 | 6   | Deferred | P1       | Add          | Record compact quick-run evidence quality from public `RunResult`.                                                            | Medium audit value; small workflow cost.                       | Store compact flags/warnings only after real runs show need. Avoid scraping artifacts or duplicating upstream reports. |
-| 7   | Open   | P2       | Add          | Add protocol rationale for Train window and symbol universe.                                                                  | Low workflow cost; improves Season review.                     | Short rationale fields. Avoid automated window/symbol optimization.                     |
-| 8   | Open   | P2       | Refactor     | Rename `concentration` to `net_return_contribution_concentration` or add explicit breadth metrics.                            | Very low process impact.                                       | Rename now. Avoid richer metrics unless upstream exposes clean data.                    |
+| 7   | Addressed | P2       | Add          | Add protocol rationale for Train window and symbol universe.                                                                  | Low workflow cost; improves Season review.                     | Short rationale fields. Avoid automated window/symbol optimization.                     |
+| 8   | Addressed | P2       | Refactor     | Rename `concentration` to `net_return_contribution_concentration` or add explicit breadth metrics.                            | Very low process impact.                                       | Rename now. Avoid richer metrics unless upstream exposes clean data.                    |
 | 9   | Open   | P2       | Add          | Require mechanism/observable/falsifier text for each rationale component, with explicit time/symbol-filter declarations.      | Low if textual; high if over-policed.                          | Validate fields. Avoid AST strategy inspection.                                         |
 | 10  | Open   | P2       | Add          | Add `next_action` to status/climb output.                                                                                     | Low; reduces agent ambiguity.                                  | One derived field. Avoid autonomous daemon.                                             |
-| 11  | Open   | P3       | Simplify     | Collapse or quarantine stale historical design details.                                                                       | Low; onboarding hygiene.                                       | Mark/archive stale sections. Avoid rewriting history docs into new specs.               |
-| 12  | Open   | P3       | Refactor     | Unignore active `openspec/specs/**` or move active specs under `docs/specs/`.                                                 | Low; repo hygiene.                                             | One `.gitignore` or path change. Avoid reorganizing OpenSpec wholesale.                 |
-| 13  | Open   | P3       | Add          | Replace downstream handoff spec `TBD` purpose.                                                                                | Very low; wording only.                                        | One sentence. Avoid expanding scope.                                                    |
+| 11  | Addressed | P3       | Simplify     | Collapse or quarantine stale historical design details.                                                                       | Low; onboarding hygiene.                                       | Mark/archive stale sections. Avoid rewriting history docs into new specs.               |
+| 12  | Addressed | P3       | Refactor     | Unignore active `openspec/specs/**` or move active specs under `docs/specs/`.                                                 | Low; repo hygiene.                                             | One `.gitignore` or path change. Avoid reorganizing OpenSpec wholesale.                 |
+| 13  | Addressed | P3       | Add          | Replace downstream handoff spec `TBD` purpose.                                                                                | Very low; wording only.                                        | One sentence. Avoid expanding scope.                                                    |
 
 
 ## Preservation Constraints / Right-Sized Boundaries

@@ -12,7 +12,8 @@ __pycache__/
 /.cursor/
 /.codegraph/
 /.codex/skills/openspec-*/
-/openspec/
+/openspec/changes/archive/2026-06-06-*/
+/openspec/changes/archive/2026-06-07-*/
 
 # Scratch notes for local research sessions.
 /TODO.md

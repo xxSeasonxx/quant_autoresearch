@@ -295,7 +295,7 @@ def _make_crash_row(
         gate_flags="run_config=fail",
         subwindow_trade_counts=(),
         trade_count=0,
-        concentration=None,
+        net_return_contribution_concentration=None,
         cost_stress=None,
         net_return_sum=None,
         avg_trade_net=None,
@@ -749,7 +749,9 @@ def run_iteration(
             gate_flags=gates.flags(),
             subwindow_trade_counts=objective.subwindow_trade_counts,
             trade_count=len(trades),
-            concentration=symbol_concentration(trades) if trades else None,
+            net_return_contribution_concentration=symbol_concentration(trades)
+            if trades
+            else None,
             cost_stress=cost_stress_score,
             net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
             avg_trade_net=(
@@ -798,7 +800,9 @@ def run_iteration(
             gate_flags=gates.flags(),
             subwindow_trade_counts=objective.subwindow_trade_counts,
             trade_count=len(trades),
-            concentration=symbol_concentration(trades) if trades else None,
+            net_return_contribution_concentration=symbol_concentration(trades)
+            if trades
+            else None,
             cost_stress=cost_stress_score,
             net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
             avg_trade_net=(

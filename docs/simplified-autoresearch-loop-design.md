@@ -3,8 +3,12 @@
 **Status:** historical design / decision record (2026-06-06). Output of a
 first-principles brainstorm. The simplified loop is now implemented and hardened;
 use `README.md`, `program.md`, `protocol.toml`, and `openspec/specs/` as the
-active operating sources. This document is retained as context, not as the live
-implementation contract.
+active operating sources. This document is retained as context, not the live implementation contract.
+
+**Historical implementation sketch warning:** sections below may mention old or
+unbuilt implementation details such as cache plumbing, `git revert`, `params.toml`,
+or pre-archive OpenSpec tasks. Do not implement from this section. Treat it as
+decision history only; active contracts live in the files named above.
 
 This describes a **clean-slate rebuild** of `quant_autoresearch`. The existing
 shipped 5-phase evaluator package and its docs are **retired** (§10), not

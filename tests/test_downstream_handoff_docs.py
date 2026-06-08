@@ -23,7 +23,8 @@ def test_oos_drift_template_is_downstream_and_one_look():
         "rationale sha-256",
         "score delta",
         "trade-count drift",
-        "concentration drift",
+        "net-return contribution concentration drift",
+        "net-return contribution concentration",
         "cost-stress drift",
         "decision",
     ]:
@@ -71,3 +72,12 @@ def test_docs_define_active_loop_and_downstream_artifact_authority():
     assert "do not browse the rest of the repo during ordinary train iteration" in readme
     assert "one-look downstream review" in oos_template
     assert "not an active-loop input" in oos_template
+
+
+def test_downstream_handoff_spec_has_concrete_purpose():
+    text = _read("openspec/specs/autoresearch-downstream-handoff/spec.md").lower()
+
+    assert "tbd" not in text
+    assert "downstream oos" in text
+    assert "paper" in text
+    assert "small-live" in text

@@ -36,7 +36,7 @@ For completed iteration `t`, let `s_t` be its score and `b_t` be the best kept f
 - **THEN** it resets plateau patience and becomes the new best score
 
 ### Requirement: Gates are binary and separate from the objective
-The loop SHALL compute trade floor, subwindow coverage, breadth/concentration, cost stress, complexity cap, and Train score floor as binary gates. Gates SHALL NOT be blended into the objective score.
+The loop SHALL compute trade floor, subwindow coverage, net-return contribution concentration, cost stress, complexity cap, and Train score floor as binary gates. Gates SHALL NOT be blended into the objective score.
 
 #### Scenario: failed gate prevents keep
 - **WHEN** a candidate improves the objective score but fails any gate
@@ -86,4 +86,3 @@ The loop SHALL parse signal component declarations from `rationale.md` using onl
 #### Scenario: unrelated headings are ignored
 - **WHEN** `rationale.md` contains `### Variant:` or other headings outside `## Signal Components`
 - **THEN** those headings are not counted as signal components
-

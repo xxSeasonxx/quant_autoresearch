@@ -64,7 +64,7 @@ def _row(**overrides) -> ResultRow:
         "gate_flags": "all=pass",
         "subwindow_trade_counts": (4,),
         "trade_count": 4,
-        "concentration": 0.5,
+        "net_return_contribution_concentration": 0.5,
         "cost_stress": 0.1,
         "net_return_sum": 0.2,
         "avg_trade_net": 0.05,

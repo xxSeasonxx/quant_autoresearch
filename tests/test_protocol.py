@@ -88,6 +88,16 @@ train_score_floor = 0.1
     assert not hasattr(cfg.data, "oos")
 
 
+def test_protocol_documents_default_symbol_window_and_subwindow_rationale():
+    text = Path("protocol.toml").read_text().lower()
+
+    assert "symbol universe rationale" in text
+    assert "train window rationale" in text
+    assert "subwindow rationale" in text
+    assert "btc-perp" in text
+    assert "eth-perp" in text
+
+
 def test_protocol_rejects_invalid_numeric_ranges(tmp_path: Path):
     cases = [
         ("entry_lag_bars = 1", "entry_lag_bars = 0", "entry_lag_bars"),

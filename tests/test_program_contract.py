@@ -79,6 +79,8 @@ def test_program_documents_results_tsv_and_plateau_stop():
     assert "plateau" in text
     assert "max_iterations" in text
     assert "plateau_patience" in text
+    assert "net_return_contribution_concentration" in text
+    assert "trade_count concentration cost_stress" not in text
 
 
 def test_program_defines_artifact_authority_for_active_loop():

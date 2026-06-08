@@ -52,3 +52,19 @@ def test_loop_module_does_not_import_private_quant_strategies_modules():
     assert "quant_strategies._" not in source
     assert "run_evaluation" not in source
 
+
+def test_historical_design_doc_is_explicitly_non_contract():
+    text = _read("docs/simplified-autoresearch-loop-design.md").lower()
+
+    assert "historical design / decision record" in text
+    assert "not the live implementation contract" in text
+    assert "historical implementation sketch" in text
+    assert "do not implement from this section" in text
+
+
+def test_active_openspec_files_are_trackable_without_force_add():
+    ignore = (ROOT / ".gitignore").read_text()
+
+    assert "\n/openspec/\n" not in ignore
+    assert "/openspec/changes/archive/2026-06-06-*/" in ignore
+    assert "/openspec/changes/archive/2026-06-07-*/" in ignore

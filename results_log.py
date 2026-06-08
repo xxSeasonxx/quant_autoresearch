@@ -23,7 +23,7 @@ class ResultRow:
     gate_flags: str
     subwindow_trade_counts: tuple[int, ...]
     trade_count: int
-    concentration: float | None
+    net_return_contribution_concentration: float | None
     cost_stress: float | None
     net_return_sum: float | None
     avg_trade_net: float | None
@@ -57,7 +57,7 @@ class ResultRow:
             "gate_flags",
             "subwindow_trade_counts",
             "trade_count",
-            "concentration",
+            "net_return_contribution_concentration",
             "cost_stress",
             "net_return_sum",
             "avg_trade_net",
@@ -93,9 +93,9 @@ class ResultRow:
                 str(count) for count in self.subwindow_trade_counts
             ),
             "trade_count": str(self.trade_count),
-            "concentration": ""
-            if self.concentration is None
-            else str(self.concentration),
+            "net_return_contribution_concentration": ""
+            if self.net_return_contribution_concentration is None
+            else str(self.net_return_contribution_concentration),
             "cost_stress": "" if self.cost_stress is None else str(self.cost_stress),
             "net_return_sum": ""
             if self.net_return_sum is None
@@ -181,7 +181,9 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         gate_flags=row["gate_flags"],
         subwindow_trade_counts=_parse_counts(row["subwindow_trade_counts"]),
         trade_count=int(row["trade_count"]),
-        concentration=_parse_float(row["concentration"]),
+        net_return_contribution_concentration=_parse_float(
+            row["net_return_contribution_concentration"]
+        ),
         cost_stress=_parse_float(row["cost_stress"]),
         net_return_sum=_parse_float(row["net_return_sum"]),
         avg_trade_net=_parse_float(row["avg_trade_net"]),

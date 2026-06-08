@@ -23,7 +23,7 @@ Use this template only after a frozen Train survivor exists. This is a one-look 
 | Gates |  |
 | Subwindow trade counts |  |
 | Trade count |  |
-| Concentration |  |
+| Net-return contribution concentration |  |
 | Cost-stress score |  |
 | Net return sum |  |
 | Average trade net |  |
@@ -39,7 +39,7 @@ Use this template only after a frozen Train survivor exists. This is a one-look 
 | OOS score |  |
 | Gates |  |
 | Trade count |  |
-| Concentration |  |
+| Net-return contribution concentration |  |
 | Cost-stress score |  |
 | Return / drawdown summary |  |
 | Execution or data caveats |  |
@@ -50,7 +50,7 @@ Use this template only after a frozen Train survivor exists. This is a one-look 
 |---|---|
 | Score delta / ratio |  |
 | Trade-count drift |  |
-| Concentration drift |  |
+| Net-return contribution concentration drift |  |
 | Cost-stress drift |  |
 | Return / drawdown drift |  |
 | New failure mode observed |  |

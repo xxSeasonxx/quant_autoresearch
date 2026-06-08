@@ -15,7 +15,7 @@
 #
 # Recommendation:
 # - Active default below is the normal thesis-development setup: 2 years of Train,
-#   6 robustness subwindows, and a 100-trade floor.
+#   6 robustness subwindows, and a 120-trade floor.
 # - For a quick local smoke run, temporarily use 2025-01-01 -> 2025-01-14,
 #   subwindows = 2, and min_trades = 4.
 # - For a heavier overnight run, use 2023-01-01 -> 2025-12-31 if runtime is
@@ -36,10 +36,23 @@ kind = "bars"
 # Dataset name for kind = "bars". Must exist in quant_data for the local setup.
 dataset = "crypto_perp_1min"
 # Fixed Train universe. The agent must not cherry-pick symbols in params.
+#
+# Symbol universe rationale:
+# - BTC-PERP and ETH-PERP are the most liquid crypto perp anchors in the local
+#   minute-bar dataset and fit the baseline short-horizon crypto thesis.
+# - A two-symbol universe keeps the first thesis loop auditable while still
+#   rejecting single-name concentration.
+# - Wider universes are protocol variants owned by Season before a run starts,
+#   not LLM-tuned strategy params.
 symbols = ["BTC-PERP", "ETH-PERP"]
 # Train-only date range. Date-only end is interpreted like the upstream loader:
 # the loop includes the full end date by using a half-open [start, end + 1 day)
 # objective window.
+#
+# Train window rationale:
+# - 2024-01-01 through 2025-12-31 gives the default thesis two full years of
+#   minute-bar Train history without consuming the 2026+ downstream OOS reserve.
+# - This is a default for crypto perp thesis development, not a universal window.
 #
 # Smoke/debug alternative:
 # start = "2025-01-01"
@@ -102,6 +115,8 @@ baseline_grace_iterations = 6
 kind = "worst_subwindow"
 # K: number of contiguous Train time slices for worst_subwindow. Six slices over
 # two years gives roughly quarterly robustness checks.
+# Subwindow rationale: K=6 is enough to reject idle or one-regime Train survivors
+# while keeping per-slice trade floors attainable for simple short-horizon ideas.
 # Smoke/debug alternative: subwindows = 2
 subwindows = 6
 

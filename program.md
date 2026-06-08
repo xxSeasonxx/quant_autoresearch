@@ -4,7 +4,7 @@ This file is the one-page operating contract for an autonomous quant research ru
 
 ## Core Principle
 
-You are a senior quant researcher looking for strategies that could be profitable in the real world. The harness guides the experiment: it fixes data, costs, fills, objective, gates, and stop rules so exploration stays causal and reviewable. Within those boundaries, exploration is on the table. Try bold thesis-guided variants, simplify aggressively, and use diagnostics to learn what failed. The goal is not to make a backtest number look good; it is to find robust, tradable strategy candidates worth Season's downstream OOS, paper, and small-live review.
+You are a senior quant researcher looking for strategies that could be profitable in the real world. The harness guides the experiment: it fixes data, costs, fills, objective, gates, and stop rules so exploration stays causal and reviewable. Within those boundaries, exploration is on the table. Try bold thesis-guided variants, simplify aggressively, and use diagnostics to learn what failed. The goal is not to make a backtest number look good; it is to find robust, tradable strategy candidates worth Season's downstream OOS, paper, and small-live review. Within the fixed protocol and editable surface, be exploratory about strategy expression, but conservative about the research workflow.
 
 ## Setup
 
@@ -42,7 +42,7 @@ Do not browse the rest of the repo during ordinary Train iteration unless debugg
 
 The loop uses Train-only quick runs. It is a development filter, not proof of an edge.
 
-**The goal is simple: produce the best gated Train survivor for the current thesis.** Improve the configured robustness `score` while keeping every gate green: enough trades, acceptable concentration, cost-stress survival, and complexity within the protocol cap. Since the protocol fixes the Train window, symbols, costs, fills, objective, gates, and stop rules, you do not need to optimize those. Your job is to express the thesis in `strategy.py` and bounded params as simply and causally as possible.
+**The goal is simple: produce the best gated Train survivor for the current thesis.** Improve the configured robustness `score` while keeping every gate green: enough trades, acceptable net-return contribution concentration, cost-stress survival, and complexity within the protocol cap. Since the protocol fixes the Train window, symbols, costs, fills, objective, gates, and stop rules, you do not need to optimize those. Your job is to express the thesis in `strategy.py` and bounded params as simply and causally as possible.
 
 The score improves only through better thesis expression and robust simplification. A higher Train score is not proof of an edge, and a Train survivor is not promoted. It is only the best candidate this thesis produced for Season to review downstream.
 
@@ -74,7 +74,7 @@ score: <objective score or blank>
 gates: <gate=pass/fail,...>
 subwindow_trade_counts: <comma-separated counts>
 trade_count: <integer>
-concentration: <0..1 or blank>
+net_return_contribution_concentration: <0..1 or blank>
 cost_stress: <number or blank>
 net_return_sum: <sum of after-cost trade returns or blank>
 avg_trade_net: <average after-cost trade return or blank>
@@ -97,7 +97,7 @@ elapsed_seconds: <float>
 Append every attempted iteration to `results.tsv`. It is tab-separated, not comma-separated.
 
 ```text
-run_id	commit	artifact_dir	worktree_dirty	strategy_sha256	experiment_sha256	protocol_sha256	rationale_sha256	quick_config_sha256	iteration	score	gates_passed	gate_flags	subwindow_trade_counts	trade_count	concentration	cost_stress	net_return_sum	avg_trade_net	win_rate	profit_factor	gross_return_sum	cost_return_sum	complexity_count	status	best_status	continuation	stop_reason	elapsed_seconds	note
+run_id	commit	artifact_dir	worktree_dirty	strategy_sha256	experiment_sha256	protocol_sha256	rationale_sha256	quick_config_sha256	iteration	score	gates_passed	gate_flags	subwindow_trade_counts	trade_count	net_return_contribution_concentration	cost_stress	net_return_sum	avg_trade_net	win_rate	profit_factor	gross_return_sum	cost_return_sum	complexity_count	status	best_status	continuation	stop_reason	elapsed_seconds	note
 ```
 
 Use `status=keep` only when the candidate passes all gates and improves beyond the configured plateau threshold. Use `discard` for a valid but non-keepable attempt. Use `crash` for failed runs or invalid candidates. A discarded attempt does not update the best Train survivor, but the working variant may still be a useful starting point for the next thesis-guided edit when `continuation=allowed`.
@@ -106,7 +106,7 @@ Use `status=keep` only when the candidate passes all gates and improves beyond t
 
 Think like a skeptical quant researcher, not a benchmark optimizer. Before each edit, state the market mechanism in one sentence, the observable that should express it, and the falsifier that would kill it. If you cannot name those, the edit is probably noise.
 
-Treat loop feedback as evidence about failure modes, not as a leaderboard. Use the score to compare attempts, but use timing, trade count, concentration, costs, fills, exits, and sampled trades to decide what to try next. A better next edit usually fixes a causal weakness, removes an accidental degree of freedom, improves signal construction, or addresses a specific failure shown in diagnostics.
+Treat loop feedback as evidence about failure modes, not as a leaderboard. Use the score to compare attempts, but use timing, trade count, net-return contribution concentration, costs, fills, exits, and sampled trades to decide what to try next. A better next edit usually fixes a causal weakness, removes an accidental degree of freedom, improves signal construction, or addresses a specific failure shown in diagnostics.
 
 Do not default to a parameter sweep. Parameter changes are valid only when the new value better expresses the stated mechanism, aligns the signal with a plausible market horizon, or fixes a diagnostic failure such as too few trades or excessive overlap. Do not tune numbers just because the last run moved the score.
 
@@ -135,7 +135,7 @@ Loop for the current thesis until a configured stop rule fires:
 3. Make one simple change to express the thesis better or test a bold thesis-guided variant.
 4. Run the Train quick run through the local `climb` command or an equivalent focused test helper.
 5. Parse the objective score and gate flags.
-6. Review the diagnostic output for economic slices, concentration, exits, and sampled trades before choosing the next edit.
+6. Review the diagnostic output for economic slices, net-return contribution concentration, exits, and sampled trades before choosing the next edit.
 7. Refresh `rationale.md` with the variant tried, the diagnostic motivation, and the next falsifier.
 8. Let the loop decide keep/discard. The implemented keep rule is:
    ```text

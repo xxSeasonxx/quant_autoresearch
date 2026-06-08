@@ -22,7 +22,7 @@ from loop import (
 from gates import GateConfig
 from objective import LoopConfig, ObjectiveConfig
 from protocol import load_protocol
-from results_log import ResultRow, read_results
+from results_log import ResultRow, append_result, read_results
 
 
 @dataclass(frozen=True)
@@ -53,11 +53,11 @@ def _row(**overrides) -> ResultRow:
         "commit": "abcdef0",
         "artifact_dir": "results/autoresearch/attempt-0001",
         "worktree_dirty": False,
-        "strategy_sha256": "s" * 64,
-        "experiment_sha256": "e" * 64,
-        "protocol_sha256": "p" * 64,
-        "rationale_sha256": "r" * 64,
-        "quick_config_sha256": "q" * 64,
+        "strategy_sha256": "a" * 64,
+        "experiment_sha256": "b" * 64,
+        "protocol_sha256": "c" * 64,
+        "rationale_sha256": "d" * 64,
+        "quick_config_sha256": "e" * 64,
         "iteration": 1,
         "score": 0.5,
         "gates_passed": True,
@@ -172,7 +172,9 @@ def test_components_from_rationale_parses_signal_component_headings(tmp_path: Pa
     assert components_from_rationale(path) == ("baseline momentum", "session filter")
 
 
-def test_components_from_rationale_rejects_missing_and_duplicate_components(tmp_path: Path):
+def test_components_from_rationale_rejects_missing_and_duplicate_components(
+    tmp_path: Path,
+):
     missing = tmp_path / "missing.md"
     missing.write_text("# Rationale\n\n## Signal Components\n")
     duplicate = tmp_path / "duplicate.md"
@@ -218,10 +220,34 @@ def test_run_iteration_uses_mocked_public_run_config_and_logs(tmp_path: Path):
             succeeded=True,
             economics=_Economics(
                 trades=(
-                    _Trade("BTC-PERP", datetime(2025, 1, 1, tzinfo=timezone.utc), 0.10, 0.11, 0.01),
-                    _Trade("ETH-PERP", datetime(2025, 1, 2, tzinfo=timezone.utc), 0.08, 0.09, 0.01),
-                    _Trade("BTC-PERP", datetime(2025, 1, 3, tzinfo=timezone.utc), 0.06, 0.07, 0.01),
-                    _Trade("ETH-PERP", datetime(2025, 1, 4, tzinfo=timezone.utc), 0.04, 0.05, 0.01),
+                    _Trade(
+                        "BTC-PERP",
+                        datetime(2025, 1, 1, tzinfo=timezone.utc),
+                        0.10,
+                        0.11,
+                        0.01,
+                    ),
+                    _Trade(
+                        "ETH-PERP",
+                        datetime(2025, 1, 2, tzinfo=timezone.utc),
+                        0.08,
+                        0.09,
+                        0.01,
+                    ),
+                    _Trade(
+                        "BTC-PERP",
+                        datetime(2025, 1, 3, tzinfo=timezone.utc),
+                        0.06,
+                        0.07,
+                        0.01,
+                    ),
+                    _Trade(
+                        "ETH-PERP",
+                        datetime(2025, 1, 4, tzinfo=timezone.utc),
+                        0.04,
+                        0.05,
+                        0.01,
+                    ),
                 ),
                 trade_count=4,
             ),
@@ -281,10 +307,18 @@ def test_run_iteration_includes_entire_protocol_end_date(tmp_path: Path):
             succeeded=True,
             economics=_Economics(
                 trades=(
-                    _Trade("BTC-PERP", datetime(2025, 2, 1, 12, tzinfo=timezone.utc), 0.10),
-                    _Trade("ETH-PERP", datetime(2025, 2, 1, 13, tzinfo=timezone.utc), 0.10),
-                    _Trade("BTC-PERP", datetime(2025, 2, 1, 14, tzinfo=timezone.utc), 0.10),
-                    _Trade("ETH-PERP", datetime(2025, 2, 1, 15, tzinfo=timezone.utc), 0.10),
+                    _Trade(
+                        "BTC-PERP", datetime(2025, 2, 1, 12, tzinfo=timezone.utc), 0.10
+                    ),
+                    _Trade(
+                        "ETH-PERP", datetime(2025, 2, 1, 13, tzinfo=timezone.utc), 0.10
+                    ),
+                    _Trade(
+                        "BTC-PERP", datetime(2025, 2, 1, 14, tzinfo=timezone.utc), 0.10
+                    ),
+                    _Trade(
+                        "ETH-PERP", datetime(2025, 2, 1, 15, tzinfo=timezone.utc), 0.10
+                    ),
                 ),
                 trade_count=4,
             ),
@@ -333,7 +367,9 @@ def test_run_iteration_logs_crash_when_runner_raises(tmp_path: Path):
     assert "upstream unavailable" in rows[0].note
 
 
-def test_run_iteration_discard_leaves_best_unchanged_and_allows_continuation(tmp_path: Path):
+def test_run_iteration_discard_leaves_best_unchanged_and_allows_continuation(
+    tmp_path: Path,
+):
     _write_snapshot_files(tmp_path)
     cfg = replace(
         load_protocol(Path("protocol.toml")),
@@ -351,6 +387,8 @@ def test_run_iteration_discard_leaves_best_unchanged_and_allows_continuation(tmp
     )
     results_path = tmp_path / "results.tsv"
     prior_rows = (_row(iteration=1, score=1.0),)
+    for prior_row in prior_rows:
+        append_result(results_path, prior_row)
 
     def fake_run_config(config_path, *, repo_root=None, event_sink=None):
         return _Result(
@@ -378,7 +416,7 @@ def test_run_iteration_discard_leaves_best_unchanged_and_allows_continuation(tmp
         prior_rows=prior_rows,
     )
 
-    row = read_results(results_path)[0]
+    row = read_results(results_path)[-1]
     assert outcome.status == "discard"
     assert row.best_status == "unchanged"
     assert row.continuation == "allowed"
@@ -419,6 +457,8 @@ def test_plateau_terminal_attempt_writes_survivor_manifest(tmp_path: Path):
             best_status="unchanged",
         ),
     )
+    for prior_row in prior_rows:
+        append_result(results_path, prior_row)
 
     def fake_run_config(config_path, *, repo_root=None, event_sink=None):
         return _Result(
@@ -446,14 +486,16 @@ def test_plateau_terminal_attempt_writes_survivor_manifest(tmp_path: Path):
         prior_rows=prior_rows,
     )
 
-    row = read_results(results_path)[0]
+    row = read_results(results_path)[-1]
     manifest = tmp_path / row.artifact_dir / "terminal_manifest.json"
     assert outcome.stop_reason == "plateau"
     assert row.continuation == "terminal"
     assert manifest.exists()
     payload = json.loads(manifest.read_text())
     assert payload["status"] == "train_survivor"
-    assert (tmp_path / payload["snapshot_paths"]["strategy"]).read_text() == "# strategy\n"
+    assert (
+        tmp_path / payload["snapshot_paths"]["strategy"]
+    ).read_text() == "# strategy\n"
     assert (tmp_path / payload["snapshot_paths"]["experiment"]).exists()
     assert (tmp_path / payload["snapshot_paths"]["protocol"]).exists()
     assert (tmp_path / payload["snapshot_paths"]["rationale"]).exists()
@@ -512,6 +554,8 @@ def test_plateau_after_discard_manifest_snapshots_best_kept_attempt(tmp_path: Pa
         ),
     )
     results_path = tmp_path / "results.tsv"
+    for prior_row in prior_rows:
+        append_result(results_path, prior_row)
 
     def fake_run_config(config_path, *, repo_root=None, event_sink=None):
         return _Result(
@@ -539,7 +583,7 @@ def test_plateau_after_discard_manifest_snapshots_best_kept_attempt(tmp_path: Pa
         prior_rows=prior_rows,
     )
 
-    row = read_results(results_path)[0]
+    row = read_results(results_path)[-1]
     manifest = tmp_path / row.artifact_dir / "terminal_manifest.json"
     payload = json.loads(manifest.read_text())
     best_snapshot = payload["best_survivor_snapshot"]
@@ -548,7 +592,9 @@ def test_plateau_after_discard_manifest_snapshots_best_kept_attempt(tmp_path: Pa
     assert outcome.stop_reason == "plateau"
     assert payload["best_attempt"]["run_id"] == "attempt-0001"
     assert (tmp_path / best_snapshot["strategy"]).read_text() == "# best strategy\n"
-    assert (tmp_path / terminal_snapshot["strategy"]).read_text() == "# terminal strategy\n"
+    assert (
+        tmp_path / terminal_snapshot["strategy"]
+    ).read_text() == "# terminal strategy\n"
     assert _sha256(tmp_path / best_snapshot["strategy"]) == best_row.strategy_sha256
 
 
@@ -666,10 +712,10 @@ def test_max_iterations_writes_terminal_manifest(tmp_path: Path):
 
 def test_terminal_and_repair_required_state_block_new_attempts():
     snapshot = {
-        "strategy_sha256": "s" * 64,
-        "experiment_sha256": "e" * 64,
-        "protocol_sha256": "p" * 64,
-        "rationale_sha256": "r" * 64,
+        "strategy_sha256": "a" * 64,
+        "experiment_sha256": "b" * 64,
+        "protocol_sha256": "c" * 64,
+        "rationale_sha256": "d" * 64,
     }
 
     with pytest.raises(ValueError, match="already stopped"):
@@ -685,7 +731,7 @@ def test_terminal_and_repair_required_state_block_new_attempts():
         )
 
     changed = dict(snapshot)
-    changed["strategy_sha256"] = "changed"
+    changed["strategy_sha256"] = "f" * 64
     _ensure_can_attempt(
         (_row(status="crash", continuation="repair_required"),),
         changed,
@@ -707,7 +753,9 @@ def test_climb_once_blocks_terminal_state_before_runner(tmp_path: Path, monkeypa
                 experiment_sha256=_sha256(tmp_path / "experiment.toml"),
                 protocol_sha256=_sha256(tmp_path / "protocol.toml"),
                 rationale_sha256=_sha256(tmp_path / "rationale.md"),
-            ).as_record().values()
+            )
+            .as_record()
+            .values()
         )
         + "\n"
     )
@@ -728,7 +776,9 @@ def test_climb_once_blocks_terminal_state_before_runner(tmp_path: Path, monkeypa
     assert called is False
 
 
-def test_climb_once_rejects_out_of_bound_params_before_runner(tmp_path: Path, monkeypatch):
+def test_climb_once_rejects_out_of_bound_params_before_runner(
+    tmp_path: Path, monkeypatch
+):
     _write_snapshot_files(tmp_path)
     (tmp_path / "protocol.toml").write_text(Path("protocol.toml").read_text())
     (tmp_path / "experiment.toml").write_text(
@@ -758,7 +808,9 @@ max = 0.50
     assert called is False
 
 
-def test_climb_once_uses_rationale_components_for_complexity(tmp_path: Path, monkeypatch):
+def test_climb_once_uses_rationale_components_for_complexity(
+    tmp_path: Path, monkeypatch
+):
     _write_snapshot_files(tmp_path)
     (tmp_path / "protocol.toml").write_text(Path("protocol.toml").read_text())
     monkeypatch.chdir(tmp_path)
@@ -771,7 +823,9 @@ def test_climb_once_uses_rationale_components_for_complexity(tmp_path: Path, mon
                     _Trade("BTC-PERP", datetime(2025, 1, 1, tzinfo=timezone.utc), 0.10),
                     _Trade("ETH-PERP", datetime(2025, 5, 1, tzinfo=timezone.utc), 0.08),
                     _Trade("BTC-PERP", datetime(2025, 9, 1, tzinfo=timezone.utc), 0.06),
-                    _Trade("ETH-PERP", datetime(2025, 12, 1, tzinfo=timezone.utc), 0.04),
+                    _Trade(
+                        "ETH-PERP", datetime(2025, 12, 1, tzinfo=timezone.utc), 0.04
+                    ),
                 ),
                 trade_count=4,
             ),
@@ -975,7 +1029,9 @@ def test_climb_once_allows_param_value_change_with_unchanged_bounds(
         runner=fake_run_config,
     )
     assert first.status == "keep"
-    lock_payload = json.loads((tmp_path / ".autoresearch" / "thesis_lock.json").read_text())
+    lock_payload = json.loads(
+        (tmp_path / ".autoresearch" / "thesis_lock.json").read_text()
+    )
     assert lock_payload["mechanism"] == "momentum persists"
 
     experiment_text = (tmp_path / "experiment.toml").read_text()
@@ -993,7 +1049,9 @@ def test_climb_once_allows_param_value_change_with_unchanged_bounds(
     assert (tmp_path / ".autoresearch" / "quick" / "attempt-0002.toml").exists()
 
 
-def test_run_iteration_blocks_repair_required_state_before_writing_config(tmp_path: Path):
+def test_run_iteration_blocks_repair_required_state_before_writing_config(
+    tmp_path: Path,
+):
     _write_snapshot_files(tmp_path)
     cfg = load_protocol(Path("protocol.toml"))
     prior = (
@@ -1061,15 +1119,18 @@ def test_climb_cli_outputs_full_result_row(monkeypatch, capsys):
 
     monkeypatch.setattr("loop.climb_once", fake_climb_once)
 
-    assert main(
-        [
-            "climb",
-            "--mechanism",
-            "momentum persists",
-            "--falsifier",
-            "flat after costs",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "climb",
+                "--mechanism",
+                "momentum persists",
+                "--falsifier",
+                "flat after costs",
+            ]
+        )
+        == 0
+    )
 
     output = capsys.readouterr().out
     lines = output.strip().splitlines()

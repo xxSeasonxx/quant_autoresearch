@@ -20,6 +20,13 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
+def _protocol_text(**replacements: str) -> str:
+    text = Path("protocol.toml").read_text()
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
 def test_protocol_loads_train_only_loop_constants(tmp_path: Path):
     protocol_path = _write(
         tmp_path / "protocol.toml",
@@ -81,8 +88,63 @@ train_score_floor = 0.1
     assert not hasattr(cfg.data, "oos")
 
 
+def test_protocol_rejects_invalid_numeric_ranges(tmp_path: Path):
+    cases = [
+        ("entry_lag_bars = 1", "entry_lag_bars = 0", "entry_lag_bars"),
+        ("exit_lag_bars = 0", "exit_lag_bars = -1", "exit_lag_bars"),
+        ("fee_bps_per_side = 5.0", "fee_bps_per_side = -1.0", "fee_bps_per_side"),
+        ("plateau_patience = 4", "plateau_patience = 0", "plateau_patience"),
+        ("max_iterations = 80", "max_iterations = 0", "max_iterations"),
+        (
+            "min_abs_improvement = 0.01",
+            "min_abs_improvement = -0.01",
+            "min_abs_improvement",
+        ),
+        ("subwindows = 6", "subwindows = 0", "subwindows"),
+        ("min_trades = 120", "min_trades = -1", "min_trades"),
+        ("max_components = 3", "max_components = 0", "max_components"),
+    ]
+    for old, new, message in cases:
+        path = _write(tmp_path / f"{message}.toml", _protocol_text(**{old: new}))
+        try:
+            load_protocol(path)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"{message} should fail")
+
+
+def test_protocol_rejects_invalid_concentration_symbols_and_booleans(tmp_path: Path):
+    cases = [
+        (
+            "max_symbol_concentration = 0.70",
+            "max_symbol_concentration = 1.50",
+            "max_symbol_concentration",
+        ),
+        ('symbols = ["BTC-PERP", "ETH-PERP"]', "symbols = []", "symbols"),
+        ('symbols = ["BTC-PERP", "ETH-PERP"]', 'symbols = "BTC-PERP"', "symbols"),
+        ('symbols = ["BTC-PERP", "ETH-PERP"]', 'symbols = [""]', "symbols"),
+        (
+            'symbols = ["BTC-PERP", "ETH-PERP"]',
+            'symbols = ["BTC-PERP", 123]',
+            "symbols",
+        ),
+        ("quick_checks = true", 'quick_checks = "false"', "quick_checks"),
+    ]
+    for old, new, message in cases:
+        path = _write(tmp_path / f"{message}.toml", _protocol_text(**{old: new}))
+        try:
+            load_protocol(path)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"{message} should fail")
+
+
 def test_materialized_quick_run_ignores_param_collisions(tmp_path: Path):
-    cfg = load_protocol(_write(tmp_path / "protocol.toml", (Path("protocol.toml").read_text())))
+    cfg = load_protocol(
+        _write(tmp_path / "protocol.toml", (Path("protocol.toml").read_text()))
+    )
     params = {
         "lookback_bars": 12,
         "symbols": ["DOGE-PERP"],
@@ -183,7 +245,10 @@ max = 240
 """,
     )
 
-    for path, message in [(missing, "missing bounds"), (orphan, "bounds without params")]:
+    for path, message in [
+        (missing, "missing bounds"),
+        (orphan, "bounds without params"),
+    ]:
         try:
             load_experiment(path)
         except ValueError as exc:

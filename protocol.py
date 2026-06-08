@@ -86,6 +86,68 @@ def _numeric(value: object, *, name: str) -> ParamValue:
     raise ValueError(f"{name} must be numeric")
 
 
+def _integer(value: object, *, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not bool")
+    if not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _floating(value: object, *, name: str) -> float:
+    return float(_numeric(value, name=name))
+
+
+def _boolean(value: object, *, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _positive_int(value: object, *, name: str) -> int:
+    parsed = _integer(value, name=name)
+    if parsed <= 0:
+        raise ValueError(f"{name} must be > 0")
+    return parsed
+
+
+def _nonnegative_int(value: object, *, name: str) -> int:
+    parsed = _integer(value, name=name)
+    if parsed < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return parsed
+
+
+def _nonnegative_float(value: object, *, name: str) -> float:
+    parsed = _floating(value, name=name)
+    if parsed < 0.0:
+        raise ValueError(f"{name} must be >= 0")
+    return parsed
+
+
+def _fraction(value: object, *, name: str) -> float:
+    parsed = _floating(value, name=name)
+    if parsed < 0.0 or parsed > 1.0:
+        raise ValueError(f"{name} must be in [0, 1]")
+    return parsed
+
+
+def _symbols(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError("data.symbols must be a list of non-empty strings")
+    symbols: list[str] = []
+    for symbol in value:
+        if not isinstance(symbol, str):
+            raise ValueError("data.symbols must be a list of non-empty strings")
+        normalized = symbol.strip()
+        if not normalized:
+            raise ValueError("data.symbols must include only non-empty strings")
+        symbols.append(normalized)
+    if not symbols:
+        raise ValueError("data.symbols must include at least one symbol")
+    return tuple(symbols)
+
+
 def load_protocol(path: str | Path) -> ProtocolConfig:
     data = tomllib.loads(Path(path).read_text())
     raw_data = _required(data, "data")
@@ -95,6 +157,22 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
     raw_loop = _required(data, "loop")
     raw_objective = _required(data, "objective")
     raw_gates = _required(data, "gates")
+    symbols = _symbols(_required(raw_data, "symbols"))
+    fill_price = str(_required(raw_fill, "price"))
+    entry_lag_bars = _positive_int(
+        _required(raw_fill, "entry_lag_bars"),
+        name="fill_model.entry_lag_bars",
+    )
+    exit_lag_bars = _nonnegative_int(
+        _required(raw_fill, "exit_lag_bars"),
+        name="fill_model.exit_lag_bars",
+    )
+    objective_kind = str(_required(raw_objective, "kind"))
+    if objective_kind != "worst_subwindow":
+        raise ValueError(f"objective.kind unsupported: {objective_kind}")
+    subwindows = _positive_int(
+        _required(raw_objective, "subwindows"), name="objective.subwindows"
+    )
 
     return ProtocolConfig(
         strategy_path=str(_required(data, "strategy_path")),
@@ -102,51 +180,91 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         data=DataConfig(
             kind=str(_required(raw_data, "kind")),
             dataset=raw_data.get("dataset"),
-            symbols=tuple(str(symbol) for symbol in _required(raw_data, "symbols")),
+            symbols=symbols,
             start=str(_required(raw_data, "start")),
             end=str(_required(raw_data, "end")),
         ),
         fill_model=FillModel(
-            price=str(_required(raw_fill, "price")),
-            entry_lag_bars=int(_required(raw_fill, "entry_lag_bars")),
-            exit_lag_bars=int(_required(raw_fill, "exit_lag_bars")),
+            price=fill_price,
+            entry_lag_bars=entry_lag_bars,
+            exit_lag_bars=exit_lag_bars,
         ),
         cost_model=CostModel(
-            fee_bps_per_side=float(_required(raw_cost, "fee_bps_per_side")),
-            slippage_bps_per_side=float(_required(raw_cost, "slippage_bps_per_side")),
+            fee_bps_per_side=_nonnegative_float(
+                _required(raw_cost, "fee_bps_per_side"),
+                name="cost_model.fee_bps_per_side",
+            ),
+            slippage_bps_per_side=_nonnegative_float(
+                _required(raw_cost, "slippage_bps_per_side"),
+                name="cost_model.slippage_bps_per_side",
+            ),
         ),
         output=OutputConfig(
             results_dir=str(_required(raw_output, "results_dir")),
             artifact_profile=str(raw_output.get("artifact_profile", "summary")),
-            quick_checks=bool(raw_output.get("quick_checks", True)),
-            diagnostic_sample_trades=int(raw_output.get("diagnostic_sample_trades", 5)),
+            quick_checks=_boolean(
+                raw_output.get("quick_checks", True), name="output.quick_checks"
+            ),
+            diagnostic_sample_trades=_positive_int(
+                raw_output.get("diagnostic_sample_trades", 5),
+                name="output.diagnostic_sample_trades",
+            ),
         ),
         loop=LoopConfig(
-            plateau_patience=int(_required(raw_loop, "plateau_patience")),
-            max_iterations=int(_required(raw_loop, "max_iterations")),
-            min_abs_improvement=float(_required(raw_loop, "min_abs_improvement")),
-            min_rel_improvement=float(_required(raw_loop, "min_rel_improvement")),
-            baseline_grace_iterations=int(
-                raw_loop.get("baseline_grace_iterations", raw_loop["plateau_patience"])
+            plateau_patience=_positive_int(
+                _required(raw_loop, "plateau_patience"),
+                name="loop.plateau_patience",
+            ),
+            max_iterations=_positive_int(
+                _required(raw_loop, "max_iterations"),
+                name="loop.max_iterations",
+            ),
+            min_abs_improvement=_nonnegative_float(
+                _required(raw_loop, "min_abs_improvement"),
+                name="loop.min_abs_improvement",
+            ),
+            min_rel_improvement=_nonnegative_float(
+                _required(raw_loop, "min_rel_improvement"),
+                name="loop.min_rel_improvement",
+            ),
+            baseline_grace_iterations=_positive_int(
+                raw_loop.get("baseline_grace_iterations", raw_loop["plateau_patience"]),
+                name="loop.baseline_grace_iterations",
             ),
         ),
         objective=ObjectiveConfig(
-            kind=str(_required(raw_objective, "kind")),
-            subwindows=int(_required(raw_objective, "subwindows")),
+            kind=objective_kind,
+            subwindows=subwindows,
         ),
         gates=GateConfig(
-            min_trades=int(_required(raw_gates, "min_trades")),
-            min_trades_per_subwindow=int(
-                _required(raw_gates, "min_trades_per_subwindow")
+            min_trades=_nonnegative_int(
+                _required(raw_gates, "min_trades"),
+                name="gates.min_trades",
             ),
-            max_symbol_concentration=float(
-                _required(raw_gates, "max_symbol_concentration")
+            min_trades_per_subwindow=_nonnegative_int(
+                _required(raw_gates, "min_trades_per_subwindow"),
+                name="gates.min_trades_per_subwindow",
             ),
-            min_cost_stress_score=float(_required(raw_gates, "min_cost_stress_score")),
-            max_components=int(_required(raw_gates, "max_components")),
-            max_params=int(_required(raw_gates, "max_params")),
-            train_score_floor=float(_required(raw_gates, "train_score_floor")),
-            subwindows=int(_required(raw_objective, "subwindows")),
+            max_symbol_concentration=_fraction(
+                _required(raw_gates, "max_symbol_concentration"),
+                name="gates.max_symbol_concentration",
+            ),
+            min_cost_stress_score=_floating(
+                _required(raw_gates, "min_cost_stress_score"),
+                name="gates.min_cost_stress_score",
+            ),
+            max_components=_positive_int(
+                _required(raw_gates, "max_components"),
+                name="gates.max_components",
+            ),
+            max_params=_nonnegative_int(
+                _required(raw_gates, "max_params"), name="gates.max_params"
+            ),
+            train_score_floor=_floating(
+                _required(raw_gates, "train_score_floor"),
+                name="gates.train_score_floor",
+            ),
+            subwindows=subwindows,
         ),
     )
 
@@ -229,7 +347,9 @@ def build_quick_run_config(
             "results_dir": str(results_dir or protocol.output.results_dir),
             "artifact_profile": protocol.output.artifact_profile,
             "quick_checks": protocol.output.quick_checks,
-            "diagnostic_sample_trades": max(1, protocol.output.diagnostic_sample_trades),
+            "diagnostic_sample_trades": max(
+                1, protocol.output.diagnostic_sample_trades
+            ),
         },
     }
 

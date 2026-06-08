@@ -302,12 +302,12 @@ For this repo, the right translation is:
 | 3 | Addressed | P0 | Add | Extend `results.tsv` with provenance columns and artifact path. | Prevent stale/dirty evidence from influencing decisions. | Test dirty worktree and hash columns are recorded. |
 | 4 | Addressed | P1 | Add | Parse and enforce `[bounds]` from `experiment.toml`. | Make bounded params real rather than advisory. | Out-of-bound params fail before run. |
 | 5 | Addressed | P1 | Add | Make component/rationale accounting first-class in the CLI or derive it from `rationale.md`. | Stop complexity gate from being bypassed by default. | CLI/rationale count test affects complexity gate. |
-| 6 | Open | P2 | Refactor | Treat `succeeded=True` with missing economics as crash. | Keep operational failures out of strategy evidence. | Unit test with missing economics on a successful runner result. |
-| 7 | Open | P2 | Add | Print full quick-run summary from `climb`. | Keep LLM focused on diagnostics, not just score. | CLI output includes the same control fields as `results.tsv`. |
+| 6 | Addressed | P2 | Refactor | Treat `succeeded=True` with missing economics as crash. | Keep operational failures out of strategy evidence. | Unit test with missing economics on a successful runner result. |
+| 7 | Addressed | P2 | Add | Print full quick-run summary from `climb`. | Keep LLM focused on diagnostics, not just score. | CLI output includes the same control fields as `results.tsv`. |
 | 8 | Addressed | P1 | Retire | Rename/document current score as trade-unit robustness, not Sharpe. | Avoid misleading downstream interpretation. | Docs no longer claim "Sharpe" for the trade-unit score. |
 | 9 | Addressed | P1 | Retire | Mark `docs/simplified-autoresearch-loop-design.md` historical or collapse into current decisions/open risks. | Remove stale implementation guidance. | Docs no longer claim the implemented loop is "not yet implemented." |
-| 10 | Open | P2 | Add | Add downstream one-look OOS drift artifact template outside the loop. | Answer Season's OOS drift concern without contaminating Train optimization. | Template exists and auto loop does not read it. |
-| 11 | Open | P2 | Add | Add ADR for curated-few regime and trigger for heavier multiple-testing controls. | Keep the project simple for now and explicit about when that stops being valid. | ADR states curated-few assumptions and automated-many escalation trigger. |
+| 10 | Addressed | P2 | Add | Add downstream one-look OOS drift artifact template outside the loop. | Answer Season's OOS drift concern without contaminating Train optimization. | Template exists and auto loop does not read it. |
+| 11 | Addressed | P2 | Add | Add ADR for curated-few regime and trigger for heavier multiple-testing controls. | Keep the project simple for now and explicit about when that stops being valid. | ADR states curated-few assumptions and automated-many escalation trigger. |
 | 12 | Open | P3 | Refactor | Tighten type boundaries after items 2-5 settle. | mypy failures are mostly boundary ambiguity symptoms. | `mypy .` passes or has documented ignores for untyped upstream imports. |
 
 ## Preservation Constraints

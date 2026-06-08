@@ -14,6 +14,8 @@ from loop import (
     _ensure_can_attempt,
     climb_once,
     components_from_rationale,
+    IterationOutcome,
+    main,
     run_iteration,
     validate_thesis,
 )
@@ -732,3 +734,36 @@ def test_missing_successful_economics_is_logged_as_crash(tmp_path: Path):
     assert outcome.status == "crash"
     assert row.continuation == "repair_required"
     assert "missing economics" in row.note
+
+
+def test_climb_cli_outputs_full_result_row(monkeypatch, capsys):
+    row = _row(run_id="attempt-0099", gate_flags="trade_floor=pass")
+
+    def fake_climb_once(**kwargs):
+        return IterationOutcome(
+            status=row.status,
+            score=row.score,
+            gates_passed=row.gates_passed,
+            gates=None,
+            row=row,
+        )
+
+    monkeypatch.setattr("loop.climb_once", fake_climb_once)
+
+    assert main(
+        [
+            "climb",
+            "--mechanism",
+            "momentum persists",
+            "--falsifier",
+            "flat after costs",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    lines = output.strip().splitlines()
+    assert len(lines) == len(ResultRow.header())
+    for field in ResultRow.header():
+        assert f"{field}: " in output
+    assert "run_id: attempt-0099" in output
+    assert "gate_flags: trade_floor=pass" in output

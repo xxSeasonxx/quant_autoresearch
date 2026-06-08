@@ -63,7 +63,7 @@ For one thesis:
 9. Append one provenance-bearing row to `results.tsv`.
 10. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
-A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop.
+A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
 `results.tsv` records both control metrics and intuitive diagnostics: attempt provenance, objective score, gate flags, subwindow trade counts, trade count, concentration, cost stress, net return sum, average trade net, win rate, profit factor, gross return sum, cost return sum, and lifecycle state. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits. The complexity gate counts validated bounded params and signal components declared in `rationale.md` under `### Component:` headings.
 

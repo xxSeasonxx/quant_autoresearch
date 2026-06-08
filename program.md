@@ -136,7 +136,7 @@ Loop for the current thesis until a configured stop rule fires:
     - complexity cap exhausted.
     - no feasible baseline within `baseline_grace_iterations`.
 
-At stop, hand Season the frozen Train survivor or say the thesis died on Train. A Train survivor is not a promotion signal; it is only a candidate for downstream OOS, paper, and small-live review.
+At stop, hand Season the frozen Train survivor or say the thesis died on Train. A Train survivor is not a promotion signal; it is only a candidate for downstream OOS, paper, and small-live review. Downstream OOS drift review is Season-owned and must not feed back into this loop for the same candidate.
 
 **Do not pause once the loop has begun.** After setup confirmation, do not ask whether to continue, whether this is a good stopping point, or whether to try one more edit. Keep iterating until a protocol stop rule fires or Season interrupts. If you run out of ideas, re-read the in-scope files, inspect the diagnostic output, simplify accidental complexity, combine near-misses, or try a cleaner expression of the same thesis.
 

@@ -44,7 +44,9 @@ from quant_strategies.decisions import (
 
 __all__ = ["validate_params", "generate_decisions"]
 
-_DEFAULTS = {
+ParamValue = int | float
+
+_DEFAULTS: dict[str, ParamValue] = {
     "lookback_bars": 3,
     "threshold_bps": 50.0,
     "weight": 0.10,
@@ -52,18 +54,38 @@ _DEFAULTS = {
 }
 
 
-def validate_params(params: Mapping[str, object]) -> dict[str, object]:
+def _number(value: object, *, name: str) -> ParamValue:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be numeric, not bool")
+    if isinstance(value, int | float):
+        return value
+    raise ValueError(f"{name} must be numeric")
+
+
+def _integer(value: object, *, name: str) -> int:
+    numeric = _number(value, name=name)
+    if isinstance(numeric, float) and not numeric.is_integer():
+        raise ValueError(f"{name} must be an integer")
+    return int(numeric)
+
+
+def _float_value(value: object, *, name: str) -> float:
+    return float(_number(value, name=name))
+
+
+def validate_params(params: Mapping[str, object]) -> dict[str, ParamValue]:
     unknown = set(params) - set(_DEFAULTS)
     if unknown:
         raise ValueError(f"unknown params: {sorted(unknown)}")
 
     out = dict(_DEFAULTS)
-    out.update(params)
+    for key, value in params.items():
+        out[key] = _number(value, name=key)
 
-    lookback_bars = int(out["lookback_bars"])
-    threshold_bps = float(out["threshold_bps"])
-    weight = float(out["weight"])
-    max_hold_bars = int(out["max_hold_bars"])
+    lookback_bars = _integer(out["lookback_bars"], name="lookback_bars")
+    threshold_bps = _float_value(out["threshold_bps"], name="threshold_bps")
+    weight = _float_value(out["weight"], name="weight")
+    max_hold_bars = _integer(out["max_hold_bars"], name="max_hold_bars")
 
     if lookback_bars < 2:
         raise ValueError("lookback_bars must be >= 2")
@@ -100,10 +122,10 @@ def generate_decisions(
     params: Mapping[str, object],
 ) -> list[StrategyDecision]:
     cfg = validate_params(params)
-    lookback = int(cfg["lookback_bars"])
-    threshold = float(cfg["threshold_bps"]) / 10_000.0
-    weight = float(cfg["weight"])
-    max_hold_bars = int(cfg["max_hold_bars"])
+    lookback = _integer(cfg["lookback_bars"], name="lookback_bars")
+    threshold = _float_value(cfg["threshold_bps"], name="threshold_bps") / 10_000.0
+    weight = _float_value(cfg["weight"], name="weight")
+    max_hold_bars = _integer(cfg["max_hold_bars"], name="max_hold_bars")
 
     by_symbol: dict[str, list[Mapping[str, object]]] = {}
     for row in rows:
@@ -120,8 +142,8 @@ def generate_decisions(
                 continue
             current = ordered[index]
             prior = ordered[index - lookback]
-            current_close = float(current["close"])
-            prior_close = float(prior["close"])
+            current_close = _float_value(current["close"], name="close")
+            prior_close = _float_value(prior["close"], name="close")
             if prior_close <= 0.0:
                 continue
             ret = current_close / prior_close - 1.0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import Any, cast
 
 from quant_strategies.runner.config import load_config as load_runner_config
 
@@ -91,9 +92,11 @@ def test_materialized_quick_run_ignores_param_collisions(tmp_path: Path):
     }
 
     materialized = build_quick_run_config(cfg, params, results_dir=tmp_path / "runs")
+    data = cast(dict[str, Any], materialized["data"])
+    cost_model = cast(dict[str, Any], materialized["cost_model"])
 
-    assert materialized["data"]["symbols"] == list(cfg.data.symbols)
-    assert materialized["cost_model"]["fee_bps_per_side"] == cfg.cost_model.fee_bps_per_side
+    assert data["symbols"] == list(cfg.data.symbols)
+    assert cost_model["fee_bps_per_side"] == cfg.cost_model.fee_bps_per_side
     assert cfg.gates.min_trades_per_subwindow != params["min_trades_per_subwindow"]
     assert materialized["params"] == params
     assert "loop" not in materialized

@@ -308,7 +308,7 @@ For this repo, the right translation is:
 | 9 | Addressed | P1 | Retire | Mark `docs/simplified-autoresearch-loop-design.md` historical or collapse into current decisions/open risks. | Remove stale implementation guidance. | Docs no longer claim the implemented loop is "not yet implemented." |
 | 10 | Addressed | P2 | Add | Add downstream one-look OOS drift artifact template outside the loop. | Answer Season's OOS drift concern without contaminating Train optimization. | Template exists and auto loop does not read it. |
 | 11 | Addressed | P2 | Add | Add ADR for curated-few regime and trigger for heavier multiple-testing controls. | Keep the project simple for now and explicit about when that stops being valid. | ADR states curated-few assumptions and automated-many escalation trigger. |
-| 12 | Open | P3 | Refactor | Tighten type boundaries after items 2-5 settle. | mypy failures are mostly boundary ambiguity symptoms. | `mypy .` passes or has documented ignores for untyped upstream imports. |
+| 12 | Addressed | P3 | Refactor | Tighten type boundaries after items 2-5 settle. | mypy failures are mostly boundary ambiguity symptoms. | `mypy .` passes or has documented ignores for untyped upstream imports. |
 
 ## Preservation Constraints
 

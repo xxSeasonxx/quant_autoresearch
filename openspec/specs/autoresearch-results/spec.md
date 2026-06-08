@@ -112,3 +112,12 @@ The result log reader SHALL reject result chains with duplicate run ids, duplica
 #### Scenario: Terminal row before final row fails
 - **WHEN** a row with `continuation=terminal` is followed by another result row
 - **THEN** reading results fails with a clear `ValueError`
+
+### Requirement: Results use explicit concentration field name
+The result log SHALL use `net_return_contribution_concentration` for the current symbol concentration value, preserving the existing calculation and avoiding ambiguous `concentration` labels.
+
+#### Scenario: Result header names net-return contribution concentration
+- **WHEN** a result row is written
+- **THEN** the header includes `net_return_contribution_concentration`
+- **AND** the header does not include the ambiguous `concentration` field
+

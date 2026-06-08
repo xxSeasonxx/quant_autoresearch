@@ -43,3 +43,11 @@ The downstream handoff contract SHALL state that OOS drift reviews, OOS artifact
 - **WHEN** an agent reads active docs or the OOS drift template
 - **THEN** it is told that OOS review is for Season after a frozen Train survivor exists
 - **AND** the auto-research loop must not read or optimize against OOS review artifacts
+
+### Requirement: Downstream handoff spec has concrete purpose
+The downstream handoff spec SHALL state its actual purpose and SHALL NOT retain placeholder purpose text.
+
+#### Scenario: Purpose is concrete
+- **WHEN** `openspec/specs/autoresearch-downstream-handoff/spec.md` is read
+- **THEN** its Purpose section explains downstream OOS, paper, and small-live handoff responsibilities
+- **AND** it contains no placeholder purpose text

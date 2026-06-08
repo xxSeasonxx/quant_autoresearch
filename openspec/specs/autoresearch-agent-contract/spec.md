@@ -79,3 +79,10 @@ The agent contract SHALL distinguish active-loop inputs from generated audit/han
 - **WHEN** an agent reads active docs
 - **THEN** it is told not to browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks
 
+### Requirement: Historical design sketches are non-contract
+The agent contract SHALL make clear that historical design documents may contain stale implementation sketches and SHALL NOT override active operating docs or active specs.
+
+#### Scenario: Historical design doc is visibly non-contract
+- **WHEN** the historical simplified loop design is read
+- **THEN** it clearly labels implementation sketches and open questions as historical, non-contract context
+

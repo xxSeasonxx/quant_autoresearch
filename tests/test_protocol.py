@@ -35,9 +35,8 @@ strategy_path = "strategy.py"
 strategy_id = "strategy"
 
 [data]
-kind = "bars"
-dataset = "crypto_perp_1min"
-symbols = ["BTC-PERP", "ETH-PERP"]
+kind = "crypto_perp_funding"
+symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP"]
 start = "2025-01-01"
 end = "2025-02-01"
 
@@ -53,6 +52,7 @@ slippage_bps_per_side = 1.0
 [output]
 results_dir = "results"
 artifact_profile = "summary"
+causality_check = "emitted"
 
 [loop]
 plateau_patience = 4
@@ -78,11 +78,14 @@ train_score_floor = 0.1
 
     cfg = load_protocol(protocol_path)
 
-    assert cfg.data.symbols == ("BTC-PERP", "ETH-PERP")
+    assert cfg.data.symbols == ("BTC-PERP", "ETH-PERP", "DOGE-PERP")
+    assert cfg.data.dataset is None
     assert cfg.loop.plateau_patience == 4
     assert cfg.loop.max_iterations == 25
     assert cfg.loop.min_abs_improvement == 0.02
     assert cfg.loop.min_rel_improvement == 0.01
+    assert cfg.output.causality_check == "emitted"
+    assert cfg.output.strict_probe_limit is None
     assert cfg.objective.subwindows == 5
     assert cfg.gates.min_trades_per_subwindow == 2
     assert not hasattr(cfg.data, "oos")
@@ -125,17 +128,18 @@ def test_protocol_rejects_invalid_numeric_ranges(tmp_path: Path):
 
 
 def test_protocol_rejects_invalid_concentration_symbols_and_booleans(tmp_path: Path):
+    symbols_line = 'symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]'
     cases = [
         (
             "max_symbol_concentration = 0.70",
             "max_symbol_concentration = 1.50",
             "max_symbol_concentration",
         ),
-        ('symbols = ["BTC-PERP", "ETH-PERP"]', "symbols = []", "symbols"),
-        ('symbols = ["BTC-PERP", "ETH-PERP"]', 'symbols = "BTC-PERP"', "symbols"),
-        ('symbols = ["BTC-PERP", "ETH-PERP"]', 'symbols = [""]', "symbols"),
+        (symbols_line, "symbols = []", "symbols"),
+        (symbols_line, 'symbols = "BTC-PERP"', "symbols"),
+        (symbols_line, 'symbols = [""]', "symbols"),
         (
-            'symbols = ["BTC-PERP", "ETH-PERP"]',
+            symbols_line,
             'symbols = ["BTC-PERP", 123]',
             "symbols",
         ),
@@ -197,17 +201,45 @@ def test_write_quick_run_config_uses_public_runner_sections(tmp_path: Path):
     assert parsed["data"]["start"] == cfg.data.start
     assert parsed["output"]["artifact_profile"] == cfg.output.artifact_profile
     assert parsed["output"]["diagnostic_sample_trades"] >= 1
+    assert parsed["output"]["causality_check"] == "emitted"
     loaded = load_runner_config(out, repo_root=Path.cwd())
     assert loaded.output.results_dir.name == "autoresearch-test"
+    assert loaded.output.causality_check == "emitted"
 
 
 def test_experiment_loads_params_and_bounds():
     experiment = load_experiment(Path("experiment.toml"))
 
-    assert experiment.params["lookback_bars"] == 3
-    assert experiment.bounds["weight"].min == 0.01
-    assert experiment.bounds["weight"].max == 0.50
+    assert experiment.params["funding_lookback_events"] == 5
+    assert experiment.params["require_exit_horizon"] is False
+    assert experiment.params["selection_score"] == "funding"
+    assert experiment.bounds["weight"].min == 0.2
+    assert experiment.bounds["weight"].max == 0.2
     assert load_params(Path("experiment.toml")) == experiment.params
+
+
+def test_experiment_allows_fixed_boolean_and_string_params_without_bounds(
+    tmp_path: Path,
+):
+    path = _write(
+        tmp_path / "mixed.toml",
+        """
+[params]
+weight = 0.10
+require_exit_horizon = true
+selection_score = "funding"
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+""",
+    )
+
+    experiment = load_experiment(path)
+
+    assert experiment.params["weight"] == 0.10
+    assert experiment.params["require_exit_horizon"] is True
+    assert experiment.params["selection_score"] == "funding"
 
 
 def test_experiment_rejects_out_of_bound_params(tmp_path: Path):

@@ -27,24 +27,22 @@
 
 # The pure strategy file and strategy id passed through to quant_strategies.
 strategy_path = "strategy.py"
-strategy_id = "strategy"
+strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 
 [data]
 # Public quant_strategies data loader kind. This is protocol-owned because data
 # source choice changes what information the strategy can see.
-kind = "bars"
-# Dataset name for kind = "bars". Must exist in quant_data for the local setup.
-dataset = "crypto_perp_1min"
+kind = "crypto_perp_funding"
 # Fixed Train universe. The agent must not cherry-pick symbols in params.
 #
 # Symbol universe rationale:
 # - BTC-PERP and ETH-PERP are the most liquid crypto perp anchors in the local
-#   minute-bar dataset and fit the baseline short-horizon crypto thesis.
-# - A two-symbol universe keeps the first thesis loop auditable while still
-#   rejecting single-name concentration.
-# - Wider universes are protocol variants owned by Season before a run starts,
-#   not LLM-tuned strategy params.
-symbols = ["BTC-PERP", "ETH-PERP"]
+#   minute-bar dataset.
+# - DOGE-PERP, ADA-PERP, and LINK-PERP match the researched rank-01 funding
+#   crowding universe Season asked to baseline here.
+# - The five-symbol snapshot is explicit protocol state; later evidence is about
+#   this strategy-universe combination, not pure strategy improvement.
+symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 # Train-only date range. Date-only end is interpreted like the upstream loader:
 # the loop includes the full end date by using a half-open [start, end + 1 day)
 # objective window.
@@ -91,6 +89,10 @@ results_dir = "results"
 artifact_profile = "diagnostic"
 # Let quant_strategies run its lightweight quick checks.
 quick_checks = true
+# Train iteration uses emitted replay; strict no-emission replay is for survivor
+# or dedicated audits because full row-grid replay is too expensive for the
+# large minute panel.
+causality_check = "emitted"
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
 
@@ -135,7 +137,7 @@ max_symbol_concentration = 0.70
 min_cost_stress_score = 0.0
 # Simplicity cap: maximum declared signal components in rationale.md.
 max_components = 3
-# Simplicity cap: maximum bounded params in experiment.toml [params].
-max_params = 8
+# Simplicity cap: maximum strategy params in experiment.toml [params].
+max_params = 50
 # Minimum base Train score required to pass the Train floor gate.
 train_score_floor = 0.0

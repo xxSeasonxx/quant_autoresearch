@@ -86,7 +86,31 @@ def _row(**overrides) -> ResultRow:
 
 def _write_snapshot_files(root: Path) -> None:
     (root / "strategy.py").write_text("# strategy\n")
-    (root / "experiment.toml").write_text(Path("experiment.toml").read_text())
+    (root / "experiment.toml").write_text(
+        """
+[params]
+lookback_bars = 3
+threshold_bps = 50.0
+weight = 0.10
+max_hold_bars = 4
+
+[bounds.lookback_bars]
+min = 2
+max = 240
+
+[bounds.threshold_bps]
+min = 1.0
+max = 1000.0
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+
+[bounds.max_hold_bars]
+min = 1
+max = 240
+"""
+    )
     (root / "protocol.toml").write_text("# protocol\n")
     (root / "rationale.md").write_text(
         """

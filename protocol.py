@@ -9,7 +9,7 @@ import tomllib
 from gates import GateConfig
 from objective import LoopConfig, ObjectiveConfig
 
-ParamValue = int | float
+ParamValue = int | float | bool | str
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ class OutputConfig:
     artifact_profile: str = "summary"
     quick_checks: bool = True
     diagnostic_sample_trades: int = 0
+    causality_check: str = "emitted"
+    strict_probe_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ def _required(mapping: Mapping[str, Any], key: str) -> Any:
     return mapping[key]
 
 
-def _numeric(value: object, *, name: str) -> ParamValue:
+def _numeric(value: object, *, name: str) -> int | float:
     if isinstance(value, bool):
         raise ValueError(f"{name} must be numeric, not bool")
     if isinstance(value, int | float):
@@ -84,6 +86,22 @@ def _numeric(value: object, *, name: str) -> ParamValue:
             raise ValueError(f"{name} must be finite")
         return value
     raise ValueError(f"{name} must be numeric")
+
+
+def _param_value(value: object, *, name: str) -> ParamValue:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        if not isfinite(float(value)):
+            raise ValueError(f"{name} must be finite")
+        return value
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{name} must be a numeric, boolean, or string scalar")
+
+
+def _is_numeric_param(value: ParamValue) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def _integer(value: object, *, name: str) -> int:
@@ -104,6 +122,13 @@ def _boolean(value: object, *, name: str) -> bool:
     return value
 
 
+def _causality_check(value: object, *, name: str) -> str:
+    parsed = str(value)
+    if parsed not in {"off", "emitted", "strict"}:
+        raise ValueError(f"{name} must be one of: off, emitted, strict")
+    return parsed
+
+
 def _positive_int(value: object, *, name: str) -> int:
     parsed = _integer(value, name=name)
     if parsed <= 0:
@@ -116,6 +141,12 @@ def _nonnegative_int(value: object, *, name: str) -> int:
     if parsed < 0:
         raise ValueError(f"{name} must be >= 0")
     return parsed
+
+
+def _optional_nonnegative_int(value: object, *, name: str) -> int | None:
+    if value is None:
+        return None
+    return _nonnegative_int(value, name=name)
 
 
 def _nonnegative_float(value: object, *, name: str) -> float:
@@ -209,6 +240,14 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 raw_output.get("diagnostic_sample_trades", 5),
                 name="output.diagnostic_sample_trades",
             ),
+            causality_check=_causality_check(
+                raw_output.get("causality_check", "emitted"),
+                name="output.causality_check",
+            ),
+            strict_probe_limit=_optional_nonnegative_int(
+                raw_output.get("strict_probe_limit"),
+                name="output.strict_probe_limit",
+            ),
         ),
         loop=LoopConfig(
             plateau_patience=_positive_int(
@@ -280,7 +319,7 @@ def load_experiment(path: str | Path) -> ExperimentConfig:
         raise ValueError("experiment [bounds] must be a table")
 
     params = {
-        str(key): _numeric(value, name=f"params.{key}")
+        str(key): _param_value(value, name=f"params.{key}")
         for key, value in raw_params.items()
     }
     bounds: dict[str, ParamBound] = {}
@@ -293,14 +332,20 @@ def load_experiment(path: str | Path) -> ExperimentConfig:
             raise ValueError(f"bounds.{key}.min must be <= bounds.{key}.max")
         bounds[str(key)] = ParamBound(min=lower, max=upper)
 
-    missing_bounds = set(params) - set(bounds)
+    numeric_params = {key for key, value in params.items() if _is_numeric_param(value)}
+    missing_bounds = numeric_params - set(bounds)
     if missing_bounds:
         raise ValueError(f"missing bounds for params: {sorted(missing_bounds)}")
     orphan_bounds = set(bounds) - set(params)
     if orphan_bounds:
         raise ValueError(f"bounds without params: {sorted(orphan_bounds)}")
 
-    for key, value in params.items():
+    nonnumeric_bounds = set(bounds) - numeric_params
+    if nonnumeric_bounds:
+        raise ValueError(f"non-numeric params cannot have bounds: {sorted(nonnumeric_bounds)}")
+
+    for key in numeric_params:
+        value = params[key]
         bound = bounds[key]
         numeric_value = float(value)
         if numeric_value < bound.min or numeric_value > bound.max:
@@ -329,6 +374,15 @@ def build_quick_run_config(
     }
     if protocol.data.dataset is not None:
         data_block["dataset"] = protocol.data.dataset
+    output_block: dict[str, object] = {
+        "results_dir": str(results_dir or protocol.output.results_dir),
+        "artifact_profile": protocol.output.artifact_profile,
+        "quick_checks": protocol.output.quick_checks,
+        "diagnostic_sample_trades": max(1, protocol.output.diagnostic_sample_trades),
+        "causality_check": protocol.output.causality_check,
+    }
+    if protocol.output.strict_probe_limit is not None:
+        output_block["strict_probe_limit"] = protocol.output.strict_probe_limit
     return {
         "strategy_path": protocol.strategy_path,
         "strategy_id": protocol.strategy_id,
@@ -343,14 +397,7 @@ def build_quick_run_config(
             "fee_bps_per_side": protocol.cost_model.fee_bps_per_side,
             "slippage_bps_per_side": protocol.cost_model.slippage_bps_per_side,
         },
-        "output": {
-            "results_dir": str(results_dir or protocol.output.results_dir),
-            "artifact_profile": protocol.output.artifact_profile,
-            "quick_checks": protocol.output.quick_checks,
-            "diagnostic_sample_trades": max(
-                1, protocol.output.diagnostic_sample_trades
-            ),
-        },
+        "output": output_block,
     }
 
 

@@ -27,7 +27,7 @@ This is not a trading system, investment advice, or proof of deployability.
 The agent may edit:
 
 - `strategy.py`
-- `experiment.toml` `[params]`
+- `experiment.toml` `[params]`, within the existing `[bounds.*]`
 - `rationale.md` when variants are tried or signal components change
 
 The agent does not edit:
@@ -65,7 +65,7 @@ For one thesis:
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop.
 
-`results.tsv` records both control metrics and intuitive diagnostics: attempt provenance, objective score, gate flags, subwindow trade counts, trade count, concentration, cost stress, net return sum, average trade net, win rate, profit factor, gross return sum, cost return sum, and lifecycle state. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits.
+`results.tsv` records both control metrics and intuitive diagnostics: attempt provenance, objective score, gate flags, subwindow trade counts, trade count, concentration, cost stress, net return sum, average trade net, win rate, profit factor, gross return sum, cost return sum, and lifecycle state. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits. The complexity gate counts validated bounded params and signal components declared in `rationale.md` under `### Component:` headings.
 
 ## Commands
 

@@ -50,6 +50,38 @@ def validate_thesis(mechanism: str, falsifier: str) -> str | None:
     return None
 
 
+def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, ...]:
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError as exc:
+        raise ValueError(f"could not read rationale: {path}") from exc
+
+    in_components = False
+    components: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_components = stripped == "## Signal Components"
+            continue
+        if not in_components:
+            continue
+        if not stripped.startswith("### Component:"):
+            continue
+        name = stripped.removeprefix("### Component:").strip()
+        if not name:
+            raise ValueError("signal component heading must include a name")
+        normalized = " ".join(name.lower().split())
+        if normalized in seen:
+            raise ValueError(f"duplicate signal component: {name}")
+        seen.add(normalized)
+        components.append(name)
+
+    if not components:
+        raise ValueError("rationale.md must declare at least one signal component")
+    return tuple(components)
+
+
 def _current_commit(workdir: Path) -> str:
     try:
         return subprocess.check_output(
@@ -676,7 +708,7 @@ def climb_once(
     results_path: str | Path = "results.tsv",
     mechanism: str,
     falsifier: str,
-    components: Sequence[str] = ("baseline",),
+    components: Sequence[str] | None = None,
     runner: Runner | None = None,
 ) -> IterationOutcome:
     thesis_error = validate_thesis(mechanism, falsifier)
@@ -684,7 +716,20 @@ def climb_once(
         raise ValueError(thesis_error)
     cfg = load_protocol(protocol_path)
     rows = read_results(results_path)
+    snapshot = _source_snapshot(
+        Path("."),
+        strategy_path=cfg.strategy_path,
+        experiment_path=params_path,
+        protocol_path=protocol_path,
+        rationale_path="rationale.md",
+    )
+    _ensure_can_attempt(rows, snapshot)
     params = load_params(params_path)
+    declared_components = (
+        tuple(components)
+        if components is not None
+        else components_from_rationale("rationale.md")
+    )
     best_score = max(
         (row.score for row in rows if row.status == "keep" and row.score is not None),
         default=None,
@@ -692,7 +737,7 @@ def climb_once(
     return run_iteration(
         cfg,
         params=params,
-        components=components,
+        components=declared_components,
         results_path=results_path,
         iteration=len(rows) + 1,
         best_score=best_score,

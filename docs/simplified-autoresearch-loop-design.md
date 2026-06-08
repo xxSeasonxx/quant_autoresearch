@@ -1,7 +1,10 @@
 # Simplified Auto-Research Loop — Design
 
-**Status:** design / decision record (2026-06-06). Output of a first-principles
-brainstorm. **Not yet implemented.**
+**Status:** historical design / decision record (2026-06-06). Output of a
+first-principles brainstorm. The simplified loop is now implemented and hardened;
+use `README.md`, `program.md`, `protocol.toml`, and `openspec/specs/` as the
+active operating sources. This document is retained as context, not as the live
+implementation contract.
 
 This describes a **clean-slate rebuild** of `quant_autoresearch`. The existing
 shipped 5-phase evaluator package and its docs are **retired** (§10), not

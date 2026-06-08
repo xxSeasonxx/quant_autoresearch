@@ -10,7 +10,13 @@ from typing import Any, cast
 
 import pytest
 
-from loop import _ensure_can_attempt, climb_once, run_iteration, validate_thesis
+from loop import (
+    _ensure_can_attempt,
+    climb_once,
+    components_from_rationale,
+    run_iteration,
+    validate_thesis,
+)
 from gates import GateConfig
 from objective import LoopConfig, ObjectiveConfig
 from protocol import load_protocol
@@ -78,9 +84,20 @@ def _row(**overrides) -> ResultRow:
 
 def _write_snapshot_files(root: Path) -> None:
     (root / "strategy.py").write_text("# strategy\n")
-    (root / "experiment.toml").write_text("[params]\nlookback_bars = 12\n")
+    (root / "experiment.toml").write_text(Path("experiment.toml").read_text())
     (root / "protocol.toml").write_text("# protocol\n")
-    (root / "rationale.md").write_text("# Rationale\n")
+    (root / "rationale.md").write_text(
+        """
+# Rationale
+
+## Signal Components
+
+### Component: baseline momentum
+### Component: session filter
+### Component: volatility gate
+### Component: exit timing
+"""
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -91,6 +108,48 @@ def test_validate_thesis_requires_mechanism_and_falsifier():
     assert "mechanism" in validate_thesis("", "flat if no edge").lower()
     assert "falsifier" in validate_thesis("momentum persists", "").lower()
     assert validate_thesis("momentum persists", "flat net after costs") is None
+
+
+def test_components_from_rationale_parses_signal_component_headings(tmp_path: Path):
+    path = tmp_path / "rationale.md"
+    path.write_text(
+        """
+# Rationale
+
+## Signal Components
+
+### Component: baseline momentum
+
+### Component: session filter
+
+## Variants Tried
+
+### Variant: ignored
+"""
+    )
+
+    assert components_from_rationale(path) == ("baseline momentum", "session filter")
+
+
+def test_components_from_rationale_rejects_missing_and_duplicate_components(tmp_path: Path):
+    missing = tmp_path / "missing.md"
+    missing.write_text("# Rationale\n\n## Signal Components\n")
+    duplicate = tmp_path / "duplicate.md"
+    duplicate.write_text(
+        """
+# Rationale
+
+## Signal Components
+
+### Component: Baseline Momentum
+
+### Component: baseline   momentum
+"""
+    )
+
+    for path, message in [(missing, "at least one"), (duplicate, "duplicate")]:
+        with pytest.raises(ValueError, match=message):
+            components_from_rationale(path)
 
 
 def test_run_iteration_uses_mocked_public_run_config_and_logs(tmp_path: Path):
@@ -528,6 +587,91 @@ def test_climb_once_blocks_terminal_state_before_runner(tmp_path: Path, monkeypa
         raise AssertionError("runner should not be called")
 
     with pytest.raises(ValueError, match="already stopped"):
+        climb_once(
+            mechanism="momentum persists",
+            falsifier="flat after costs",
+            runner=runner,
+        )
+    assert called is False
+
+
+def test_climb_once_rejects_out_of_bound_params_before_runner(tmp_path: Path, monkeypatch):
+    _write_snapshot_files(tmp_path)
+    (tmp_path / "protocol.toml").write_text(Path("protocol.toml").read_text())
+    (tmp_path / "experiment.toml").write_text(
+        """
+[params]
+weight = 0.75
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+"""
+    )
+    monkeypatch.chdir(tmp_path)
+    called = False
+
+    def runner(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runner should not be called")
+
+    with pytest.raises(ValueError, match="outside bounds"):
+        climb_once(
+            mechanism="momentum persists",
+            falsifier="flat after costs",
+            runner=runner,
+        )
+    assert called is False
+
+
+def test_climb_once_uses_rationale_components_for_complexity(tmp_path: Path, monkeypatch):
+    _write_snapshot_files(tmp_path)
+    (tmp_path / "protocol.toml").write_text(Path("protocol.toml").read_text())
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run_config(config_path, *, repo_root=None, event_sink=None):
+        return _Result(
+            succeeded=True,
+            economics=_Economics(
+                trades=(
+                    _Trade("BTC-PERP", datetime(2025, 1, 1, tzinfo=timezone.utc), 0.10),
+                    _Trade("ETH-PERP", datetime(2025, 5, 1, tzinfo=timezone.utc), 0.08),
+                    _Trade("BTC-PERP", datetime(2025, 9, 1, tzinfo=timezone.utc), 0.06),
+                    _Trade("ETH-PERP", datetime(2025, 12, 1, tzinfo=timezone.utc), 0.04),
+                ),
+                trade_count=4,
+            ),
+        )
+
+    outcome = climb_once(
+        mechanism="momentum persists",
+        falsifier="flat after costs",
+        runner=fake_run_config,
+    )
+
+    row = read_results(tmp_path / "results.tsv")[0]
+    assert outcome.row is not None
+    assert row.complexity_count == 4
+    assert "complexity_cap=fail" in row.gate_flags
+
+
+def test_climb_once_rejects_missing_rationale_components_before_runner(
+    tmp_path: Path,
+    monkeypatch,
+):
+    _write_snapshot_files(tmp_path)
+    (tmp_path / "protocol.toml").write_text(Path("protocol.toml").read_text())
+    (tmp_path / "rationale.md").write_text("# Rationale\n\n## Signal Components\n")
+    monkeypatch.chdir(tmp_path)
+    called = False
+
+    def runner(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runner should not be called")
+
+    with pytest.raises(ValueError, match="at least one"):
         climb_once(
             mechanism="momentum persists",
             falsifier="flat after costs",

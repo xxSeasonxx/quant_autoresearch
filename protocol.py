@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping
 import tomllib
 
 from gates import GateConfig
 from objective import LoopConfig, ObjectiveConfig
+
+ParamValue = int | float
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,18 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class ParamBound:
+    min: float
+    max: float
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    params: dict[str, ParamValue]
+    bounds: dict[str, ParamBound]
+
+
+@dataclass(frozen=True)
 class ProtocolConfig:
     strategy_path: str
     strategy_id: str
@@ -59,6 +74,16 @@ def _required(mapping: Mapping[str, Any], key: str) -> Any:
     if key not in mapping:
         raise ValueError(f"missing required protocol key: {key}")
     return mapping[key]
+
+
+def _numeric(value: object, *, name: str) -> ParamValue:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be numeric, not bool")
+    if isinstance(value, int | float):
+        if not isfinite(float(value)):
+            raise ValueError(f"{name} must be finite")
+        return value
+    raise ValueError(f"{name} must be numeric")
 
 
 def load_protocol(path: str | Path) -> ProtocolConfig:
@@ -126,9 +151,50 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
     )
 
 
-def load_params(path: str | Path) -> dict[str, object]:
+def load_experiment(path: str | Path) -> ExperimentConfig:
     data = tomllib.loads(Path(path).read_text())
-    return dict(data.get("params", {}))
+    raw_params = data.get("params", {})
+    if not isinstance(raw_params, dict):
+        raise ValueError("experiment [params] must be a table")
+
+    raw_bounds = data.get("bounds", {})
+    if not isinstance(raw_bounds, dict):
+        raise ValueError("experiment [bounds] must be a table")
+
+    params = {
+        str(key): _numeric(value, name=f"params.{key}")
+        for key, value in raw_params.items()
+    }
+    bounds: dict[str, ParamBound] = {}
+    for key, raw_bound in raw_bounds.items():
+        if not isinstance(raw_bound, dict):
+            raise ValueError(f"bounds.{key} must be a table")
+        lower = float(_numeric(_required(raw_bound, "min"), name=f"bounds.{key}.min"))
+        upper = float(_numeric(_required(raw_bound, "max"), name=f"bounds.{key}.max"))
+        if lower > upper:
+            raise ValueError(f"bounds.{key}.min must be <= bounds.{key}.max")
+        bounds[str(key)] = ParamBound(min=lower, max=upper)
+
+    missing_bounds = set(params) - set(bounds)
+    if missing_bounds:
+        raise ValueError(f"missing bounds for params: {sorted(missing_bounds)}")
+    orphan_bounds = set(bounds) - set(params)
+    if orphan_bounds:
+        raise ValueError(f"bounds without params: {sorted(orphan_bounds)}")
+
+    for key, value in params.items():
+        bound = bounds[key]
+        numeric_value = float(value)
+        if numeric_value < bound.min or numeric_value > bound.max:
+            raise ValueError(
+                f"params.{key}={value} outside bounds [{bound.min}, {bound.max}]"
+            )
+
+    return ExperimentConfig(params=params, bounds=bounds)
+
+
+def load_params(path: str | Path) -> dict[str, ParamValue]:
+    return load_experiment(path).params
 
 
 def build_quick_run_config(

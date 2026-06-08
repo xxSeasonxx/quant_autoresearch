@@ -5,7 +5,13 @@ from pathlib import Path
 
 from quant_strategies.runner.config import load_config as load_runner_config
 
-from protocol import build_quick_run_config, load_params, load_protocol, write_quick_run_config
+from protocol import (
+    build_quick_run_config,
+    load_experiment,
+    load_params,
+    load_protocol,
+    write_quick_run_config,
+)
 
 
 def _write(path: Path, text: str) -> Path:
@@ -118,3 +124,99 @@ def test_write_quick_run_config_uses_public_runner_sections(tmp_path: Path):
     assert parsed["output"]["diagnostic_sample_trades"] >= 1
     loaded = load_runner_config(out, repo_root=Path.cwd())
     assert loaded.output.results_dir.name == "autoresearch-test"
+
+
+def test_experiment_loads_params_and_bounds():
+    experiment = load_experiment(Path("experiment.toml"))
+
+    assert experiment.params["lookback_bars"] == 3
+    assert experiment.bounds["weight"].min == 0.01
+    assert experiment.bounds["weight"].max == 0.50
+    assert load_params(Path("experiment.toml")) == experiment.params
+
+
+def test_experiment_rejects_out_of_bound_params(tmp_path: Path):
+    path = _write(
+        tmp_path / "experiment.toml",
+        """
+[params]
+weight = 0.75
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+""",
+    )
+
+    try:
+        load_experiment(path)
+    except ValueError as exc:
+        assert "outside bounds" in str(exc)
+    else:
+        raise AssertionError("out-of-bound param should fail")
+
+
+def test_experiment_rejects_missing_and_orphan_bounds(tmp_path: Path):
+    missing = _write(
+        tmp_path / "missing.toml",
+        """
+[params]
+weight = 0.10
+""",
+    )
+    orphan = _write(
+        tmp_path / "orphan.toml",
+        """
+[params]
+weight = 0.10
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+
+[bounds.lookback_bars]
+min = 2
+max = 240
+""",
+    )
+
+    for path, message in [(missing, "missing bounds"), (orphan, "bounds without params")]:
+        try:
+            load_experiment(path)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"{path.name} should fail")
+
+
+def test_experiment_rejects_non_finite_params_and_bounds(tmp_path: Path):
+    non_finite_param = _write(
+        tmp_path / "non_finite_param.toml",
+        """
+[params]
+weight = nan
+
+[bounds.weight]
+min = 0.01
+max = 0.50
+""",
+    )
+    non_finite_bound = _write(
+        tmp_path / "non_finite_bound.toml",
+        """
+[params]
+weight = 0.10
+
+[bounds.weight]
+min = nan
+max = 0.50
+""",
+    )
+
+    for path in [non_finite_param, non_finite_bound]:
+        try:
+            load_experiment(path)
+        except ValueError as exc:
+            assert "finite" in str(exc)
+        else:
+            raise AssertionError(f"{path.name} should fail")

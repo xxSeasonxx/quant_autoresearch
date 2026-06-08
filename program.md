@@ -35,8 +35,8 @@ The score improves only through better thesis expression and robust simplificati
 **What you can edit during the ordinary loop:**
 
 - `strategy.py`: pure signal logic via `generate_decisions(rows, params)`.
-- `experiment.toml` bounded params under `[params]`.
-- `rationale.md`: required when a signal component is added or materially changed.
+- `experiment.toml` bounded params under `[params]`, within the existing `[bounds.*]`.
+- `rationale.md`: required when a signal component is added or materially changed. Declare signal components as `### Component: <name>` under `## Signal Components`.
 
 **What is read-only:**
 

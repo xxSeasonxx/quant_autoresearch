@@ -111,6 +111,9 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         ),
         gates=GateConfig(
             min_trades=int(_required(raw_gates, "min_trades")),
+            min_trades_per_subwindow=int(
+                _required(raw_gates, "min_trades_per_subwindow")
+            ),
             max_symbol_concentration=float(
                 _required(raw_gates, "max_symbol_concentration")
             ),
@@ -118,6 +121,7 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             max_components=int(_required(raw_gates, "max_components")),
             max_params=int(_required(raw_gates, "max_params")),
             train_score_floor=float(_required(raw_gates, "train_score_floor")),
+            subwindows=int(_required(raw_objective, "subwindows")),
         ),
     )
 

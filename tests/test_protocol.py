@@ -53,6 +53,7 @@ subwindows = 5
 
 [gates]
 min_trades = 12
+min_trades_per_subwindow = 2
 max_symbol_concentration = 0.6
 min_cost_stress_score = 0.0
 max_components = 3
@@ -69,6 +70,7 @@ train_score_floor = 0.1
     assert cfg.loop.min_abs_improvement == 0.02
     assert cfg.loop.min_rel_improvement == 0.01
     assert cfg.objective.subwindows == 5
+    assert cfg.gates.min_trades_per_subwindow == 2
     assert not hasattr(cfg.data, "oos")
 
 
@@ -78,6 +80,7 @@ def test_materialized_quick_run_ignores_param_collisions(tmp_path: Path):
         "lookback_bars": 12,
         "symbols": ["DOGE-PERP"],
         "fee_bps_per_side": 0.0,
+        "min_trades_per_subwindow": 999,
         "plateau_patience": 999,
     }
 
@@ -85,6 +88,7 @@ def test_materialized_quick_run_ignores_param_collisions(tmp_path: Path):
 
     assert materialized["data"]["symbols"] == list(cfg.data.symbols)
     assert materialized["cost_model"]["fee_bps_per_side"] == cfg.cost_model.fee_bps_per_side
+    assert cfg.gates.min_trades_per_subwindow != params["min_trades_per_subwindow"]
     assert materialized["params"] == params
     assert "loop" not in materialized
     assert "objective" not in materialized

@@ -37,6 +37,7 @@ def test_worst_subwindow_uses_configured_k_and_lowest_slice():
 
     assert result.feasible is True
     assert len(result.subwindow_scores) == 3
+    assert result.subwindow_trade_counts == (2, 2, 2)
     assert result.score == min(result.subwindow_scores)
 
 
@@ -56,6 +57,7 @@ def test_worst_subwindow_splits_by_time_not_trade_count():
     )
 
     assert len(result.subwindow_scores) == 3
+    assert result.subwindow_trade_counts == (3, 0, 1)
     assert result.subwindow_scores[1] == 0.0
     assert result.score == -0.02
 
@@ -71,6 +73,7 @@ def test_worst_subwindow_includes_idle_train_tail():
     )
 
     assert result.subwindow_scores == (0.1, 0.0, 0.0)
+    assert result.subwindow_trade_counts == (2, 0, 0)
     assert result.score == 0.0
 
 
@@ -123,11 +126,13 @@ def test_gates_are_binary_and_separate_from_score():
     trades = [_trade("BTC", 0, 0.10), _trade("ETH", 1, 0.05), _trade("ETH", 2, 0.04)]
     cfg = GateConfig(
         min_trades=3,
+        min_trades_per_subwindow=1,
         max_symbol_concentration=0.80,
         min_cost_stress_score=0.0,
         max_components=2,
         max_params=4,
         train_score_floor=0.0,
+        subwindows=3,
     )
 
     passed = evaluate_gates(
@@ -137,6 +142,7 @@ def test_gates_are_binary_and_separate_from_score():
         config=cfg,
         cost_stress_score=0.01,
         train_score=0.2,
+        subwindow_trade_counts=(1, 1, 1),
     )
     failed = evaluate_gates(
         trades,
@@ -145,8 +151,70 @@ def test_gates_are_binary_and_separate_from_score():
         config=cfg,
         cost_stress_score=0.01,
         train_score=0.2,
+        subwindow_trade_counts=(1, 1, 1),
     )
 
     assert passed.passed is True
     assert failed.passed is False
     assert failed.by_name["complexity_cap"].passed is False
+
+
+def test_subwindow_coverage_gate_rejects_clustered_trade_evidence():
+    trades = [_trade("BTC", i, 0.10) for i in range(6)]
+    cfg = GateConfig(
+        min_trades=6,
+        min_trades_per_subwindow=1,
+        max_symbol_concentration=1.0,
+        min_cost_stress_score=0.0,
+        max_components=2,
+        max_params=4,
+        train_score_floor=0.0,
+        subwindows=3,
+    )
+    objective = score_worst_subwindow(
+        trades,
+        subwindows=3,
+        window_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        window_end=datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=180),
+    )
+
+    gates = evaluate_gates(
+        trades,
+        params={"lookback": 12, "weight": 0.1},
+        components=("momentum",),
+        config=cfg,
+        cost_stress_score=0.01,
+        train_score=objective.score,
+        subwindow_trade_counts=objective.subwindow_trade_counts,
+    )
+
+    assert objective.subwindow_trade_counts == (6, 0, 0)
+    assert gates.by_name["trade_floor"].passed is True
+    assert gates.by_name["subwindow_coverage"].passed is False
+    assert gates.passed is False
+
+
+def test_subwindow_coverage_requires_expected_count_length():
+    trades = [_trade("BTC", i, 0.10) for i in range(6)]
+    cfg = GateConfig(
+        min_trades=6,
+        min_trades_per_subwindow=1,
+        max_symbol_concentration=1.0,
+        min_cost_stress_score=0.0,
+        max_components=2,
+        max_params=4,
+        train_score_floor=0.0,
+        subwindows=3,
+    )
+
+    gates = evaluate_gates(
+        trades,
+        params={"lookback": 12, "weight": 0.1},
+        components=("momentum",),
+        config=cfg,
+        cost_stress_score=0.01,
+        train_score=0.2,
+        subwindow_trade_counts=(6,),
+    )
+
+    assert gates.by_name["subwindow_coverage"].passed is False

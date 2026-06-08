@@ -9,11 +9,13 @@ from objective import TradeSample
 @dataclass(frozen=True)
 class GateConfig:
     min_trades: int
+    min_trades_per_subwindow: int
     max_symbol_concentration: float
     min_cost_stress_score: float
     max_components: int
     max_params: int
     train_score_floor: float
+    subwindows: int
 
 
 @dataclass(frozen=True)
@@ -62,17 +64,35 @@ def evaluate_gates(
     config: GateConfig,
     cost_stress_score: float | None,
     train_score: float | None,
+    subwindow_trade_counts: Sequence[int],
 ) -> GateSet:
     concentration = symbol_concentration(trades)
     component_count = len(tuple(components))
     param_count = len(dict(params))
     complexity_value = max(component_count, param_count)
+    min_subwindow_count = min(subwindow_trade_counts, default=0)
     outcomes = (
         GateOutcome(
             name="trade_floor",
             passed=len(trades) >= config.min_trades,
             value=float(len(trades)),
             threshold=float(config.min_trades),
+        ),
+        GateOutcome(
+            name="subwindow_coverage",
+            passed=bool(subwindow_trade_counts)
+            and len(subwindow_trade_counts) == config.subwindows
+            and all(
+                count >= config.min_trades_per_subwindow
+                for count in subwindow_trade_counts
+            ),
+            value=float(min_subwindow_count),
+            threshold=float(config.min_trades_per_subwindow),
+            detail=(
+                "counts="
+                + ",".join(str(count) for count in subwindow_trade_counts)
+                + f", expected={config.subwindows}"
+            ),
         ),
         GateOutcome(
             name="breadth",
@@ -103,4 +123,3 @@ def evaluate_gates(
         ),
     )
     return GateSet(outcomes=outcomes)
-

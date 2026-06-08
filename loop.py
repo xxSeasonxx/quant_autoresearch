@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import argparse
+import hashlib
+import json
 import subprocess
 import time
 from typing import Callable, Mapping, Sequence
@@ -23,8 +25,21 @@ class IterationOutcome:
     score: float | None
     gates_passed: bool
     gates: GateSet | None
+    row: ResultRow | None = None
     stop_reason: str = ""
     message: str = ""
+
+
+@dataclass(frozen=True)
+class AttemptProvenance:
+    run_id: str
+    artifact_dir: str
+    worktree_dirty: bool
+    strategy_sha256: str
+    experiment_sha256: str
+    protocol_sha256: str
+    rationale_sha256: str
+    quick_config_sha256: str
 
 
 def validate_thesis(mechanism: str, falsifier: str) -> str | None:
@@ -47,6 +62,61 @@ def _current_commit(workdir: Path) -> str:
         return "unknown"
 
 
+def _sha256_path(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "missing"
+
+
+def _tracked_worktree_dirty(workdir: Path) -> bool:
+    try:
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=workdir,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return bool(output.strip())
+
+
+def _same_source_snapshot(row: ResultRow, snapshot: Mapping[str, str]) -> bool:
+    return (
+        row.strategy_sha256 == snapshot["strategy_sha256"]
+        and row.experiment_sha256 == snapshot["experiment_sha256"]
+        and row.protocol_sha256 == snapshot["protocol_sha256"]
+        and row.rationale_sha256 == snapshot["rationale_sha256"]
+    )
+
+
+def _source_snapshot(
+    root: Path,
+    *,
+    strategy_path: str | Path,
+    experiment_path: str | Path,
+    protocol_path: str | Path,
+    rationale_path: str | Path,
+) -> dict[str, str]:
+    return {
+        "strategy_sha256": _sha256_path(root / strategy_path),
+        "experiment_sha256": _sha256_path(root / experiment_path),
+        "protocol_sha256": _sha256_path(root / protocol_path),
+        "rationale_sha256": _sha256_path(root / rationale_path),
+    }
+
+
+def _ensure_can_attempt(rows: Sequence[ResultRow], snapshot: Mapping[str, str]) -> None:
+    if not rows:
+        return
+    latest = rows[-1]
+    if latest.continuation == "terminal":
+        raise ValueError(f"thesis already stopped: {latest.stop_reason}")
+    if latest.continuation == "repair_required" and _same_source_snapshot(latest, snapshot):
+        raise ValueError("previous crash requires a source, params, protocol, or rationale repair")
+
+
 def _default_runner(config_path, *, repo_root=None, event_sink=None):
     from quant_strategies.runner import run_config
 
@@ -56,7 +126,7 @@ def _default_runner(config_path, *, repo_root=None, event_sink=None):
 def _trades_from_result(result: object) -> tuple[TradeSample, ...]:
     economics = getattr(result, "economics", None)
     if economics is None:
-        return ()
+        raise ValueError("run_config result missing economics")
     samples: list[TradeSample] = []
     for trade in getattr(economics, "trades", ()):
         samples.append(
@@ -86,40 +156,53 @@ def _parse_window_end(value: str) -> datetime:
     return parsed
 
 
-def _append_crash(
+def _make_crash_row(
     *,
-    results_path: str | Path,
+    provenance: AttemptProvenance,
     commit: str,
     iteration: int,
     params: Mapping[str, object],
     components: Sequence[str],
     elapsed_seconds: float,
     note: str,
-) -> None:
-    append_result(
-        results_path,
-        ResultRow(
-            commit=commit,
-            iteration=iteration,
-            score=None,
-            gates_passed=False,
-            gate_flags="run_config=fail",
-            trade_count=0,
-            concentration=None,
-            cost_stress=None,
-            net_return_sum=None,
-            avg_trade_net=None,
-            win_rate=None,
-            profit_factor=None,
-            gross_return_sum=None,
-            cost_return_sum=None,
-            complexity_count=max(len(params), len(tuple(components))),
-            status="crash",
-            stop_reason="",
-            elapsed_seconds=elapsed_seconds,
-            note=note,
-        ),
+    stop_reason: str,
+) -> ResultRow:
+    return ResultRow(
+        run_id=provenance.run_id,
+        commit=commit,
+        artifact_dir=provenance.artifact_dir,
+        worktree_dirty=provenance.worktree_dirty,
+        strategy_sha256=provenance.strategy_sha256,
+        experiment_sha256=provenance.experiment_sha256,
+        protocol_sha256=provenance.protocol_sha256,
+        rationale_sha256=provenance.rationale_sha256,
+        quick_config_sha256=provenance.quick_config_sha256,
+        iteration=iteration,
+        score=None,
+        gates_passed=False,
+        gate_flags="run_config=fail",
+        subwindow_trade_counts=(),
+        trade_count=0,
+        concentration=None,
+        cost_stress=None,
+        net_return_sum=None,
+        avg_trade_net=None,
+        win_rate=None,
+        profit_factor=None,
+        gross_return_sum=None,
+        cost_return_sum=None,
+        complexity_count=max(len(params), len(tuple(components))),
+        status="crash",
+        best_status="unchanged",
+        continuation="terminal" if stop_reason else "repair_required",
+        stop_reason=stop_reason,
+        elapsed_seconds=elapsed_seconds,
+        note=note,
     )
+
+
+def _append_crash(*, results_path: str | Path, row: ResultRow) -> None:
+    append_result(results_path, row)
 
 
 def _profit_factor(trades: Sequence[TradeSample]) -> float | None:
@@ -139,6 +222,93 @@ def _sum_optional(values: Sequence[float | None]) -> float | None:
     return float(sum(present))
 
 
+def _non_improving_since_best(rows: Sequence[ResultRow]) -> int:
+    kept_iterations = [row.iteration for row in rows if row.status == "keep"]
+    if not kept_iterations:
+        return 0
+    last_keep = max(kept_iterations)
+    return sum(1 for row in rows if row.iteration > last_keep)
+
+
+def _stop_reason_after_attempt(
+    rows: Sequence[ResultRow],
+    *,
+    gates: GateSet | None,
+    loop_config,
+) -> str:
+    completed = len(rows)
+    if gates is not None and not gates.by_name["complexity_cap"].passed:
+        return "complexity_exhausted"
+    has_keep = any(row.status == "keep" for row in rows)
+    if not has_keep and completed >= loop_config.baseline_grace_iterations:
+        return "baseline_failure"
+    if has_keep and _non_improving_since_best(rows) >= loop_config.plateau_patience:
+        return "plateau"
+    if completed >= loop_config.max_iterations:
+        return "max_iterations"
+    return ""
+
+
+def _best_row(rows: Sequence[ResultRow]) -> ResultRow | None:
+    kept = [row for row in rows if row.status == "keep" and row.score is not None]
+    if not kept:
+        return None
+    return max(kept, key=lambda row: row.score if row.score is not None else float("-inf"))
+
+
+def _copy_if_present(source: Path, destination: Path) -> str | None:
+    try:
+        content = source.read_bytes()
+    except OSError:
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(content)
+    return str(destination)
+
+
+def _write_terminal_manifest(
+    root: Path,
+    *,
+    row: ResultRow,
+    rows: Sequence[ResultRow],
+    protocol_path: str | Path = "protocol.toml",
+    experiment_path: str | Path = "experiment.toml",
+    rationale_path: str | Path = "rationale.md",
+) -> None:
+    best = _best_row(rows)
+    status = "train_survivor" if best is not None else "train_failure"
+    manifest_dir = root / row.artifact_dir
+    snapshot_dir = manifest_dir / "snapshot"
+    snapshot_paths = {
+        "strategy": _copy_if_present(root / "strategy.py", snapshot_dir / "strategy.py"),
+        "experiment": _copy_if_present(root / experiment_path, snapshot_dir / "experiment.toml"),
+        "protocol": _copy_if_present(root / protocol_path, snapshot_dir / "protocol.toml"),
+        "rationale": _copy_if_present(root / rationale_path, snapshot_dir / "rationale.md"),
+    }
+    snapshot_paths["quick_config"] = _copy_if_present(
+        root / ".autoresearch" / "quick" / f"{row.run_id}.toml",
+        snapshot_dir / "quick_config.toml",
+    )
+    if best is not None:
+        snapshot_paths["best_quick_config"] = _copy_if_present(
+            root / ".autoresearch" / "quick" / f"{best.run_id}.toml",
+            snapshot_dir / "best_quick_config.toml",
+        )
+    destination = manifest_dir / "terminal_manifest.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "stop_reason": row.stop_reason,
+        "run_id": row.run_id,
+        "attempt": row.as_record(),
+        "best_attempt": None if best is None else best.as_record(),
+        "snapshot_paths": snapshot_paths,
+        "results_tsv": "results.tsv",
+        "disclaimer": "Train evidence only; not OOS, paper, live, or deployability evidence.",
+    }
+    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 def run_iteration(
     protocol: ProtocolConfig,
     *,
@@ -149,16 +319,37 @@ def run_iteration(
     best_score: float | None,
     runner: Runner | None = None,
     workdir: str | Path = ".",
+    prior_rows: Sequence[ResultRow] = (),
+    protocol_path: str | Path = "protocol.toml",
+    experiment_path: str | Path = "experiment.toml",
+    rationale_path: str | Path = "rationale.md",
 ) -> IterationOutcome:
     start = time.monotonic()
     root = Path(workdir)
+    source_hashes = _source_snapshot(
+        root,
+        strategy_path=protocol.strategy_path,
+        experiment_path=experiment_path,
+        protocol_path=protocol_path,
+        rationale_path=rationale_path,
+    )
+    _ensure_can_attempt(prior_rows, source_hashes)
+    run_id = f"attempt-{iteration:04d}"
     run_dir = root / ".autoresearch" / "quick"
-    config_path = run_dir / f"iteration_{iteration}.toml"
+    config_path = run_dir / f"{run_id}.toml"
+    artifact_dir = Path("results") / "autoresearch" / run_id
     write_quick_run_config(
         protocol,
         params,
         config_path,
-        results_dir=Path("results") / "autoresearch" / f"iteration_{iteration}",
+        results_dir=artifact_dir,
+    )
+    provenance = AttemptProvenance(
+        run_id=run_id,
+        artifact_dir=str(artifact_dir),
+        worktree_dirty=_tracked_worktree_dirty(root),
+        quick_config_sha256=_sha256_path(config_path),
+        **source_hashes,
     )
 
     run = runner or _default_runner
@@ -167,39 +358,105 @@ def run_iteration(
         result = run(config_path, repo_root=root)
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
         elapsed = time.monotonic() - start
-        _append_crash(
-            results_path=results_path,
+        stop_reason = _stop_reason_after_attempt(
+            (
+                *prior_rows,
+                _make_crash_row(
+                    provenance=provenance,
+                    commit=commit,
+                    iteration=iteration,
+                    params=params,
+                    components=components,
+                    elapsed_seconds=elapsed,
+                    note=str(exc),
+                    stop_reason="",
+                ),
+            ),
+            gates=None,
+            loop_config=protocol.loop,
+        )
+        crash_row = _make_crash_row(
+            provenance=provenance,
             commit=commit,
             iteration=iteration,
             params=params,
             components=components,
             elapsed_seconds=elapsed,
             note=str(exc),
+            stop_reason=stop_reason,
         )
+        _append_crash(
+            results_path=results_path,
+            row=crash_row,
+        )
+        row = read_results(results_path)[-1]
+        if row.stop_reason:
+            _write_terminal_manifest(
+                root,
+                row=row,
+                rows=(*prior_rows, row),
+                protocol_path=protocol_path,
+                experiment_path=experiment_path,
+                rationale_path=rationale_path,
+            )
         return IterationOutcome(
             status="crash",
             score=None,
             gates_passed=False,
             gates=None,
+            row=row,
+            stop_reason=stop_reason,
             message=str(exc),
         )
     elapsed = time.monotonic() - start
 
     if not getattr(result, "succeeded", False):
-        _append_crash(
-            results_path=results_path,
+        temp_row = _make_crash_row(
+            provenance=provenance,
             commit=commit,
             iteration=iteration,
             params=params,
             components=components,
             elapsed_seconds=elapsed,
             note=str(getattr(result, "message", "run failed")),
+            stop_reason="",
         )
+        stop_reason = _stop_reason_after_attempt(
+            (*prior_rows, temp_row),
+            gates=None,
+            loop_config=protocol.loop,
+        )
+        crash_row = _make_crash_row(
+            provenance=provenance,
+            commit=commit,
+            iteration=iteration,
+            params=params,
+            components=components,
+            elapsed_seconds=elapsed,
+            note=str(getattr(result, "message", "run failed")),
+            stop_reason=stop_reason,
+        )
+        _append_crash(
+            results_path=results_path,
+            row=crash_row,
+        )
+        row = read_results(results_path)[-1]
+        if row.stop_reason:
+            _write_terminal_manifest(
+                root,
+                row=row,
+                rows=(*prior_rows, row),
+                protocol_path=protocol_path,
+                experiment_path=experiment_path,
+                rationale_path=rationale_path,
+            )
         return IterationOutcome(
             status="crash",
             score=None,
             gates_passed=False,
             gates=None,
+            row=row,
+            stop_reason=stop_reason,
             message=str(getattr(result, "message", "run failed")),
         )
 
@@ -225,20 +482,52 @@ def run_iteration(
             window_end=window_end,
         )
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
-        _append_crash(
-            results_path=results_path,
+        temp_row = _make_crash_row(
+            provenance=provenance,
             commit=commit,
             iteration=iteration,
             params=params,
             components=components,
             elapsed_seconds=elapsed,
             note=str(exc),
+            stop_reason="",
         )
+        stop_reason = _stop_reason_after_attempt(
+            (*prior_rows, temp_row),
+            gates=None,
+            loop_config=protocol.loop,
+        )
+        crash_row = _make_crash_row(
+            provenance=provenance,
+            commit=commit,
+            iteration=iteration,
+            params=params,
+            components=components,
+            elapsed_seconds=elapsed,
+            note=str(exc),
+            stop_reason=stop_reason,
+        )
+        _append_crash(
+            results_path=results_path,
+            row=crash_row,
+        )
+        row = read_results(results_path)[-1]
+        if row.stop_reason:
+            _write_terminal_manifest(
+                root,
+                row=row,
+                rows=(*prior_rows, row),
+                protocol_path=protocol_path,
+                experiment_path=experiment_path,
+                rationale_path=rationale_path,
+            )
         return IterationOutcome(
             status="crash",
             score=None,
             gates_passed=False,
             gates=None,
+            row=row,
+            stop_reason=stop_reason,
             message=str(exc),
         )
     cost_stress_score = stress.score
@@ -249,17 +538,28 @@ def run_iteration(
         config=protocol.gates,
         cost_stress_score=cost_stress_score,
         train_score=objective.score,
+        subwindow_trade_counts=objective.subwindow_trade_counts,
     )
     keep = is_improvement(objective.score, best_score, gates.passed, protocol.loop)
     status = "keep" if keep else "discard"
-    append_result(
-        results_path,
+    best_status = "updated" if keep else "unchanged"
+    rows_for_stop = (
+        *prior_rows,
         ResultRow(
+            run_id=provenance.run_id,
             commit=commit,
+            artifact_dir=provenance.artifact_dir,
+            worktree_dirty=provenance.worktree_dirty,
+            strategy_sha256=provenance.strategy_sha256,
+            experiment_sha256=provenance.experiment_sha256,
+            protocol_sha256=provenance.protocol_sha256,
+            rationale_sha256=provenance.rationale_sha256,
+            quick_config_sha256=provenance.quick_config_sha256,
             iteration=iteration,
             score=objective.score,
             gates_passed=gates.passed,
             gate_flags=gates.flags(),
+            subwindow_trade_counts=objective.subwindow_trade_counts,
             trade_count=len(trades),
             concentration=symbol_concentration(trades) if trades else None,
             cost_stress=cost_stress_score,
@@ -279,16 +579,79 @@ def run_iteration(
             cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
             complexity_count=max(len(params), len(tuple(components))),
             status=status,
+            best_status=best_status,
+            continuation="allowed",
             stop_reason="",
             elapsed_seconds=elapsed,
             note=objective.detail,
         ),
     )
+    stop_reason = _stop_reason_after_attempt(
+        rows_for_stop,
+        gates=gates,
+        loop_config=protocol.loop,
+    )
+    continuation = "terminal" if stop_reason else "allowed"
+    append_result(
+        results_path,
+        ResultRow(
+            run_id=provenance.run_id,
+            commit=commit,
+            artifact_dir=provenance.artifact_dir,
+            worktree_dirty=provenance.worktree_dirty,
+            strategy_sha256=provenance.strategy_sha256,
+            experiment_sha256=provenance.experiment_sha256,
+            protocol_sha256=provenance.protocol_sha256,
+            rationale_sha256=provenance.rationale_sha256,
+            quick_config_sha256=provenance.quick_config_sha256,
+            iteration=iteration,
+            score=objective.score,
+            gates_passed=gates.passed,
+            gate_flags=gates.flags(),
+            subwindow_trade_counts=objective.subwindow_trade_counts,
+            trade_count=len(trades),
+            concentration=symbol_concentration(trades) if trades else None,
+            cost_stress=cost_stress_score,
+            net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
+            avg_trade_net=(
+                float(sum(trade.net_return for trade in trades) / len(trades))
+                if trades
+                else None
+            ),
+            win_rate=(
+                sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
+                if trades
+                else None
+            ),
+            profit_factor=_profit_factor(trades),
+            gross_return_sum=_sum_optional(tuple(trade.gross_return for trade in trades)),
+            cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
+            complexity_count=max(len(params), len(tuple(components))),
+            status=status,
+            best_status=best_status,
+            continuation=continuation,
+            stop_reason=stop_reason,
+            elapsed_seconds=elapsed,
+            note=objective.detail,
+        ),
+    )
+    row = read_results(results_path)[-1]
+    if row.stop_reason:
+        _write_terminal_manifest(
+            root,
+            row=row,
+            rows=(*prior_rows, row),
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
+        )
     return IterationOutcome(
         status=status,
         score=objective.score,
         gates_passed=gates.passed,
         gates=gates,
+        row=row,
+        stop_reason=stop_reason,
     )
 
 
@@ -321,19 +684,24 @@ def climb_once(
         raise ValueError(thesis_error)
     cfg = load_protocol(protocol_path)
     rows = read_results(results_path)
+    params = load_params(params_path)
     best_score = max(
         (row.score for row in rows if row.status == "keep" and row.score is not None),
         default=None,
     )
     return run_iteration(
         cfg,
-        params=load_params(params_path),
+        params=params,
         components=components,
         results_path=results_path,
         iteration=len(rows) + 1,
         best_score=best_score,
         runner=runner,
         workdir=Path("."),
+        prior_rows=rows,
+        protocol_path=protocol_path,
+        experiment_path=params_path,
+        rationale_path="rationale.md",
     )
 
 
@@ -356,8 +724,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "climb":
         outcome = climb_once(mechanism=args.mechanism, falsifier=args.falsifier)
-        print(f"status: {outcome.status}")
-        print(f"score: {outcome.score}")
+        if outcome.row is None:
+            print(f"status: {outcome.status}")
+            print(f"score: {outcome.score}")
+        else:
+            for key, value in outcome.row.as_record().items():
+                print(f"{key}: {value}")
         return 0
     raise AssertionError(args.command)
 

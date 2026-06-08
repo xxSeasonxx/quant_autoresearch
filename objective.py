@@ -37,6 +37,7 @@ class ObjectiveResult:
     score: float | None
     feasible: bool
     subwindow_scores: tuple[float, ...]
+    subwindow_trade_counts: tuple[int, ...]
     detail: str = ""
 
 
@@ -63,6 +64,7 @@ def _time_buckets(
     if not ordered:
         return ()
     start = window_start or ordered[0].decision_time
+    include_end = window_end is None
     end = window_end or ordered[-1].decision_time
     if end < start:
         raise ValueError("window_end must be >= window_start")
@@ -72,7 +74,12 @@ def _time_buckets(
     total_seconds = (end - start).total_seconds()
     buckets: list[list[TradeSample]] = [[] for _ in range(subwindows)]
     for trade in ordered:
-        if trade.decision_time < start or trade.decision_time >= end:
+        if trade.decision_time < start:
+            continue
+        if include_end:
+            if trade.decision_time > end:
+                continue
+        elif trade.decision_time >= end:
             continue
         offset = (trade.decision_time - start).total_seconds()
         index = min(subwindows - 1, int(offset / total_seconds * subwindows))
@@ -94,10 +101,12 @@ def score_worst_subwindow(
             score=None,
             feasible=False,
             subwindow_scores=(),
+            subwindow_trade_counts=(),
             detail="no trades",
         )
 
     scores: list[float] = []
+    counts: list[int] = []
     for chunk in _time_buckets(
         trades,
         subwindows=subwindows,
@@ -105,11 +114,13 @@ def score_worst_subwindow(
         window_end=window_end,
     ):
         values = [float(trade.net_return) for trade in chunk]
+        counts.append(len(values))
         if any(not isfinite(value) for value in values):
             return ObjectiveResult(
                 score=None,
                 feasible=False,
                 subwindow_scores=tuple(scores),
+                subwindow_trade_counts=tuple(counts),
                 detail="non-finite trade return",
             )
         scores.append(_score_returns(values))
@@ -119,12 +130,14 @@ def score_worst_subwindow(
             score=None,
             feasible=False,
             subwindow_scores=(),
+            subwindow_trade_counts=(),
             detail="no valid subwindows",
         )
     return ObjectiveResult(
         score=min(scores),
         feasible=True,
         subwindow_scores=tuple(scores),
+        subwindow_trade_counts=tuple(counts),
     )
 
 

@@ -109,6 +109,10 @@ subwindows = 6
 # Minimum completed trades required before the score can be considered alive.
 # Smoke/debug alternative: min_trades = 4
 min_trades = 100
+# Minimum completed trades required in every configured objective subwindow.
+# This prevents idle Train slices from counting as robustness evidence.
+# Smoke/debug alternative: min_trades_per_subwindow = 1
+min_trades_per_subwindow = 8
 # Maximum share of absolute net trade activity carried by one symbol. Lower is
 # stricter diversification; 0.80 is permissive for a two-symbol smoke protocol.
 max_symbol_concentration = 0.80

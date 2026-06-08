@@ -166,8 +166,9 @@ read-only protocol (Open/Closed seam — add a fourth without touching the loop 
 gates):
 
 - `worst_subwindow` *(default)* — split Train into `K` contiguous subwindows; the
-  number is the **min after-cost Sharpe** across them. The edge must show up even
-  in the worst slice. Simplest, interpretable, asset-agnostic.
+  number is the minimum after-cost trade-unit robustness score across them. The
+  edge must show up even in the worst slice. Simplest, interpretable,
+  asset-agnostic.
 - `breadth_median` — median after-cost Sharpe across **symbol × subwindow** cells,
   penalized by dispersion. Rewards an edge that generalizes across the universe.
   Use for real cross-sections; degenerates for single-instrument strategies.

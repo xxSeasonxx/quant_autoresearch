@@ -55,8 +55,10 @@ Do not run `evaluate`. Do not import evaluation APIs. Do not read or create OOS 
 A quick run is summarized by:
 
 ```text
+run_id: <attempt id>
 score: <objective score or blank>
 gates: <gate=pass/fail,...>
+subwindow_trade_counts: <comma-separated counts>
 trade_count: <integer>
 concentration: <0..1 or blank>
 cost_stress: <number or blank>
@@ -68,20 +70,23 @@ gross_return_sum: <sum gross trade returns or blank>
 cost_return_sum: <sum trade cost returns or blank>
 complexity_count: <integer>
 status: keep | discard | crash
+best_status: updated | unchanged
+continuation: allowed | repair_required | terminal
+stop_reason: <blank or configured stop reason>
 elapsed_seconds: <float>
 ```
 
-`score` is the configured Train robustness objective. Gates are binary and separate from the score.
+`score` is the configured Train trade-unit robustness objective. Gates are binary and separate from the score. Result rows also include candidate/protocol/artifact hashes so evidence can be tied to the exact attempt.
 
 ## Logging Results
 
 Append every attempted iteration to `results.tsv`. It is tab-separated, not comma-separated.
 
 ```text
-commit	iteration	score	gates_passed	gate_flags	trade_count	concentration	cost_stress	net_return_sum	avg_trade_net	win_rate	profit_factor	gross_return_sum	cost_return_sum	complexity_count	status	stop_reason	elapsed_seconds	note
+run_id	commit	artifact_dir	worktree_dirty	strategy_sha256	experiment_sha256	protocol_sha256	rationale_sha256	quick_config_sha256	iteration	score	gates_passed	gate_flags	subwindow_trade_counts	trade_count	concentration	cost_stress	net_return_sum	avg_trade_net	win_rate	profit_factor	gross_return_sum	cost_return_sum	complexity_count	status	best_status	continuation	stop_reason	elapsed_seconds	note
 ```
 
-Use `status=keep` only when the candidate passes all gates and improves beyond the configured plateau threshold. Use `discard` for a valid but non-keepable attempt. Use `crash` for failed runs or invalid candidates.
+Use `status=keep` only when the candidate passes all gates and improves beyond the configured plateau threshold. Use `discard` for a valid but non-keepable attempt. Use `crash` for failed runs or invalid candidates. A discarded attempt does not update the best Train survivor, but the working variant may still be a useful starting point for the next thesis-guided edit when `continuation=allowed`.
 
 ## You Are A Quant Researcher
 
@@ -123,7 +128,7 @@ Loop for the current thesis until a configured stop rule fires:
    all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
    ```
    where `eps = min_abs_improvement` and `rho = min_rel_improvement`.
-9. Otherwise revert to the prior best kept candidate.
+9. Only `keep` advances the best Train survivor. `discard` and `crash` never become handoff candidates, but a discarded working variant may remain the base for the next thesis-guided edit when it is still simple, causal, and connected to the thesis.
 10. Append exactly one `results.tsv` row.
 11. Stop when one fires:
     - `plateau_patience` consecutive completed non-improving attempts after a feasible baseline.

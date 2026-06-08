@@ -297,9 +297,9 @@ For this repo, the right translation is:
 
 | No. | Status | Priority | Action class | Finding / recommendation | Rationale | Verify |
 |---:|---|---|---|---|---|---|
-| 1 | Open | P0 | Add | Add per-subwindow evidence coverage: `min_trades_per_subwindow` or infeasible empty subwindows. | Prevent temporal cherry-picking and false robustness. | Unit test clustered trades fail coverage gate. |
-| 2 | Open | P0 | Refactor | Add explicit `RunState` / `StopDecision` / handoff lifecycle boundary. | Make plateau, max-iterations, baseline failure, reversion, and stop reasons executable. | Tests for plateau, max iterations, baseline grace, stop reasons, and handoff manifest. |
-| 3 | Open | P0 | Add | Extend `results.tsv` with provenance columns and artifact path. | Prevent stale/dirty evidence from influencing decisions. | Test dirty worktree and hash columns are recorded. |
+| 1 | Addressed | P0 | Add | Add per-subwindow evidence coverage: `min_trades_per_subwindow` or infeasible empty subwindows. | Prevent temporal cherry-picking and false robustness. | Unit test clustered trades fail coverage gate. |
+| 2 | Addressed | P0 | Refactor | Add explicit `RunState` / `StopDecision` / handoff lifecycle boundary. | Make plateau, max-iterations, baseline failure, reversion, and stop reasons executable. | Tests for plateau, max iterations, baseline grace, stop reasons, and handoff manifest. |
+| 3 | Addressed | P0 | Add | Extend `results.tsv` with provenance columns and artifact path. | Prevent stale/dirty evidence from influencing decisions. | Test dirty worktree and hash columns are recorded. |
 | 4 | Open | P1 | Add | Parse and enforce `[bounds]` from `experiment.toml`. | Make bounded params real rather than advisory. | Out-of-bound params fail before run. |
 | 5 | Open | P1 | Add | Make component/rationale accounting first-class in the CLI or derive it from `rationale.md`. | Stop complexity gate from being bypassed by default. | CLI/rationale count test affects complexity gate. |
 | 6 | Open | P2 | Refactor | Treat `succeeded=True` with missing economics as crash. | Keep operational failures out of strategy evidence. | Unit test with missing economics on a successful runner result. |

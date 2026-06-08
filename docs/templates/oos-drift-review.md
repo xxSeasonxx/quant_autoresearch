@@ -1,6 +1,6 @@
 # OOS Drift Review
 
-Use this template only after a frozen Train survivor exists. This is a one-look downstream review owned by Season. The OOS result MUST NOT be used to tune the same candidate's strategy, params, protocol, or rationale.
+Use this template only after a frozen Train survivor exists. This is a one-look downstream review owned by Season. It is not an active-loop input. The OOS result MUST NOT be used to tune the same candidate's strategy, params, protocol, or rationale.
 
 ## Candidate Identity
 

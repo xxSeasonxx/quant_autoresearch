@@ -79,3 +79,18 @@ def test_program_documents_results_tsv_and_plateau_stop():
     assert "plateau" in text
     assert "max_iterations" in text
     assert "plateau_patience" in text
+
+
+def test_program_defines_artifact_authority_for_active_loop():
+    text = _normalized()
+    assert "artifact authority" in text
+    assert "active loop inputs" in text
+    assert "latest quick-run artifact directory recorded in `results.tsv`" in text
+    assert "generated audit and handoff artifacts" in text
+    assert "season downstream-only artifacts" in text
+    assert "historical or non-contract context" in text
+    assert "terminal manifests" in text
+    assert "not routine inputs for choosing train edits" in text
+    assert "do not browse the rest of the repo during ordinary train iteration" in text
+    assert "oos drift reviews" in text
+    assert "must not be used during train iteration" in text

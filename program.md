@@ -24,6 +24,20 @@ To start a new thesis run, work with Season to:
 6. Initialize `results.tsv` with only the header row if it does not exist.
 7. Confirm setup, then begin.
 
+## Artifact Authority
+
+Active loop inputs are the files and outputs the agent uses during Train iteration:
+
+- `program.md`, `protocol.toml`, `experiment.toml`, `strategy.py`, and `rationale.md`
+- recent `results.tsv`
+- the latest quick-run artifact directory recorded in `results.tsv`, especially diagnostics needed to choose the next Train edit
+
+Generated audit and handoff artifacts are not source and are not routine inputs for choosing Train edits. This includes `.autoresearch/thesis_lock.json`, per-attempt source snapshots, and terminal manifests.
+
+Season downstream-only artifacts include OOS drift reviews, OOS evaluation artifacts, paper notes, and small-live notes. They must not be used during Train iteration and must not feed back into this loop for the same candidate.
+
+Do not browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks. Historical or non-contract context includes review docs, historical design docs, and archived OpenSpec changes.
+
 ## Experimentation
 
 The loop uses Train-only quick runs. It is a development filter, not proof of an edge.

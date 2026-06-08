@@ -43,6 +43,20 @@ The agent does not edit:
 
 Those live in `protocol.toml` and are chosen before a thesis starts.
 
+## Artifact Authority
+
+During an active thesis loop, the agent's active loop inputs are:
+
+- `program.md`, `protocol.toml`, `experiment.toml`, `strategy.py`, and `rationale.md`
+- recent `results.tsv`
+- the latest quick-run artifact directory recorded in `results.tsv`, especially diagnostics needed to choose the next Train edit
+
+Generated audit and handoff artifacts are evidence records, not source. Thesis locks, source snapshots, and terminal manifests preserve what happened and what should be handed to Season after a stop rule fires; they are not routine inputs for choosing Train edits.
+
+Season downstream-only artifacts include OOS drift reviews, OOS evaluation artifacts, paper-test notes, and small-live notes. They must not feed back into the same Train loop.
+
+Do not browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks. Historical or non-contract context includes `docs/reviews/`, archived OpenSpec changes, and historical design discussion.
+
 ## Loop
 
 For one thesis:

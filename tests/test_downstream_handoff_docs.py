@@ -54,3 +54,20 @@ def test_auto_research_docs_keep_oos_out_of_loop():
 
     assert "downstream oos drift review is season-owned" in text
     assert "must not feed back into this loop" in text
+
+
+def test_docs_define_active_loop_and_downstream_artifact_authority():
+    readme = _read("README.md").lower()
+    oos_template = _read("docs/templates/oos-drift-review.md").lower()
+
+    assert "artifact authority" in readme
+    assert "active loop inputs" in readme
+    assert "latest quick-run artifact directory recorded in `results.tsv`" in readme
+    assert "generated audit and handoff artifacts" in readme
+    assert "season downstream-only artifacts" in readme
+    assert "historical or non-contract context" in readme
+    assert "terminal manifests" in readme
+    assert "not routine inputs for choosing train edits" in readme
+    assert "do not browse the rest of the repo during ordinary train iteration" in readme
+    assert "one-look downstream review" in oos_template
+    assert "not an active-loop input" in oos_template

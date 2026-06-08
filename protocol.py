@@ -44,6 +44,8 @@ class OutputConfig:
     diagnostic_sample_trades: int = 0
     causality_check: str = "emitted"
     strict_probe_limit: int | None = None
+    focused_probe_limit: int | None = None
+    focused_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -126,8 +128,8 @@ def _boolean(value: object, *, name: str) -> bool:
 
 def _causality_check(value: object, *, name: str) -> str:
     parsed = str(value)
-    if parsed not in {"off", "emitted", "strict"}:
-        raise ValueError(f"{name} must be one of: off, emitted, strict")
+    if parsed not in {"off", "emitted", "strict", "focused"}:
+        raise ValueError(f"{name} must be one of: off, emitted, strict, focused")
     return parsed
 
 
@@ -255,6 +257,18 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             strict_probe_limit=_optional_nonnegative_int(
                 raw_output.get("strict_probe_limit"),
                 name="output.strict_probe_limit",
+            ),
+            focused_probe_limit=_optional_nonnegative_int(
+                raw_output.get("focused_probe_limit"),
+                name="output.focused_probe_limit",
+            ),
+            focused_timeout_seconds=(
+                None
+                if raw_output.get("focused_timeout_seconds") is None
+                else _nonnegative_float(
+                    raw_output.get("focused_timeout_seconds"),
+                    name="output.focused_timeout_seconds",
+                )
             ),
         ),
         loop=LoopConfig(
@@ -395,6 +409,10 @@ def build_quick_run_config(
     }
     if protocol.output.strict_probe_limit is not None:
         output_block["strict_probe_limit"] = protocol.output.strict_probe_limit
+    if protocol.output.focused_probe_limit is not None:
+        output_block["focused_probe_limit"] = protocol.output.focused_probe_limit
+    if protocol.output.focused_timeout_seconds is not None:
+        output_block["focused_timeout_seconds"] = protocol.output.focused_timeout_seconds
     return {
         "strategy_path": protocol.strategy_path,
         "strategy_id": protocol.strategy_id,

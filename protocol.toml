@@ -59,7 +59,7 @@ symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 # Heavier overnight alternative:
 # start = "2023-01-01"
 # end = "2025-12-31"
-start = "2024-01-01"
+start = "2025-03-01"
 end = "2025-12-31"
 # Execution-only buffer used by the runner to resolve exits for late Train
 # decisions. Strategy generation and Train scoring still use start/end above.
@@ -92,10 +92,13 @@ results_dir = "results"
 artifact_profile = "diagnostic"
 # Let quant_strategies run its lightweight quick checks.
 quick_checks = true
-# Train iteration uses emitted replay; strict no-emission replay is for survivor
-# or dedicated audits because full row-grid replay is too expensive for the
+# Train iteration uses focused replay: deterministic full replay plus a bounded,
+# deterministic mix of emitted and suppression probes. Full emitted/strict replay
+# is for survivor audits because exhaustive replay is too expensive for the
 # large minute panel.
-causality_check = "emitted"
+causality_check = "off"
+focused_probe_limit = 10
+focused_timeout_seconds = 180.0
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
 

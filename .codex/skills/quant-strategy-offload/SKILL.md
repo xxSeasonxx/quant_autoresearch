@@ -1,6 +1,6 @@
 ---
 name: quant-strategy-offload
-description: Use when offloading a completed quant_autoresearch thesis into a downstream strategy repository, either a Train survivor for evaluation or a failed/abandoned thesis for archive and cleanup. Covers choosing researched vs candidates destination, curating evidence, writing survivor README or failed-thesis verdict, and cleaning the research bench afterward.
+description: Use when offloading a completed quant_autoresearch thesis into a downstream strategy repository, either a Train survivor for evaluation or a failed/abandoned thesis for archive and cleanup. Covers using the quant_strategies/researched destination, curating evidence, writing survivor README or failed-thesis verdict, and cleaning the research bench afterward.
 ---
 
 # Quant Strategy Offload
@@ -14,19 +14,15 @@ There are two modes:
 - **Survivor offload:** a Train survivor exists and Season wants a package for downstream OOS/paper/small-live evaluation.
 - **Failed-thesis offload:** no Train survivor exists, or Season explicitly calls the thesis failed/paused and wants the useful lessons preserved before cleaning the bench.
 
-Default survivor destination:
+Default destination for completed Train theses:
 
 ```text
 ~/Personal/quant_strategies/researched/<strategy-slug>/
 ```
 
-Default failed-thesis destination:
+Use `~/Personal/quant_strategies/researched/` for both Train survivors and failed/paused Train theses. The README verdict distinguishes `Train survivor` from `Failed on Train`.
 
-```text
-~/Personal/quant_strategies/candidates/<strategy-slug>/
-```
-
-Use `~/Personal/quant_strategies/researched/` for Train survivors. Use `~/Personal/quant_strategies/candidates/` for failed or paused executable strategy theses unless Season explicitly chooses otherwise.
+Use `~/Personal/quant_strategies/candidates/` only for manually seeded, unresearched, or pre-autoresearch strategy candidates unless Season explicitly chooses otherwise.
 
 ## Preconditions
 
@@ -80,7 +76,7 @@ Keep source files and evidence tied to exact attempts. Prefer copying frozen sna
 For failed-thesis offload, use a smaller layout:
 
 ```text
-~/Personal/quant_strategies/candidates/<strategy-slug>/
+~/Personal/quant_strategies/researched/<strategy-slug>/
   README.md
   rationale.md
   strategy.py
@@ -255,7 +251,7 @@ For failed-thesis offload:
 1. Confirm there is no Train survivor, or that Season explicitly wants a failed/paused thesis offloaded.
 2. Write the verdict first: one sentence for what failed and why it matters.
 3. Select 3-7 failed cases: best near-miss, terminal/final case, turning-point diagnostic, and one or two anti-patterns.
-4. Create destination under `~/Personal/quant_strategies/candidates/<strategy-slug>/`.
+4. Create destination under `~/Personal/quant_strategies/researched/<strategy-slug>/`.
 5. Copy selected snapshots and diagnostics only; do not copy the full generated tree.
 6. Copy canonical `results.tsv`, current or curated `rationale.md`, and terminal manifest if present.
 7. Write `README.md` with the failed-thesis requirements above.
@@ -307,8 +303,8 @@ Never delete the only copy of a survivor, failed-case evidence, retained diagnos
 
 ## Destination Choice Guidance
 
-Use `quant_strategies/researched` when the package includes executable strategy code, provenance, and evaluation plans.
+Use `quant_strategies/researched` for completed `quant_autoresearch` Train theses, whether the verdict is a Train survivor or failed on Train.
 
-Use `quant_strategies/candidates` when the package records a failed or paused executable thesis, a compact verdict, and a few representative failed cases.
+Use `quant_strategies/candidates` for manually seeded, unresearched, or pre-autoresearch executable strategy candidates.
 
 Use a generic `strategies` repository only for prose-only ideas, non-executable playbooks, or strategy notes without quant evaluation artifacts.

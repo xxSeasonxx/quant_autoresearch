@@ -124,6 +124,11 @@ baseline_grace_iterations = 50
 [objective]
 # Robustness target selected before the thesis starts. The agent cannot pick a
 # friendlier objective after seeing results.
+# Currently supported objective kinds:
+# - worst_subwindow: score each configured Train time slice using trade-unit
+#   mean/std net return, then use the weakest slice as the run score.
+# Diagnostics such as aggregate net return, win rate, profit factor, and
+# cost-stressed score are not selectable objective kinds.
 kind = "worst_subwindow"
 # K: number of contiguous Train time slices for worst_subwindow. Six slices over
 # two years gives roughly quarterly robustness checks.

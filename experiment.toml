@@ -1,3 +1,8 @@
+# OFFLOADED THESIS CONFIG.
+# This thesis was moved to:
+# /Users/Season_Yang/Personal/quant_strategies/researched/crypto_perp_funding_crowding_reversal
+# Do not continue tuning this experiment in quant_autoresearch.
+#
 [params]
 funding_lookback_events = 5
 return_lookback_minutes = 120

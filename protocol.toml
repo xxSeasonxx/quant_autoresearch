@@ -104,18 +104,22 @@ diagnostic_sample_trades = 5
 
 [loop]
 # M: stop after this many consecutive completed non-improving attempts once a
-# feasible baseline exists.
-plateau_patience = 4
+# feasible baseline exists. Season overrode this on 2026-06-09 after the first
+# plateau stop to continue exit and take-profit exploration through the 50-run
+# budget.
+plateau_patience = 50
 # N: hard cap on completed attempts for this thesis.
-max_iterations = 80
+max_iterations = 100
 # eps: absolute score improvement required to reset plateau patience.
-min_abs_improvement = 0.01
+min_abs_improvement = 0.001
 # rho: relative score improvement required. 0 disables the relative component;
 # the effective threshold is max(eps, rho * max(1, abs(best_score))).
 min_rel_improvement = 0.0
 # Initial attempts allowed to find any feasible baseline before the thesis dies
-# on Train.
-baseline_grace_iterations = 6
+# on Train. Season overrode this run budget on 2026-06-09 to continue the
+# experiment through 50 completed attempts even if early attempts do not find a
+# feasible baseline.
+baseline_grace_iterations = 50
 
 [objective]
 # Robustness target selected before the thesis starts. The agent cannot pick a

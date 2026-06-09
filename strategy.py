@@ -1,4 +1,12 @@
-"""Strategy: crypto_perp_funding_crowding_reversal_stateful_rebalance
+"""OFFLOADED: crypto_perp_funding_crowding_reversal_stateful_rebalance.
+
+This thesis was offloaded to:
+/Users/Season_Yang/Personal/quant_strategies/researched/crypto_perp_funding_crowding_reversal
+
+Do not continue tuning this strategy in quant_autoresearch. Start a new thesis
+with Season before using this bench again.
+
+Strategy: crypto_perp_funding_crowding_reversal_stateful_rebalance
 
 Source / provenance:
 Internal crowding-reversal hypothesis derived from crypto perpetual futures
@@ -23,9 +31,13 @@ Signal rule:
 On a sparse as-of cadence, use completed prior closes and funding events at or
 before the as-of time. Emit decisions after the as-of bar can be observed. Short
 the strongest positive funding plus positive return tail, and optionally long
-the strongest negative funding plus negative return tail. Use the configured
-time hold as the max-hold fallback, but do not emit a new target for a symbol
-while a prior target for that symbol is still active.
+the strongest negative funding plus negative return tail. This simplified
+variant trades repeated long tranches when summed recent funding pressure is
+negative enough and price has extended down. It concentrates exposure in the
+higher-edge non-BTC long book, uses a 100-minute cadence, requires stronger
+funding pressure only during market-wide selloff regimes, and lets DOGE/LINK/ETH
+hold longer than ADA to test whether higher-edge symbols have a slower
+mean-reversion payoff. ADA remains the 8-hour coverage sleeve.
 
 Assumptions:
 Funding timestamps are known no later than the as-of time, market data
@@ -53,6 +65,10 @@ __all__ = ["validate_params", "generate_decisions"]
 
 _STRATEGY_ID = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 _REQUIRED_FIELDS = {"symbol", "timestamp", "close", "funding_timestamp", "funding_rate", "has_funding_event"}
+_EXCLUDED_LONG_SYMBOLS = frozenset({"BTC-PERP"})
+_EXTENDED_HOLD_LONG_SYMBOLS = frozenset({"DOGE-PERP", "ETH-PERP", "LINK-PERP"})
+_EXTENDED_HOLD_BARS = 848
+_LONG_WEIGHT_MULTIPLIER = 1.5
 
 
 class _SymbolRows:
@@ -196,7 +212,7 @@ def _generate_signal_payloads(
             timestamp
             for rows in rows_by_symbol.values()
             for timestamp in rows.timestamps
-            if _is_decision_time(timestamp, decision_interval_minutes, params)
+            if _is_long_decision_time(timestamp, decision_interval_minutes, params)
         }
     )
 
@@ -240,21 +256,26 @@ def _generate_signal_payloads(
         negative_tail = [
             candidate
             for candidate in candidates
-            if candidate["funding_pressure_bps"] <= -min_abs_funding_bps
+            if _passes_long_funding_pressure(candidate, _regime_funding_threshold(min_abs_funding_bps, market_return_bps))
             and candidate["return_extension_bps"] <= -min_abs_return_bps
-            and candidate["funding_same_sign_events"] >= min_same_sign_funding_events
             and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
             and _passes_return_z(candidate, min_abs_return_z)
             and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
             and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_long_idiosyncratic_return_bps)
+            and candidate["symbol"] not in _EXCLUDED_LONG_SYMBOLS
         ]
         if len(positive_tail) < min_tail_count:
             positive_tail = []
         if len(negative_tail) < min_tail_count:
             negative_tail = []
 
-        selected_shorts = _selected_tail(positive_tail, "short", selection_score, top_n)
+        selected_shorts: list[dict[str, Any]] = []
         selected_longs = _selected_tail(negative_tail, "long", selection_score, top_n) if include_negative_funding_longs else []
+        selected_longs = [
+            candidate
+            for candidate in selected_longs
+            if _passes_symbol_session_start_gate(candidate["symbol"], as_of_time, params)
+        ]
         if balance_sides:
             balanced_count = min(len(selected_shorts), len(selected_longs))
             selected_shorts = selected_shorts[:balanced_count]
@@ -296,7 +317,7 @@ def _generate_signal_payloads(
                 _record_active_window(
                     candidate["symbol"],
                     decision_time,
-                    hold,
+                    max(hold, short_hold_bars),
                     overlap_exit_buffer_bars,
                     active_until_by_symbol,
                     state_mode,
@@ -307,7 +328,7 @@ def _generate_signal_payloads(
                     candidate,
                     "long",
                     short_hold_bars,
-                    long_hold_bars,
+                    _symbol_long_hold_bars(candidate["symbol"], short_hold_bars, long_hold_bars),
                     high_extension_short_return_bps,
                     high_extension_short_hold_bars,
                 )
@@ -316,11 +337,6 @@ def _generate_signal_payloads(
                     decision_time,
                     last_signal_time_by_symbol,
                     symbol_cooldown_minutes,
-                ) and _passes_state_gate(
-                    candidate["symbol"],
-                    decision_time,
-                    active_until_by_symbol,
-                    state_mode,
                 ):
                     signals.append(
                         _signal(
@@ -328,7 +344,7 @@ def _generate_signal_payloads(
                             decision_time,
                             as_of_time,
                             "long",
-                            weight,
+                            weight * _LONG_WEIGHT_MULTIPLIER,
                             hold,
                             exit_controls,
                             state_mode,
@@ -768,6 +784,52 @@ def _passes_max_short_return_extension(
     return float(candidate["return_extension_bps"]) <= max_short_return_extension_bps
 
 
+def _passes_long_funding_pressure(
+    candidate: Mapping[str, Any],
+    min_abs_funding_bps: float,
+) -> bool:
+    return float(candidate["funding_pressure_bps"]) <= -min_abs_funding_bps
+
+
+def _passes_long_candidate(
+    candidate: Mapping[str, Any],
+    min_abs_funding_bps: float,
+    min_abs_return_bps: float,
+    min_latest_abs_funding_bps: float,
+    min_abs_return_z: float,
+    max_recent_same_direction_return_bps: float,
+    market_return_bps: float,
+    min_long_idiosyncratic_return_bps: float,
+) -> bool:
+    return (
+        _passes_long_funding_pressure(candidate, min_abs_funding_bps)
+        and candidate["return_extension_bps"] <= -min_abs_return_bps
+        and abs(candidate["latest_funding_bps"]) >= min_latest_abs_funding_bps
+        and _passes_return_z(candidate, min_abs_return_z)
+        and _passes_recent_cooloff(candidate, "long", max_recent_same_direction_return_bps)
+        and _passes_idiosyncratic_return(candidate, "long", market_return_bps, min_long_idiosyncratic_return_bps)
+        and candidate["symbol"] not in _EXCLUDED_LONG_SYMBOLS
+    )
+
+
+def _symbol_funding_threshold(symbol: object, min_abs_funding_bps: float) -> float:
+    if symbol == "ADA-PERP":
+        return min_abs_funding_bps
+    return max(min_abs_funding_bps, 1.5)
+
+
+def _regime_funding_threshold(min_abs_funding_bps: float, market_return_bps: float) -> float:
+    if market_return_bps <= -90.0:
+        return max(min_abs_funding_bps, 1.5)
+    return min_abs_funding_bps
+
+
+def _symbol_long_hold_bars(symbol: object, short_hold_bars: int, long_hold_bars: int) -> int:
+    if str(symbol) in _EXTENDED_HOLD_LONG_SYMBOLS:
+        return _EXTENDED_HOLD_BARS
+    return short_hold_bars
+
+
 def _candidate_hold_bars(
     candidate: Mapping[str, Any],
     side: str,
@@ -778,11 +840,6 @@ def _candidate_hold_bars(
 ) -> int:
     if side == "long":
         return long_hold_bars
-    if (
-        high_extension_short_return_bps > 0.0
-        and float(candidate["return_extension_bps"]) >= high_extension_short_return_bps
-    ):
-        return high_extension_short_hold_bars
     return short_hold_bars
 
 
@@ -878,6 +935,31 @@ def _is_decision_time(timestamp: datetime, decision_interval_minutes: int, param
         return False
     minute_of_day = timestamp.hour * 60 + timestamp.minute
     return minute_of_day % decision_interval_minutes == 0
+
+
+def _is_long_decision_time(timestamp: datetime, decision_interval_minutes: int, params: Mapping[str, object]) -> bool:
+    if _is_decision_time(timestamp, decision_interval_minutes, params):
+        return True
+    if decision_interval_minutes < 8:
+        return False
+    session_start_hour = int(params.get("session_start_hour", 0))
+    session_end_hour = int(params.get("session_end_hour", 24))
+    if timestamp.second or timestamp.microsecond:
+        return False
+    if not session_start_hour <= timestamp.hour < session_end_hour:
+        return False
+    minute_of_day = timestamp.hour * 60 + timestamp.minute
+    interval = 100
+    return interval > 0 and minute_of_day % interval == 0
+
+
+def _passes_symbol_session_start_gate(symbol: object, timestamp: datetime, params: Mapping[str, object]) -> bool:
+    if str(symbol) != "ADA-PERP":
+        return True
+    session_start_hour = int(params.get("session_start_hour", 0))
+    session_start_minute = session_start_hour * 60
+    minute_of_day = timestamp.hour * 60 + timestamp.minute
+    return not (session_start_minute <= minute_of_day <= session_start_minute + 100)
 
 
 def _signal(

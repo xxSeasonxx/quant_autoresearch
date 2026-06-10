@@ -11,7 +11,17 @@ import time
 from typing import Callable, Mapping, Sequence
 
 from gates import GateSet, evaluate_gates, symbol_concentration
-from objective import TradeSample, is_improvement, score_cost_stress, score_objective
+from objective import (
+    FoundationEvidence,
+    FoundationMetric,
+    FoundationScenario,
+    ObjectiveResult,
+    TradeSample,
+    is_improvement,
+    score_cost_stress,
+    score_foundation_cost_stress,
+    score_objective,
+)
 from protocol import (
     ExperimentConfig,
     ProtocolConfig,
@@ -235,9 +245,15 @@ def _default_runner(config_path, *, repo_root=None, event_sink=None):
     return run_config(config_path, repo_root=repo_root, event_sink=event_sink)
 
 
-def _trades_from_result(result: object) -> tuple[TradeSample, ...]:
+def _trades_from_result(
+    result: object,
+    *,
+    required: bool = True,
+) -> tuple[TradeSample, ...]:
     economics = getattr(result, "economics", None)
     if economics is None:
+        if not required:
+            return ()
         raise ValueError("run_config result missing economics")
     samples: list[TradeSample] = []
     for trade in getattr(economics, "trades", ()):
@@ -252,6 +268,115 @@ def _trades_from_result(result: object) -> tuple[TradeSample, ...]:
             )
         )
     return tuple(samples)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"expected numeric foundation value, got {value!r}")
+    return float(value)
+
+
+def _int_value(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"expected integer foundation value for {name}, got {value!r}")
+    if value < 0:
+        raise ValueError(f"foundation count {name} must be >= 0")
+    return value
+
+
+def _foundation_float(
+    raw: Mapping[str, object],
+    name: str,
+    *,
+    required: bool = False,
+) -> float | None:
+    value = raw.get(name)
+    if value is None:
+        if required:
+            raise ValueError(f"missing foundation value: {name}")
+        return None
+    parsed = _optional_float(value)
+    if parsed is None:
+        raise ValueError(f"missing foundation value: {name}")
+    if not parsed == parsed or parsed in {float("inf"), float("-inf")}:
+        raise ValueError(f"non-finite foundation value: {name}")
+    return parsed
+
+
+def _foundation_count(raw: Mapping[str, object], name: str) -> int:
+    if name not in raw:
+        raise ValueError(f"missing foundation count: {name}")
+    return _int_value(raw[name], name=name)
+
+
+def _validate_foundation_metric(metric: FoundationMetric) -> None:
+    if metric.effective_sample_size is not None and metric.effective_sample_size < 0.0:
+        raise ValueError("foundation effective_sample_size must be >= 0")
+    if metric.max_drawdown is not None and metric.max_drawdown > 0.0:
+        raise ValueError("foundation max_drawdown must be <= 0")
+    concentration = metric.max_symbol_concentration
+    if concentration is not None and not 0.0 <= concentration <= 1.0:
+        raise ValueError("foundation max_symbol_concentration must be in [0, 1]")
+
+
+def _warnings(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list | tuple):
+        raise ValueError("foundation warnings must be a list")
+    return tuple(str(item) for item in value)
+
+
+def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
+    metric = FoundationMetric(
+        window_id=str(raw["window_id"]),
+        return_sample_count=_foundation_count(raw, "return_sample_count"),
+        effective_sample_size=_foundation_float(raw, "effective_sample_size"),
+        sharpe=_foundation_float(raw, "sharpe"),
+        sharpe_standard_error=_foundation_float(raw, "sharpe_standard_error"),
+        total_return=_foundation_float(raw, "total_return"),
+        max_drawdown=_foundation_float(raw, "max_drawdown"),
+        closed_trade_count=_foundation_count(raw, "closed_trade_count"),
+        max_symbol_concentration=_foundation_float(raw, "max_symbol_concentration"),
+        warnings=_warnings(raw.get("warnings")),
+    )
+    _validate_foundation_metric(metric)
+    return metric
+
+
+def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
+    subwindows = raw.get("subwindows", ())
+    if not isinstance(subwindows, list):
+        raise ValueError("portfolio foundation scenario missing subwindows")
+    return FoundationScenario(
+        scenario_id=str(raw["scenario_id"]),
+        full_train=_foundation_metric(raw["full_train"]),  # type: ignore[arg-type]
+        subwindows=tuple(
+            _foundation_metric(item)  # type: ignore[arg-type]
+            for item in subwindows
+        ),
+    )
+
+
+def _foundation_from_result(result: object) -> FoundationEvidence:
+    foundation = getattr(result, "foundation", None)
+    if foundation is None:
+        raise ValueError("run_config result missing portfolio foundation")
+    matrix_payload = foundation.matrix_payload()
+    scenarios = matrix_payload.get("scenarios")
+    if not isinstance(scenarios, dict):
+        raise ValueError("portfolio foundation payload missing scenarios")
+    try:
+        realistic = scenarios["realistic_costs"]
+        cost_stress = scenarios["cost_stress"]
+    except KeyError as exc:
+        raise ValueError(f"portfolio foundation missing scenario: {exc.args[0]}") from exc
+    return FoundationEvidence(
+        realistic_costs=_foundation_scenario(realistic),
+        cost_stress=_foundation_scenario(cost_stress),
+    )
 
 
 def _parse_time(value: str) -> datetime:
@@ -291,18 +416,21 @@ def _make_crash_row(
         quick_config_sha256=provenance.quick_config_sha256,
         iteration=iteration,
         score=None,
+        full_train_psr=None,
+        worst_subwindow_psr=None,
+        worst_subwindow_id="",
+        cost_stress_psr=None,
         gates_passed=False,
         gate_flags="run_config=fail",
-        subwindow_trade_counts=(),
         trade_count=0,
-        net_return_contribution_concentration=None,
-        cost_stress=None,
-        net_return_sum=None,
-        avg_trade_net=None,
+        min_subwindow_trades=0,
+        total_return=None,
+        max_drawdown=None,
         win_rate=None,
         profit_factor=None,
-        gross_return_sum=None,
+        avg_trade_net=None,
         cost_return_sum=None,
+        max_symbol_concentration=None,
         complexity_count=max(len(params), len(tuple(components))),
         status="crash",
         best_status="unchanged",
@@ -332,6 +460,141 @@ def _sum_optional(values: Sequence[float | None]) -> float | None:
     if not present:
         return None
     return float(sum(present))
+
+
+def _min_subwindow_trades(objective: ObjectiveResult) -> int:
+    return min(objective.subwindow_trade_counts, default=0)
+
+
+def _reported_trade_count(
+    trades: Sequence[TradeSample],
+    foundation_scenario: FoundationScenario | None,
+) -> int:
+    if foundation_scenario is not None:
+        return foundation_scenario.full_train.closed_trade_count
+    return len(trades)
+
+
+def _worst_subwindow_psr(objective: ObjectiveResult) -> float | None:
+    if not objective.subwindow_psrs:
+        return None
+    return min(objective.subwindow_psrs)
+
+
+def _gate_records(gates: GateSet | None) -> list[dict[str, object]]:
+    if gates is None:
+        return []
+    return [
+        {
+            "name": outcome.name,
+            "passed": outcome.passed,
+            "value": outcome.value,
+            "threshold": outcome.threshold,
+            "detail": outcome.detail,
+        }
+        for outcome in gates.outcomes
+    ]
+
+
+def _metric_payload(metric: FoundationMetric) -> dict[str, object]:
+    return {
+        "window_id": metric.window_id,
+        "return_sample_count": metric.return_sample_count,
+        "effective_sample_size": metric.effective_sample_size,
+        "sharpe": metric.sharpe,
+        "sharpe_standard_error": metric.sharpe_standard_error,
+        "total_return": metric.total_return,
+        "max_drawdown": metric.max_drawdown,
+        "closed_trade_count": metric.closed_trade_count,
+        "max_symbol_concentration": metric.max_symbol_concentration,
+        "warnings": list(metric.warnings),
+    }
+
+
+def _scenario_payload(scenario: FoundationScenario | None) -> dict[str, object] | None:
+    if scenario is None:
+        return None
+    return {
+        "scenario_id": scenario.scenario_id,
+        "full_train": _metric_payload(scenario.full_train),
+        "subwindows": [_metric_payload(metric) for metric in scenario.subwindows],
+    }
+
+
+def _causality_payload(result: object) -> dict[str, object]:
+    evidence = getattr(result, "evidence", None)
+    causality = getattr(evidence, "causality", None)
+    if causality is None:
+        return {}
+    return {
+        "causality_check": getattr(causality, "causality_check", None),
+        "verified": getattr(causality, "verified", None),
+        "replay_warning": getattr(causality, "replay_warning", None),
+        "timed_out": getattr(causality, "timed_out", None),
+        "selected_probe_count": getattr(causality, "selected_probe_count", None),
+    }
+
+
+def _primary_failure_mode(
+    gates: GateSet | None,
+    objective: ObjectiveResult | None,
+    *,
+    error: str = "",
+) -> str:
+    if "portfolio foundation" in error:
+        return "foundation_unavailable"
+    if error and objective is None and gates is None:
+        return "run_error"
+    if objective is not None and objective.score is None:
+        return "score_unavailable"
+    if gates is None:
+        return ""
+    failed = [outcome.name for outcome in gates.outcomes if not outcome.passed]
+    return failed[0] if failed else ""
+
+
+def _write_run_card(
+    root: Path,
+    *,
+    artifact_dir: str | Path,
+    result: object | None,
+    objective: ObjectiveResult | None,
+    cost_stress: ObjectiveResult | None,
+    gates: GateSet | None,
+    foundation: FoundationEvidence | None,
+    error: str = "",
+) -> None:
+    destination = root / artifact_dir / "run_card.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "score": None if objective is None else objective.score,
+        "score_parts": {
+            "full_train_psr": None if objective is None else objective.full_train_psr,
+            "subwindow_psrs": []
+            if objective is None
+            else list(objective.subwindow_psrs),
+            "worst_subwindow_psr": None
+            if objective is None
+            else _worst_subwindow_psr(objective),
+            "worst_subwindow_id": ""
+            if objective is None
+            else objective.worst_subwindow_id,
+            "cost_stress_psr": None if cost_stress is None else cost_stress.score,
+        },
+        "gates": _gate_records(gates),
+        "foundation": {
+            "realistic_costs": None
+            if foundation is None
+            else _scenario_payload(foundation.realistic_costs),
+            "cost_stress": None
+            if foundation is None
+            else _scenario_payload(foundation.cost_stress),
+        },
+        "causality": {} if result is None else _causality_payload(result),
+        "primary_failure_mode": _primary_failure_mode(gates, objective, error=error),
+        "error": error,
+    }
+    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _non_improving_since_best(rows: Sequence[ResultRow]) -> int:
@@ -543,6 +806,16 @@ def run_iteration(
         result = run(config_path, repo_root=root)
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
         elapsed = time.monotonic() - start
+        _write_run_card(
+            root,
+            artifact_dir=provenance.artifact_dir,
+            result=None,
+            objective=None,
+            cost_stress=None,
+            gates=None,
+            foundation=None,
+            error=str(exc),
+        )
         stop_reason = _stop_reason_after_attempt(
             (
                 *prior_rows,
@@ -597,6 +870,16 @@ def run_iteration(
     elapsed = time.monotonic() - start
 
     if not getattr(result, "succeeded", False):
+        _write_run_card(
+            root,
+            artifact_dir=provenance.artifact_dir,
+            result=result,
+            objective=None,
+            cost_stress=None,
+            gates=None,
+            foundation=None,
+            error=str(getattr(result, "message", "run failed")),
+        )
         temp_row = _make_crash_row(
             provenance=provenance,
             commit=commit,
@@ -647,28 +930,53 @@ def run_iteration(
             message=str(getattr(result, "message", "run failed")),
         )
 
+    foundation: FoundationEvidence | None = None
+    objective: ObjectiveResult | None = None
+    stress: ObjectiveResult | None = None
     try:
-        trades = _trades_from_result(result)
         window_start = _parse_time(protocol.data.start)
         window_end = _parse_window_end(protocol.data.end)
-        objective = score_objective(
-            trades,
-            protocol.objective,
-            window_start=window_start,
-            window_end=window_end,
-        )
-        stress = score_cost_stress(
-            trades,
-            subwindows=protocol.objective.subwindows,
-            extra_round_trip_bps=2.0
-            * (
-                protocol.cost_model.fee_bps_per_side
-                + protocol.cost_model.slippage_bps_per_side
-            ),
-            window_start=window_start,
-            window_end=window_end,
-        )
+        if protocol.objective.kind == "portfolio_psr_subwindow":
+            foundation = _foundation_from_result(result)
+            trades = _trades_from_result(result, required=False)
+            objective = score_objective(
+                trades,
+                protocol.objective,
+                window_start=window_start,
+                window_end=window_end,
+                foundation=foundation,
+            )
+            stress = score_foundation_cost_stress(foundation, protocol.objective)
+        else:
+            trades = _trades_from_result(result)
+            objective = score_objective(
+                trades,
+                protocol.objective,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            stress = score_cost_stress(
+                trades,
+                subwindows=protocol.objective.subwindows,
+                extra_round_trip_bps=2.0
+                * (
+                    protocol.cost_model.fee_bps_per_side
+                    + protocol.cost_model.slippage_bps_per_side
+                ),
+                window_start=window_start,
+                window_end=window_end,
+            )
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
+        _write_run_card(
+            root,
+            artifact_dir=provenance.artifact_dir,
+            result=result,
+            objective=objective,
+            cost_stress=stress,
+            gates=None,
+            foundation=foundation,
+            error=str(exc),
+        )
         temp_row = _make_crash_row(
             provenance=provenance,
             commit=commit,
@@ -719,6 +1027,7 @@ def run_iteration(
             message=str(exc),
         )
     cost_stress_score = stress.score
+    foundation_scenario = None if foundation is None else foundation.realistic_costs
     gates = evaluate_gates(
         trades,
         params=params,
@@ -727,6 +1036,16 @@ def run_iteration(
         cost_stress_score=cost_stress_score,
         train_score=objective.score,
         subwindow_trade_counts=objective.subwindow_trade_counts,
+        foundation_scenario=foundation_scenario,
+    )
+    _write_run_card(
+        root,
+        artifact_dir=provenance.artifact_dir,
+        result=result,
+        objective=objective,
+        cost_stress=stress,
+        gates=gates,
+        foundation=foundation,
     )
     keep = is_improvement(objective.score, best_score, gates.passed, protocol.loop)
     status = "keep" if keep else "discard"
@@ -745,28 +1064,41 @@ def run_iteration(
             quick_config_sha256=provenance.quick_config_sha256,
             iteration=iteration,
             score=objective.score,
+            full_train_psr=objective.full_train_psr,
+            worst_subwindow_psr=_worst_subwindow_psr(objective),
+            worst_subwindow_id=objective.worst_subwindow_id,
+            cost_stress_psr=cost_stress_score,
             gates_passed=gates.passed,
             gate_flags=gates.flags(),
-            subwindow_trade_counts=objective.subwindow_trade_counts,
-            trade_count=len(trades),
-            net_return_contribution_concentration=symbol_concentration(trades)
-            if trades
-            else None,
-            cost_stress=cost_stress_score,
-            net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
-            avg_trade_net=(
-                float(sum(trade.net_return for trade in trades) / len(trades))
-                if trades
-                else None
-            ),
+            trade_count=_reported_trade_count(trades, foundation_scenario),
+            min_subwindow_trades=_min_subwindow_trades(objective),
+            total_return=None
+            if foundation_scenario is None
+            else foundation_scenario.full_train.total_return,
+            max_drawdown=None
+            if foundation_scenario is None
+            else foundation_scenario.full_train.max_drawdown,
             win_rate=(
                 sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
                 if trades
                 else None
             ),
             profit_factor=_profit_factor(trades),
-            gross_return_sum=_sum_optional(tuple(trade.gross_return for trade in trades)),
+            avg_trade_net=(
+                float(sum(trade.net_return for trade in trades) / len(trades))
+                if trades
+                else None
+            ),
             cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
+            max_symbol_concentration=(
+                symbol_concentration(trades)
+                if foundation_scenario is None and trades
+                else (
+                    None
+                    if foundation_scenario is None
+                    else foundation_scenario.full_train.max_symbol_concentration
+                )
+            ),
             complexity_count=max(len(params), len(tuple(components))),
             status=status,
             best_status=best_status,
@@ -796,28 +1128,41 @@ def run_iteration(
             quick_config_sha256=provenance.quick_config_sha256,
             iteration=iteration,
             score=objective.score,
+            full_train_psr=objective.full_train_psr,
+            worst_subwindow_psr=_worst_subwindow_psr(objective),
+            worst_subwindow_id=objective.worst_subwindow_id,
+            cost_stress_psr=cost_stress_score,
             gates_passed=gates.passed,
             gate_flags=gates.flags(),
-            subwindow_trade_counts=objective.subwindow_trade_counts,
-            trade_count=len(trades),
-            net_return_contribution_concentration=symbol_concentration(trades)
-            if trades
-            else None,
-            cost_stress=cost_stress_score,
-            net_return_sum=float(sum(trade.net_return for trade in trades)) if trades else None,
-            avg_trade_net=(
-                float(sum(trade.net_return for trade in trades) / len(trades))
-                if trades
-                else None
-            ),
+            trade_count=_reported_trade_count(trades, foundation_scenario),
+            min_subwindow_trades=_min_subwindow_trades(objective),
+            total_return=None
+            if foundation_scenario is None
+            else foundation_scenario.full_train.total_return,
+            max_drawdown=None
+            if foundation_scenario is None
+            else foundation_scenario.full_train.max_drawdown,
             win_rate=(
                 sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
                 if trades
                 else None
             ),
             profit_factor=_profit_factor(trades),
-            gross_return_sum=_sum_optional(tuple(trade.gross_return for trade in trades)),
+            avg_trade_net=(
+                float(sum(trade.net_return for trade in trades) / len(trades))
+                if trades
+                else None
+            ),
             cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
+            max_symbol_concentration=(
+                symbol_concentration(trades)
+                if foundation_scenario is None and trades
+                else (
+                    None
+                    if foundation_scenario is None
+                    else foundation_scenario.full_train.max_symbol_concentration
+                )
+            ),
             complexity_count=max(len(params), len(tuple(components))),
             status=status,
             best_status=best_status,

@@ -19,18 +19,21 @@ class ResultRow:
     quick_config_sha256: str
     iteration: int
     score: float | None
+    full_train_psr: float | None
+    worst_subwindow_psr: float | None
+    worst_subwindow_id: str
+    cost_stress_psr: float | None
     gates_passed: bool
     gate_flags: str
-    subwindow_trade_counts: tuple[int, ...]
     trade_count: int
-    net_return_contribution_concentration: float | None
-    cost_stress: float | None
-    net_return_sum: float | None
-    avg_trade_net: float | None
+    min_subwindow_trades: int
+    total_return: float | None
+    max_drawdown: float | None
     win_rate: float | None
     profit_factor: float | None
-    gross_return_sum: float | None
+    avg_trade_net: float | None
     cost_return_sum: float | None
+    max_symbol_concentration: float | None
     complexity_count: int
     status: str
     best_status: str
@@ -53,18 +56,21 @@ class ResultRow:
             "quick_config_sha256",
             "iteration",
             "score",
+            "full_train_psr",
+            "worst_subwindow_psr",
+            "worst_subwindow_id",
+            "cost_stress_psr",
             "gates_passed",
             "gate_flags",
-            "subwindow_trade_counts",
             "trade_count",
-            "net_return_contribution_concentration",
-            "cost_stress",
-            "net_return_sum",
-            "avg_trade_net",
+            "min_subwindow_trades",
+            "total_return",
+            "max_drawdown",
             "win_rate",
             "profit_factor",
-            "gross_return_sum",
+            "avg_trade_net",
             "cost_return_sum",
+            "max_symbol_concentration",
             "complexity_count",
             "status",
             "best_status",
@@ -87,32 +93,39 @@ class ResultRow:
             "quick_config_sha256": self.quick_config_sha256,
             "iteration": str(self.iteration),
             "score": "" if self.score is None else str(self.score),
+            "full_train_psr": ""
+            if self.full_train_psr is None
+            else str(self.full_train_psr),
+            "worst_subwindow_psr": ""
+            if self.worst_subwindow_psr is None
+            else str(self.worst_subwindow_psr),
+            "worst_subwindow_id": self.worst_subwindow_id,
+            "cost_stress_psr": ""
+            if self.cost_stress_psr is None
+            else str(self.cost_stress_psr),
             "gates_passed": "true" if self.gates_passed else "false",
             "gate_flags": self.gate_flags,
-            "subwindow_trade_counts": ",".join(
-                str(count) for count in self.subwindow_trade_counts
-            ),
             "trade_count": str(self.trade_count),
-            "net_return_contribution_concentration": ""
-            if self.net_return_contribution_concentration is None
-            else str(self.net_return_contribution_concentration),
-            "cost_stress": "" if self.cost_stress is None else str(self.cost_stress),
-            "net_return_sum": ""
-            if self.net_return_sum is None
-            else str(self.net_return_sum),
-            "avg_trade_net": ""
-            if self.avg_trade_net is None
-            else str(self.avg_trade_net),
+            "min_subwindow_trades": str(self.min_subwindow_trades),
+            "total_return": ""
+            if self.total_return is None
+            else str(self.total_return),
+            "max_drawdown": ""
+            if self.max_drawdown is None
+            else str(self.max_drawdown),
             "win_rate": "" if self.win_rate is None else str(self.win_rate),
             "profit_factor": ""
             if self.profit_factor is None
             else str(self.profit_factor),
-            "gross_return_sum": ""
-            if self.gross_return_sum is None
-            else str(self.gross_return_sum),
+            "avg_trade_net": ""
+            if self.avg_trade_net is None
+            else str(self.avg_trade_net),
             "cost_return_sum": ""
             if self.cost_return_sum is None
             else str(self.cost_return_sum),
+            "max_symbol_concentration": ""
+            if self.max_symbol_concentration is None
+            else str(self.max_symbol_concentration),
             "complexity_count": str(self.complexity_count),
             "status": self.status,
             "best_status": self.best_status,
@@ -133,12 +146,6 @@ def _parse_bool(value: str, *, name: str) -> bool:
     if value == "false":
         return False
     raise ValueError(f"{name} must be true or false")
-
-
-def _parse_counts(value: str) -> tuple[int, ...]:
-    if value == "":
-        return ()
-    return tuple(int(item) for item in value.split(","))
 
 
 def _parse_enum(value: str, *, name: str, allowed: set[str]) -> str:
@@ -177,20 +184,21 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         ),
         iteration=int(row["iteration"]),
         score=_parse_float(row["score"]),
+        full_train_psr=_parse_float(row["full_train_psr"]),
+        worst_subwindow_psr=_parse_float(row["worst_subwindow_psr"]),
+        worst_subwindow_id=row["worst_subwindow_id"],
+        cost_stress_psr=_parse_float(row["cost_stress_psr"]),
         gates_passed=_parse_bool(row["gates_passed"], name="gates_passed"),
         gate_flags=row["gate_flags"],
-        subwindow_trade_counts=_parse_counts(row["subwindow_trade_counts"]),
         trade_count=int(row["trade_count"]),
-        net_return_contribution_concentration=_parse_float(
-            row["net_return_contribution_concentration"]
-        ),
-        cost_stress=_parse_float(row["cost_stress"]),
-        net_return_sum=_parse_float(row["net_return_sum"]),
-        avg_trade_net=_parse_float(row["avg_trade_net"]),
+        min_subwindow_trades=int(row["min_subwindow_trades"]),
+        total_return=_parse_float(row["total_return"]),
+        max_drawdown=_parse_float(row["max_drawdown"]),
         win_rate=_parse_float(row["win_rate"]),
         profit_factor=_parse_float(row["profit_factor"]),
-        gross_return_sum=_parse_float(row["gross_return_sum"]),
+        avg_trade_net=_parse_float(row["avg_trade_net"]),
         cost_return_sum=_parse_float(row["cost_return_sum"]),
+        max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
         complexity_count=int(row["complexity_count"]),
         status=_parse_enum(
             row["status"], name="status", allowed={"keep", "discard", "crash"}
@@ -235,10 +243,34 @@ def _validate_result_chain(rows: list[ResultRow]) -> None:
         raise ValueError("result iterations must be contiguous from 1")
 
 
+def _existing_header_and_has_rows(path: Path) -> tuple[list[str], bool]:
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle, dialect="excel-tab")
+        try:
+            header = next(reader)
+        except StopIteration:
+            return [], False
+        return header, any(any(cell != "" for cell in row) for row in reader)
+
+
+def _ensure_writable_schema(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return True
+    header, has_rows = _existing_header_and_has_rows(path)
+    if header == ResultRow.header():
+        return False
+    if has_rows:
+        raise ValueError(
+            "legacy results.tsv schema with existing rows; start a new thesis lifecycle"
+        )
+    path.write_text("")
+    return True
+
+
 def append_result(path: str | Path, row: ResultRow) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    needs_header = not destination.exists() or destination.stat().st_size == 0
+    needs_header = _ensure_writable_schema(destination)
     with destination.open("a", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -256,7 +288,15 @@ def read_results(path: str | Path) -> list[ResultRow]:
     if not source.exists():
         return []
     with source.open(newline="") as handle:
-        rows = [_parse_row(row) for row in csv.DictReader(handle, dialect="excel-tab")]
+        reader = csv.DictReader(handle, dialect="excel-tab")
+        raw_rows = list(reader)
+    if reader.fieldnames != ResultRow.header():
+        if not raw_rows:
+            return []
+        raise ValueError(
+            "legacy results.tsv schema with existing rows; start a new thesis lifecycle"
+        )
+    rows = [_parse_row(row) for row in raw_rows]
     _validate_result_chain(rows)
     return rows
 

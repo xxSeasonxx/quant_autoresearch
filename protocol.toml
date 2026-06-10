@@ -92,15 +92,17 @@ results_dir = "results"
 artifact_profile = "diagnostic"
 # Let quant_strategies run its lightweight quick checks.
 quick_checks = true
-# Train iteration uses focused replay: deterministic full replay plus a bounded,
-# deterministic mix of emitted and suppression probes. Full emitted/strict replay
-# is for survivor audits because exhaustive replay is too expensive for the
-# large minute panel.
-causality_check = "off"
+# Train iteration uses micro replay: a tiny bounded replay annotation that keeps
+# quick-run scoring fast while surfacing causality evidence in the run card.
+causality_check = "micro"
 focused_probe_limit = 10
 focused_timeout_seconds = 180.0
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
+# Emit compact portfolio-foundation metrics for local PSR scoring and gates.
+foundation_enabled = true
+foundation_subwindows = 6
+foundation_cost_stress_multiplier = 2.0
 
 [loop]
 # M: stop after this many consecutive completed non-improving attempts once a
@@ -125,17 +127,20 @@ baseline_grace_iterations = 50
 # Robustness target selected before the thesis starts. The agent cannot pick a
 # friendlier objective after seeing results.
 # Currently supported objective kinds:
-# - worst_subwindow: score each configured Train time slice using trade-unit
-#   mean/std net return, then use the weakest slice as the run score.
-# Diagnostics such as aggregate net return, win rate, profit factor, and
-# cost-stressed score are not selectable objective kinds.
-kind = "worst_subwindow"
+# - portfolio_psr_subwindow: compute PSR from upstream portfolio-foundation
+#   full-Train and subwindow return statistics, then use the weakest evidence
+#   value as the run score.
+kind = "portfolio_psr_subwindow"
 # K: number of contiguous Train time slices for worst_subwindow. Six slices over
 # two years gives roughly quarterly robustness checks.
 # Subwindow rationale: K=6 is enough to reject idle or one-regime Train survivors
 # while keeping per-slice trade floors attainable for simple short-horizon ideas.
 # Smoke/debug alternative: subwindows = 2
 subwindows = 6
+# Hurdle Sharpe in the same non-annualized units as upstream quick-run foundation
+# Sharpe. Keep at 0.0 unless Season chooses a stricter thesis-level hurdle before
+# a new run starts.
+psr_hurdle_sharpe = 0.0
 
 [gates]
 # Minimum completed trades required before the score can be considered alive.
@@ -145,11 +150,21 @@ min_trades = 120
 # This prevents idle Train slices from counting as robustness evidence.
 # Smoke/debug alternative: min_trades_per_subwindow = 1
 min_trades_per_subwindow = 12
+# Minimum fixed-frequency portfolio-return observations required for full Train
+# and every scoring subwindow.
+min_return_sample_count = 100
+# Minimum effective portfolio-return sample size required for full Train and
+# every scoring subwindow after upstream autocorrelation adjustment.
+min_effective_sample_size = 50.0
 # Maximum share of absolute net trade activity carried by one symbol. Lower is
 # stricter diversification; 0.80 is permissive for a two-symbol smoke protocol.
 max_symbol_concentration = 0.70
-# Minimum stressed objective score after applying the extra cost bump.
-min_cost_stress_score = 0.0
+# Minimum portfolio-foundation PSR under the upstream cost-stress scenario.
+min_cost_stress_psr = 0.50
+# Maximum absolute full-Train drawdown allowed by the development filter.
+max_abs_drawdown = 0.25
+# Minimum full-Train portfolio total return required for economic magnitude.
+min_total_return = 0.0
 # Simplicity cap: maximum declared signal components in rationale.md.
 max_components = 3
 # Simplicity cap: maximum strategy params in experiment.toml [params].

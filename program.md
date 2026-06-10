@@ -147,8 +147,9 @@ interrupts:
 3. Inspect diagnostics and sampled trades from the latest relevant attempt.
 4. Make one thesis-linked edit or one bold thesis-guided variant.
 5. Run the Train quick run through `climb` or the focused local helper.
-6. Parse score, gate flags, trade counts, cost stress, concentration, exits, and
-   trade samples.
+6. Parse score, gate flags, portfolio-foundation metrics, basic economics,
+   exits, and trade samples. Use the per-attempt `run_card.json` for detailed
+   score parts, gate outcomes, foundation warnings, and micro causality evidence.
 7. Append exactly one tab-separated row to `results.tsv`. Use the existing
    header; do not invent a second ledger during ordinary iteration.
 8. Refresh `rationale.md` with what changed, why, the failure mode targeted, the

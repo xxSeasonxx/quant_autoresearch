@@ -46,6 +46,9 @@ class OutputConfig:
     strict_probe_limit: int | None = None
     focused_probe_limit: int | None = None
     focused_timeout_seconds: float | None = None
+    foundation_enabled: bool = False
+    foundation_subwindows: int | None = None
+    foundation_cost_stress_multiplier: float | None = None
 
 
 @dataclass(frozen=True)
@@ -128,8 +131,8 @@ def _boolean(value: object, *, name: str) -> bool:
 
 def _causality_check(value: object, *, name: str) -> str:
     parsed = str(value)
-    if parsed not in {"off", "emitted", "strict", "focused"}:
-        raise ValueError(f"{name} must be one of: off, emitted, strict, focused")
+    if parsed not in {"off", "emitted", "strict", "focused", "micro"}:
+        raise ValueError(f"{name} must be one of: off, emitted, strict, focused, micro")
     return parsed
 
 
@@ -157,6 +160,13 @@ def _nonnegative_float(value: object, *, name: str) -> float:
     parsed = _floating(value, name=name)
     if parsed < 0.0:
         raise ValueError(f"{name} must be >= 0")
+    return parsed
+
+
+def _min_float(value: object, *, name: str, minimum: float) -> float:
+    parsed = _floating(value, name=name)
+    if parsed < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
     return parsed
 
 
@@ -207,10 +217,35 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         name="fill_model.exit_lag_bars",
     )
     objective_kind = str(_required(raw_objective, "kind"))
-    if objective_kind != "worst_subwindow":
+    if objective_kind != "portfolio_psr_subwindow":
         raise ValueError(f"objective.kind unsupported: {objective_kind}")
     subwindows = _positive_int(
         _required(raw_objective, "subwindows"), name="objective.subwindows"
+    )
+    foundation_enabled = _boolean(
+        _required(raw_output, "foundation_enabled"),
+        name="output.foundation_enabled",
+    )
+    if not foundation_enabled:
+        raise ValueError("output.foundation_enabled must be true for portfolio_psr_subwindow")
+    foundation_subwindows = (
+        _positive_int(
+            raw_output.get("foundation_subwindows", subwindows),
+            name="output.foundation_subwindows",
+        )
+        if foundation_enabled
+        else None
+    )
+    if foundation_subwindows is not None and foundation_subwindows != subwindows:
+        raise ValueError("output.foundation_subwindows must equal objective.subwindows")
+    foundation_cost_stress_multiplier = (
+        _min_float(
+            raw_output.get("foundation_cost_stress_multiplier", 2.0),
+            name="output.foundation_cost_stress_multiplier",
+            minimum=1.0,
+        )
+        if foundation_enabled
+        else None
     )
 
     return ProtocolConfig(
@@ -270,6 +305,9 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                     name="output.focused_timeout_seconds",
                 )
             ),
+            foundation_enabled=foundation_enabled,
+            foundation_subwindows=foundation_subwindows,
+            foundation_cost_stress_multiplier=foundation_cost_stress_multiplier,
         ),
         loop=LoopConfig(
             plateau_patience=_positive_int(
@@ -296,6 +334,10 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         objective=ObjectiveConfig(
             kind=objective_kind,
             subwindows=subwindows,
+            psr_hurdle_sharpe=_floating(
+                raw_objective.get("psr_hurdle_sharpe", 0.0),
+                name="objective.psr_hurdle_sharpe",
+            ),
         ),
         gates=GateConfig(
             min_trades=_nonnegative_int(
@@ -306,13 +348,29 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "min_trades_per_subwindow"),
                 name="gates.min_trades_per_subwindow",
             ),
+            min_return_sample_count=_nonnegative_int(
+                _required(raw_gates, "min_return_sample_count"),
+                name="gates.min_return_sample_count",
+            ),
+            min_effective_sample_size=_nonnegative_float(
+                _required(raw_gates, "min_effective_sample_size"),
+                name="gates.min_effective_sample_size",
+            ),
             max_symbol_concentration=_fraction(
                 _required(raw_gates, "max_symbol_concentration"),
                 name="gates.max_symbol_concentration",
             ),
-            min_cost_stress_score=_floating(
-                _required(raw_gates, "min_cost_stress_score"),
-                name="gates.min_cost_stress_score",
+            min_cost_stress_psr=_fraction(
+                _required(raw_gates, "min_cost_stress_psr"),
+                name="gates.min_cost_stress_psr",
+            ),
+            max_abs_drawdown=_fraction(
+                _required(raw_gates, "max_abs_drawdown"),
+                name="gates.max_abs_drawdown",
+            ),
+            min_total_return=_floating(
+                _required(raw_gates, "min_total_return"),
+                name="gates.min_total_return",
             ),
             max_components=_positive_int(
                 _required(raw_gates, "max_components"),
@@ -406,6 +464,7 @@ def build_quick_run_config(
         "quick_checks": protocol.output.quick_checks,
         "diagnostic_sample_trades": max(1, protocol.output.diagnostic_sample_trades),
         "causality_check": protocol.output.causality_check,
+        "foundation_enabled": protocol.output.foundation_enabled,
     }
     if protocol.output.strict_probe_limit is not None:
         output_block["strict_probe_limit"] = protocol.output.strict_probe_limit
@@ -413,6 +472,11 @@ def build_quick_run_config(
         output_block["focused_probe_limit"] = protocol.output.focused_probe_limit
     if protocol.output.focused_timeout_seconds is not None:
         output_block["focused_timeout_seconds"] = protocol.output.focused_timeout_seconds
+    if protocol.output.foundation_enabled:
+        output_block["foundation_subwindows"] = protocol.output.foundation_subwindows
+        output_block["foundation_cost_stress_multiplier"] = (
+            protocol.output.foundation_cost_stress_multiplier
+        )
     return {
         "strategy_path": protocol.strategy_path,
         "strategy_id": protocol.strategy_id,

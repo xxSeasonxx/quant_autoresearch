@@ -12,9 +12,13 @@ def test_harness_smoke_loads_active_config():
     quick = build_quick_run_config(protocol, experiment.params)
 
     assert protocol.strategy_path == "strategy.py"
-    assert protocol.output.causality_check in {"off", "focused", "emitted", "strict"}
+    assert protocol.output.causality_check == "micro"
+    assert protocol.output.foundation_enabled is True
     assert quick["strategy_id"] == protocol.strategy_id
     assert quick["params"] == experiment.params
+    assert quick["output"]["causality_check"] == "micro"
+    assert quick["output"]["foundation_enabled"] is True
+    assert quick["output"]["foundation_subwindows"] == protocol.objective.subwindows
 
 
 def test_strategy_smoke_exports_contract():

@@ -66,8 +66,8 @@ For one thesis:
 3. Modify `strategy.py` or bounded params.
 4. Run a Train quick run through public `quant_strategies.runner.run_config`.
 5. Review diagnostic output and update `rationale.md`.
-6. Score the configured Train trade-unit robustness objective.
-7. Apply binary gates, including aggregate trade floor and subwindow coverage.
+6. Score the configured Train portfolio-foundation robustness objective.
+7. Apply binary gates, including evidence coverage, cost stress, path risk, breadth, economic magnitude, aggregate trade floor, and subwindow coverage.
 8. Let the loop decide keep/discard with the implemented keep rule:
 
    ```text
@@ -79,7 +79,7 @@ For one thesis:
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
-`results.tsv` records both control metrics and intuitive diagnostics: attempt provenance, objective score, gate flags, subwindow trade counts, trade count, net-return contribution concentration, cost stress, net return sum, average trade net, win rate, profit factor, gross return sum, cost return sum, and lifecycle state. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits. The complexity gate counts validated bounded params and signal components declared in `rationale.md` under `### Component:` headings.
+`results.tsv` records control metrics and a compact diagnostic set: attempt provenance, objective score, full-Train PSR, worst-subwindow PSR/id, cost-stress PSR, gate flags, foundation full-Train closed-trade count, minimum subwindow trades, total return, max drawdown, win rate, profit factor, average trade net, cost return sum, max symbol concentration, complexity count, and lifecycle state. Richer vectors, gate details, foundation warnings, and causality evidence live in the per-attempt `run_card.json` under the generated artifact directory. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits. The complexity gate counts validated bounded params and signal components declared in `rationale.md` under `### Component:` headings.
 
 ## Commands
 
@@ -97,4 +97,4 @@ The configured local environment can reach `quant_data` for real quick-run smoke
 
 `quant_autoresearch` consumes `quant_strategies` through public APIs only. Strategy execution uses `quant_strategies.runner.run_config`; private engine modules are not part of this contract.
 
-Quick-run economics expose trade-unit after-cost samples, not NAV or period-return series. That is enough for the v1 Train filter, but not enough for final validation.
+Quick-run economics expose trade-unit after-cost samples for diagnostics. Quick-run portfolio foundation exposes compact full-Train and subwindow portfolio-return metrics for the active Train score and gates. Survivor-grade NAV/path traces still belong downstream, outside this Train loop.

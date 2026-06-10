@@ -9,21 +9,6 @@ The loop SHALL choose the Train robustness objective from protocol config. The a
 - **WHEN** the protocol specifies `objective.kind`
 - **THEN** the loop uses that objective implementation for all iterations in the thesis
 
-### Requirement: worst_subwindow scores configured Train slices
-The default `worst_subwindow` objective SHALL split Train into `K` configured contiguous subwindows and score the minimum after-cost trade-unit robustness value across those subwindows. The objective SHALL expose subwindow scores and subwindow trade counts so gates can distinguish poor evidence from missing evidence. A candidate with no valid subwindow score SHALL be infeasible.
-
-#### Scenario: worst subwindow is binding
-- **WHEN** one Train subwindow has a lower after-cost score than the others
-- **THEN** the objective score equals that lowest subwindow score
-
-#### Scenario: K comes from protocol
-- **WHEN** the protocol sets `objective.subwindows`
-- **THEN** the objective uses that value as `K`
-
-#### Scenario: subwindow trade counts are exposed
-- **WHEN** the objective scores a candidate across `K` subwindows
-- **THEN** the objective exposes exactly `K` subwindow trade counts aligned with the subwindow scores
-
 ### Requirement: Plateau improvement is mathematically defined
 For completed iteration `t`, let `s_t` be its score and `b_t` be the best kept feasible score before `t`. The iteration SHALL count as an improvement only if all gates pass and `s_t > b_t + max(eps, rho * max(1, abs(b_t)))`, where `eps` and `rho` come from protocol config.
 
@@ -36,7 +21,7 @@ For completed iteration `t`, let `s_t` be its score and `b_t` be the best kept f
 - **THEN** it resets plateau patience and becomes the new best score
 
 ### Requirement: Gates are binary and separate from the objective
-The loop SHALL compute trade floor, subwindow coverage, net-return contribution concentration, cost stress, complexity cap, and Train score floor as binary gates. Gates SHALL NOT be blended into the objective score.
+The loop SHALL compute admissibility checks as binary gates. Gates SHALL NOT be blended into the objective score.
 
 #### Scenario: failed gate prevents keep
 - **WHEN** a candidate improves the objective score but fails any gate
@@ -87,11 +72,51 @@ The loop SHALL parse signal component declarations from `rationale.md` using onl
 - **WHEN** `rationale.md` contains `### Variant:` or other headings outside `## Signal Components`
 - **THEN** those headings are not counted as signal components
 
-### Requirement: Breadth gate names net-return contribution concentration explicitly
-The breadth gate SHALL identify the current concentration metric as net-return contribution concentration when exposing gate details, result fields, and documentation.
+### Requirement: Portfolio foundation PSR objective scores full Train and weakest subwindow
+The objective layer SHALL support `objective.kind = "portfolio_psr_subwindow"`. For this kind, the loop SHALL compute PSR from upstream portfolio-foundation `realistic_costs` metrics for the full Train window and every configured subwindow, then set the run score to `min(full_train_psr, min(subwindow_psr))`.
 
-#### Scenario: Result label is unambiguous
-- **WHEN** a run emits or documents the concentration metric
-- **THEN** the metric is labeled `net_return_contribution_concentration`
-- **AND** no new breadth, exposure, or trade-count metric is introduced
+#### Scenario: full Train PSR is binding
+- **WHEN** the full Train PSR is lower than every subwindow PSR
+- **THEN** the objective score equals the full Train PSR
 
+#### Scenario: weakest subwindow PSR is binding
+- **WHEN** one Train subwindow has the lowest PSR
+- **THEN** the objective score equals that subwindow PSR
+- **AND** the objective exposes that subwindow id as the worst subwindow id
+
+#### Scenario: foundation score inputs are unavailable
+- **WHEN** any required full Train or subwindow Sharpe input is missing, non-finite, or has non-positive Sharpe standard error
+- **THEN** the objective score is unavailable
+- **AND** the failure detail identifies the missing or invalid foundation input
+
+### Requirement: PSR uses protocol-owned hurdle
+The portfolio foundation objective SHALL compute `PSR = NormalCDF((sharpe - psr_hurdle_sharpe) / sharpe_standard_error)`, where `psr_hurdle_sharpe` comes from protocol config and is fixed for the thesis lifecycle.
+
+#### Scenario: hurdle affects PSR
+- **WHEN** two protocol configs use different `psr_hurdle_sharpe` values against the same foundation metric record
+- **THEN** the computed PSR values reflect those different hurdles
+
+### Requirement: Foundation-backed gates are binary and separate from score
+For portfolio-foundation scoring, the loop SHALL compute binary gates for trade floor, subwindow closed-trade coverage, return/effective-sample evidence, cost-stress PSR, foundation symbol concentration, max drawdown, economic total return, complexity cap, and Train score floor. These gates SHALL NOT be blended into the objective score.
+
+#### Scenario: weak cost stress fails gate
+- **WHEN** the `cost_stress` foundation scenario score is below the protocol-owned floor
+- **THEN** the cost-stress gate fails
+- **AND** the base objective score is not changed by the failed gate
+
+#### Scenario: weak path risk fails gate
+- **WHEN** the base foundation full Train max drawdown breaches the protocol-owned absolute drawdown cap
+- **THEN** the path-risk gate fails
+- **AND** the candidate is not keepable
+
+#### Scenario: economic return floor fails gate
+- **WHEN** the base foundation full Train total return is below the protocol-owned minimum
+- **THEN** the economic-return gate fails
+- **AND** the candidate is not keepable
+
+### Requirement: Trade diagnostics remain diagnostic
+Completed trade economics SHALL remain available for basic diagnostics such as win rate, profit factor, average trade net, and cost return sum, but trade-bag statistics SHALL NOT be used to compute the portfolio-foundation objective or foundation-backed gates.
+
+#### Scenario: trade metrics do not override foundation score
+- **WHEN** trade diagnostics are present but portfolio-foundation score inputs are unavailable
+- **THEN** the loop does not compute a fallback score from trade returns

@@ -6,8 +6,9 @@ slice carries the run. This module instead scores trade-unit robustness:
 
 Selectable objective kinds today:
 
-- `worst_subwindow`: the only supported `objective.kind`. It scores every
-  configured Train time slice and uses the weakest slice as the run score.
+- `portfolio_psr_subwindow`: the active protocol objective. It computes PSR from
+  upstream portfolio-foundation metrics for full Train and every configured Train
+  subwindow, then uses the weakest evidence value as the run score.
 
 Not selectable as objective kinds today:
 
@@ -16,11 +17,14 @@ Not selectable as objective kinds today:
   explain why a candidate worked or failed, but they do not decide the primary
   keep/discard score.
 
-`worst_subwindow` is calculated as:
+Legacy helper `score_worst_subwindow` still exists for narrow tests and historical
+comparisons, but the protocol no longer uses it for active Train iteration.
 
-1. Split the configured Train window into contiguous time subwindows.
-2. For each subwindow, score the completed trade net returns as mean / sigma.
-3. Use the minimum subwindow score as the run score.
+`portfolio_psr_subwindow` is calculated as:
+
+1. Read upstream-owned `realistic_costs` foundation metrics.
+2. Compute PSR for full Train and each configured subwindow.
+3. Use `min(full_train_psr, min(subwindow_psrs))` as the run score.
 
 That makes the score a development filter for consistency, not a proof of an
 edge. Binary gates elsewhere still own basic viability constraints such as
@@ -34,7 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
-from statistics import fmean, pstdev
+from statistics import NormalDist, fmean, pstdev
 from typing import Sequence
 
 
@@ -51,15 +55,48 @@ class LoopConfig:
 class ObjectiveConfig:
     """Configured Train objective.
 
-    `kind` is intentionally narrow today. The only accepted value is
-    `worst_subwindow`; protocol loading and `score_objective` reject any other
-    objective kind. `subwindows` is the number of equal-duration slices used to
-    test whether the strategy works across the Train window rather than only in
-    one favorable regime.
+    `kind` is intentionally narrow for active protocol loading. The supported
+    active value is `portfolio_psr_subwindow`; `subwindows` is the number of
+    equal-duration slices used to test whether the strategy works across the
+    Train window rather than only in one favorable regime.
     """
 
     kind: str
     subwindows: int
+    psr_hurdle_sharpe: float = 0.0
+
+
+@dataclass(frozen=True)
+class FoundationMetric:
+    """Upstream-owned portfolio-return metric record used by local scoring."""
+
+    window_id: str
+    return_sample_count: int
+    effective_sample_size: float | None
+    sharpe: float | None
+    sharpe_standard_error: float | None
+    total_return: float | None
+    max_drawdown: float | None
+    closed_trade_count: int
+    max_symbol_concentration: float | None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FoundationScenario:
+    """One upstream portfolio-foundation scenario."""
+
+    scenario_id: str
+    full_train: FoundationMetric
+    subwindows: tuple[FoundationMetric, ...]
+
+
+@dataclass(frozen=True)
+class FoundationEvidence:
+    """Portfolio-foundation scenarios emitted by quick run."""
+
+    realistic_costs: FoundationScenario
+    cost_stress: FoundationScenario
 
 
 @dataclass(frozen=True)
@@ -94,6 +131,9 @@ class ObjectiveResult:
     subwindow_scores: tuple[float, ...]
     subwindow_trade_counts: tuple[int, ...]
     detail: str = ""
+    full_train_psr: float | None = None
+    subwindow_psrs: tuple[float, ...] = ()
+    worst_subwindow_id: str = ""
 
 
 def _score_returns(values: Sequence[float]) -> float:
@@ -223,12 +263,104 @@ def score_worst_subwindow(
     )
 
 
+def _psr(metric: FoundationMetric, *, hurdle: float) -> tuple[float | None, str]:
+    sharpe = metric.sharpe
+    sharpe_se = metric.sharpe_standard_error
+    if sharpe is None:
+        return None, f"{metric.window_id} missing sharpe"
+    if sharpe_se is None:
+        return None, f"{metric.window_id} missing sharpe_standard_error"
+    if not isfinite(float(sharpe)):
+        return None, f"{metric.window_id} non-finite sharpe"
+    if not isfinite(float(sharpe_se)) or float(sharpe_se) <= 0.0:
+        return None, f"{metric.window_id} invalid sharpe_standard_error"
+    value = NormalDist().cdf((float(sharpe) - hurdle) / float(sharpe_se))
+    return value, ""
+
+
+def _score_foundation_scenario(
+    scenario: FoundationScenario,
+    config: ObjectiveConfig,
+) -> ObjectiveResult:
+    if len(scenario.subwindows) != config.subwindows:
+        return ObjectiveResult(
+            score=None,
+            feasible=False,
+            subwindow_scores=(),
+            subwindow_trade_counts=tuple(
+                metric.closed_trade_count for metric in scenario.subwindows
+            ),
+            detail=(
+                f"foundation subwindow count {len(scenario.subwindows)} "
+                f"!= configured {config.subwindows}"
+            ),
+        )
+
+    full_psr, detail = _psr(
+        scenario.full_train,
+        hurdle=config.psr_hurdle_sharpe,
+    )
+    if full_psr is None:
+        return ObjectiveResult(
+            score=None,
+            feasible=False,
+            subwindow_scores=(),
+            subwindow_trade_counts=tuple(
+                metric.closed_trade_count for metric in scenario.subwindows
+            ),
+            detail=detail,
+        )
+
+    subwindow_psrs: list[float] = []
+    counts: list[int] = []
+    for metric in scenario.subwindows:
+        counts.append(metric.closed_trade_count)
+        value, detail = _psr(metric, hurdle=config.psr_hurdle_sharpe)
+        if value is None:
+            return ObjectiveResult(
+                score=None,
+                feasible=False,
+                subwindow_scores=tuple(subwindow_psrs),
+                subwindow_trade_counts=tuple(counts),
+                detail=detail,
+                full_train_psr=full_psr,
+                subwindow_psrs=tuple(subwindow_psrs),
+            )
+        subwindow_psrs.append(value)
+
+    worst_index, worst_psr = min(
+        enumerate(subwindow_psrs),
+        key=lambda item: item[1],
+    )
+    score = min(full_psr, worst_psr)
+    worst_subwindow_id = scenario.subwindows[worst_index].window_id
+    return ObjectiveResult(
+        score=score,
+        feasible=True,
+        subwindow_scores=tuple(subwindow_psrs),
+        subwindow_trade_counts=tuple(counts),
+        full_train_psr=full_psr,
+        subwindow_psrs=tuple(subwindow_psrs),
+        worst_subwindow_id=worst_subwindow_id,
+    )
+
+
+def score_foundation_cost_stress(
+    foundation: FoundationEvidence,
+    config: ObjectiveConfig,
+) -> ObjectiveResult:
+    """Score upstream cost-stress portfolio foundation with the live PSR rule."""
+
+    return _score_foundation_scenario(foundation.cost_stress, config)
+
+
 def score_objective(
     trades: Sequence[TradeSample],
     config: ObjectiveConfig,
     *,
     window_start: datetime | None = None,
     window_end: datetime | None = None,
+    foundation: FoundationEvidence | None = None,
 ) -> ObjectiveResult:
     """Dispatch to the configured Train objective."""
 
@@ -239,6 +371,16 @@ def score_objective(
             window_start=window_start,
             window_end=window_end,
         )
+    if config.kind == "portfolio_psr_subwindow":
+        if foundation is None:
+            return ObjectiveResult(
+                score=None,
+                feasible=False,
+                subwindow_scores=(),
+                subwindow_trade_counts=(),
+                detail="portfolio foundation unavailable",
+            )
+        return _score_foundation_scenario(foundation.realistic_costs, config)
     raise ValueError(f"unsupported objective kind: {config.kind}")
 
 

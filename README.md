@@ -11,7 +11,7 @@ This is not a trading system, investment advice, or proof of deployability.
 | Path | Role |
 | --- | --- |
 | `program.md` | One-page agent operating contract. |
-| `strategy.py` | Agent-editable pure signal logic. |
+| `strategy.py` | Agent-editable target book: standing weight-of-NAV `TargetDecision`s. |
 | `experiment.toml` | Agent-editable bounded strategy params. |
 | `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
 | `rationale.md` | Working thesis, signal components, and variant log. |
@@ -37,6 +37,8 @@ The agent does not edit:
 - data kind
 - cost model
 - fill model
+- capacity model
+- leverage budget
 - objective kind
 - gate thresholds
 - `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
@@ -55,7 +57,7 @@ Generated audit and handoff artifacts are evidence records, not source. Thesis l
 
 Season downstream-only artifacts include OOS drift reviews, OOS evaluation artifacts, paper-test notes, and small-live notes. They must not feed back into the same Train loop.
 
-Do not browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks. Historical or non-contract context includes `docs/reviews/`, archived OpenSpec changes, and historical design discussion.
+Do not browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks.
 
 ## Loop
 
@@ -97,4 +99,4 @@ The configured local environment can reach `quant_data` for real quick-run smoke
 
 `quant_autoresearch` consumes `quant_strategies` through public APIs only. Strategy execution uses `quant_strategies.runner.run_config`; private engine modules are not part of this contract.
 
-Quick-run economics expose trade-unit after-cost samples for diagnostics. Quick-run portfolio foundation exposes compact full-Train and subwindow portfolio-return metrics for the active Train score and gates. Survivor-grade NAV/path traces still belong downstream, outside this Train loop.
+There is one model of money: the single netted-book NAV path is the scored object, read from the quick-run portfolio foundation (compact full-Train and subwindow portfolio-return metrics for the Train score and gates). The per-trade economics tape is a derived attribution view of that same book, used for diagnostics only. Survivor-grade NAV/path traces still belong downstream, outside this Train loop.

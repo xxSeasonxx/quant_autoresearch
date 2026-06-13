@@ -123,9 +123,9 @@ The active default protocol SHALL document why the default symbol universe, Trai
 The protocol SHALL expose operator-owned quick-run foundation output settings and materialize them into public `quant_strategies.runner.run_config` output config. Foundation subwindow count SHALL match the configured objective subwindow count for portfolio-foundation scoring.
 
 #### Scenario: foundation output is materialized
-- **WHEN** the protocol enables portfolio foundation output
-- **THEN** the materialized quick-run config includes `foundation_enabled = true`
-- **AND** `foundation_subwindows` equals `objective.subwindows`
+- **WHEN** the protocol materializes the quick-run config
+- **THEN** the materialized quick-run config includes `foundation_subwindows` equal to `objective.subwindows`
+- **AND** `foundation_cost_stress_multiplier` is materialized for the cost-stress scenario
 
 #### Scenario: foundation subwindow mismatch is rejected
 - **WHEN** a protocol would materialize a foundation subwindow count different from the objective subwindow count

@@ -3,92 +3,71 @@
 # This file is the source of truth for HOW a thesis is run and judged on Train.
 # The agent reads these values but does not change them during a thesis run.
 #
-# Where these settings come from:
-# - symbols / dates / data kind: Season chooses them from quant_data readiness and
-#   the thesis's intended market. They define the Train-only sample handed to the
-#   loop. OOS windows are deliberately absent.
-# - costs / fills: Season chooses realistic execution assumptions for the market.
-#   Strategy params cannot zero costs or change fill timing.
-# - objective / gates / loop constants: Season chooses the robustness target,
-#   minimum evidence bars, and stopping behavior before the thesis starts. The
-#   agent optimizes only strategy.py and bounded params against this frozen setup.
+# Operator-frozen here: universe, window, data kind, costs, fills, capacity model,
+# leverage budget, objective, gates, and loop constants. Season chooses them from
+# quant_data readiness and the active thesis before the run starts. The agent
+# optimizes only strategy.py and bounded params against this frozen setup, and
+# must build within the leverage budget; intended exposure beyond it is a
+# fail-closed, non-scoreable feasibility verdict upstream, not a low score.
 #
-# Recommendation:
-# - Active default below is the normal thesis-development setup: 2 years of Train,
-#   6 robustness subwindows, and a 120-trade floor.
-# - For a quick local smoke run, temporarily use 2025-01-01 -> 2025-01-14,
-#   subwindows = 2, and min_trades = 4.
-# - For a heavier overnight run, use 2023-01-01 -> 2025-12-31 if runtime is
-#   acceptable. Keep 2026+ reserved for downstream OOS while local data ends near
-#   2026-04-13.
-# - Change plateau_patience / max_iterations only to control research budget:
-#   smaller for fast checks, larger for overnight runs. Do not change them after
-#   seeing a thesis's result.
+# These are neutral template defaults for crypto-perp thesis development. Season
+# sets the real universe/window/costs/objective/gates when a new thesis starts.
 
-# The pure strategy file and strategy id passed through to quant_strategies.
+# The pure strategy file and strategy id passed through to quant_strategies. The
+# strategy's emitted decisions must carry this strategy_id.
 strategy_path = "strategy.py"
-strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
+strategy_id = "autoresearch_template"
 
 [data]
-# Public quant_strategies data loader kind. This is protocol-owned because data
-# source choice changes what information the strategy can see.
+# Public quant_strategies data loader kind. Data source choice changes what
+# information the strategy can see, so it is protocol-owned.
 kind = "crypto_perp_funding"
-# Fixed Train universe. The agent must not cherry-pick symbols in params.
-#
-# Symbol universe rationale:
-# - BTC-PERP and ETH-PERP are the most liquid crypto perp anchors in the local
-#   minute-bar dataset.
-# - DOGE-PERP, ADA-PERP, and LINK-PERP match the researched rank-01 funding
-#   crowding universe Season asked to baseline here.
-# - The five-symbol snapshot is explicit protocol state; later evidence is about
-#   this strategy-universe combination, not pure strategy improvement.
+# Fixed Train universe. The agent must not cherry-pick symbols in params; a
+# universe change is an explicit protocol edit recorded in rationale.md.
 symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
-# Train-only date range. Date-only end is interpreted like the upstream loader:
-# the loop includes the full end date by using a half-open [start, end + 1 day)
-# objective window.
-#
-# Train window rationale:
-# - 2024-01-01 through 2025-12-31 gives the default thesis two full years of
-#   minute-bar Train history without consuming the 2026+ downstream OOS reserve.
-# - This is a default for crypto perp thesis development, not a universal window.
-#
-# Smoke/debug alternative:
-# start = "2025-01-01"
-# end = "2025-01-14"
-#
-# Heavier overnight alternative:
-# start = "2023-01-01"
-# end = "2025-12-31"
+# Train-only window. A date-only end is read as the half-open [start, end + 1 day)
+# objective window. OOS windows are deliberately absent from this loop.
 start = "2025-03-01"
 end = "2025-12-31"
-# Execution-only buffer used by the runner to resolve exits for late Train
-# decisions. Strategy generation and Train scoring still use start/end above.
+# Execution-only buffer the runner uses to resolve exits for late Train decisions.
+# Strategy generation and Train scoring still use start/end above.
 load_end = "2026-01-07"
 
 [fill_model]
 # Fill price used by quant_strategies. For bar data, close is the simple public
-# runner-compatible choice; quote-based fills belong to quote datasets.
+# choice; quote-based fills belong to quote datasets.
 price = "close"
-# Entry lag of 1 means a signal emitted after a bar is available fills on the
-# next bar, not the signal bar. This protects close-derived signals from lookahead.
+# Entry lag of 1 means a target that becomes actionable after a bar fills on the
+# next bar, never the signal bar. This protects close-derived signals from lookahead.
 entry_lag_bars = 1
-# Exit lag is kept at 0 so max_hold exits occur at the configured hold boundary.
-exit_lag_bars = 0
 
 [cost_model]
-# Per-side fee in basis points. 5 bps is intentionally conservative for a crypto
-# perp smoke protocol.
+# Per-side fee in basis points.
 fee_bps_per_side = 5.0
-# Per-side slippage in basis points. The loop's cost-stress gate applies an
-# additional round-trip bump derived from fee + slippage.
+# Per-side slippage in basis points. The cost-stress gate applies an additional
+# round-trip bump derived from fee + slippage.
 slippage_bps_per_side = 1.0
+
+[capacity_model]
+# Operator-frozen capacity envelope. "off" runs no capacity pricing; the upstream
+# portfolio book treats a traded notional book with capacity off as non-scoreable
+# (a typed `capacity_unpriced` feasibility verdict). Before a real thesis run,
+# Season sets mode = "adv_impact" with portfolio_notional and the ADV/impact
+# parameter set so the book can score.
+mode = "off"
+
+[leverage_budget]
+# Operator-frozen gross/net exposure ceiling. Intended standing exposure beyond
+# the ceiling fails closed upstream and is never clamped. 1.0/1.0 is fully invested.
+max_gross_exposure = 1.0
+max_net_exposure = 1.0
 
 [output]
 # Must stay under results/ because quant_strategies rejects non-generated output
 # directories.
 results_dir = "results"
-# diagnostic gives diagnostics.json with economic slices and sampled trades,
-# which is more useful for the agent's next edit than summary-only output.
+# diagnostic gives diagnostics.json with economic slices and sampled trades, more
+# useful for the next edit than summary-only output.
 artifact_profile = "diagnostic"
 # Let quant_strategies run its lightweight quick checks.
 quick_checks = true
@@ -99,65 +78,55 @@ focused_probe_limit = 10
 focused_timeout_seconds = 180.0
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
-# Emit compact portfolio-foundation metrics for local PSR scoring and gates.
-foundation_enabled = true
+# Portfolio-foundation subwindows must equal objective.subwindows.
 foundation_subwindows = 6
+# Cost-stress scenario multiplier applied to fee + slippage upstream.
 foundation_cost_stress_multiplier = 2.0
 
 [loop]
 # M: stop after this many consecutive completed non-improving attempts once a
-# feasible baseline exists. Season overrode this on 2026-06-09 after the first
-# plateau stop to continue exit and take-profit exploration through the 50-run
-# budget.
-plateau_patience = 50
+# feasible baseline exists.
+plateau_patience = 10
 # N: hard cap on completed attempts for this thesis.
 max_iterations = 100
 # eps: absolute score improvement required to reset plateau patience.
 min_abs_improvement = 0.001
-# rho: relative score improvement required. 0 disables the relative component;
-# the effective threshold is max(eps, rho * max(1, abs(best_score))).
+# rho: relative score improvement required. 0 disables the relative component; the
+# effective threshold is max(eps, rho * max(1, abs(best_score))).
 min_rel_improvement = 0.0
-# Initial attempts allowed to find any feasible baseline before the thesis dies
-# on Train. Season overrode this run budget on 2026-06-09 to continue the
-# experiment through 50 completed attempts even if early attempts do not find a
-# feasible baseline.
-baseline_grace_iterations = 50
+# Initial attempts allowed to find any feasible baseline before the thesis dies on
+# Train.
+baseline_grace_iterations = 10
 
 [objective]
 # Robustness target selected before the thesis starts. The agent cannot pick a
 # friendlier objective after seeing results.
-# Currently supported objective kinds:
 # - portfolio_psr_subwindow: compute PSR from upstream portfolio-foundation
 #   full-Train and subwindow return statistics, then use the weakest evidence
 #   value as the run score.
 kind = "portfolio_psr_subwindow"
-# K: number of contiguous Train time slices for worst_subwindow. Six slices over
-# two years gives roughly quarterly robustness checks.
-# Subwindow rationale: K=6 is enough to reject idle or one-regime Train survivors
-# while keeping per-slice trade floors attainable for simple short-horizon ideas.
-# Smoke/debug alternative: subwindows = 2
+# K: number of contiguous Train time slices. Six slices over the window gives
+# roughly bi-monthly robustness checks while keeping per-slice trade floors
+# attainable for simple short-horizon ideas.
 subwindows = 6
 # Hurdle Sharpe in the same non-annualized units as upstream quick-run foundation
-# Sharpe. Keep at 0.0 unless Season chooses a stricter thesis-level hurdle before
-# a new run starts.
+# Sharpe. Keep at 0.0 unless Season chooses a stricter thesis-level hurdle.
 psr_hurdle_sharpe = 0.0
 
 [gates]
-# Minimum completed trades required before the score can be considered alive.
-# Smoke/debug alternative: min_trades = 4
+# Minimum netted-book closed trades before the score can be considered alive.
 min_trades = 120
-# Minimum completed trades required in every configured objective subwindow.
-# This prevents idle Train slices from counting as robustness evidence.
-# Smoke/debug alternative: min_trades_per_subwindow = 1
+# Minimum closed trades required in every configured objective subwindow. This
+# prevents idle Train slices from counting as robustness evidence.
 min_trades_per_subwindow = 12
-# Minimum fixed-frequency portfolio-return observations required for full Train
-# and every scoring subwindow.
+# Minimum fixed-frequency portfolio-return observations required for full Train and
+# every scoring subwindow.
 min_return_sample_count = 100
-# Minimum effective portfolio-return sample size required for full Train and
-# every scoring subwindow after upstream autocorrelation adjustment.
+# Minimum effective portfolio-return sample size required for full Train and every
+# scoring subwindow after upstream autocorrelation adjustment.
 min_effective_sample_size = 50.0
-# Maximum share of absolute net trade activity carried by one symbol. Lower is
-# stricter diversification; 0.80 is permissive for a two-symbol smoke protocol.
+# Maximum share of net activity carried by one symbol. Lower is stricter
+# diversification.
 max_symbol_concentration = 0.70
 # Minimum portfolio-foundation PSR under the upstream cost-stress scenario.
 min_cost_stress_psr = 0.50

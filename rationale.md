@@ -1,27 +1,24 @@
 # Rationale
 
-## Offloaded Thesis
+Working thesis log for the active run. It currently holds the neutral template,
+not a researched thesis. When Season seeds a real thesis, replace the Working
+Thesis and Signal Components below so they match `strategy.py`.
 
-This thesis has been offloaded from `quant_autoresearch`.
+## Working Thesis
 
-- Destination: `/Users/Season_Yang/Personal/quant_strategies/researched/crypto_perp_funding_crowding_reversal`
-- Final Train survivor: `attempt-0099`
-- Survivor strategy SHA256: `da845fbe157d6d851b1cbbd90d1269baa1af545f9c67764fac6cb9795689515f`
-- Canonical results SHA256 at offload: `ad4ef7df46f77a840a47c55992929b53d98685cc9167f56d7b92aa58eb9a9de0`
-- Offload date: 2026-06-09
+- **Mechanism:** none claimed. The template holds a long weight-of-NAV target
+  while price trends up and flattens otherwise, only to exercise the target-book
+  contract end to end.
+- **Observable:** per-symbol close and its `available_at`, compared across
+  `lookback_bars`.
+- **Falsifier:** as a neutral placeholder it should show no durable edge; a real
+  thesis replaces it before any tuning.
+- **First failure mode to watch:** sparse or one-regime evidence, since a plain
+  trend rule rarely clears the subwindow PSR floor.
 
-The downstream package contains the curated rationale, canonical `results.tsv`,
-retained candidate snapshots, diagnostics, and evaluation notes.
+## Signal Components
 
-Do not continue tuning this thesis in this repository. Downstream OOS/evaluation
-must remain one-way and must not feed back into this same Train thesis.
+### Component: trend_direction
 
-## Next Thesis Placeholder
-
-Start a new thesis here only after Season chooses:
-
-- mechanism;
-- observable;
-- falsifier;
-- protocol-owned universe/window/cost/fill assumptions;
-- whether to reset `strategy.py` and `experiment.toml` from a known template.
+Long while the latest available close exceeds the close `lookback_bars` bars
+earlier; flat otherwise. Targets are standing and emitted only on change.

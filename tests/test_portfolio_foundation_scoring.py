@@ -214,11 +214,17 @@ end = "2025-01-31"
 [fill_model]
 price = "close"
 entry_lag_bars = 1
-exit_lag_bars = 0
 
 [cost_model]
 fee_bps_per_side = 1.0
 slippage_bps_per_side = 1.0
+
+[capacity_model]
+mode = "off"
+
+[leverage_budget]
+max_gross_exposure = 1.0
+max_net_exposure = 1.0
 
 [output]
 results_dir = "results"
@@ -226,7 +232,6 @@ artifact_profile = "diagnostic"
 quick_checks = true
 causality_check = "micro"
 diagnostic_sample_trades = 5
-foundation_enabled = true
 foundation_subwindows = 3
 foundation_cost_stress_multiplier = 2.0
 
@@ -269,31 +274,27 @@ def test_protocol_materializes_foundation_and_micro(tmp_path: Path):
     assert protocol.output.causality_check == "micro"
     assert protocol.objective.kind == "portfolio_psr_subwindow"
     assert protocol.objective.psr_hurdle_sharpe == 0.0
-    assert protocol.output.foundation_enabled is True
+    assert protocol.capacity_model.mode == "off"
     assert output["causality_check"] == "micro"
-    assert output["foundation_enabled"] is True
     assert output["foundation_subwindows"] == 3
     assert output["foundation_cost_stress_multiplier"] == 2.0
+    assert quick["capacity_model"]["mode"] == "off"
+    assert quick["leverage_budget"]["max_net_exposure"] == 1.0
+    assert quick["envelope"]["operator_frozen"] is True
 
 
-def test_protocol_rejects_missing_foundation_and_low_cost_stress_multiplier(tmp_path: Path):
+def test_protocol_rejects_missing_capacity_and_low_cost_stress_multiplier(tmp_path: Path):
     protocol_path = tmp_path / "protocol.toml"
 
-    protocol_path.write_text(_protocol_text().replace("foundation_enabled = true\n", ""))
+    protocol_path.write_text(
+        _protocol_text().replace('[capacity_model]\nmode = "off"\n', "")
+    )
     try:
         load_protocol(protocol_path)
     except ValueError as exc:
-        assert "foundation_enabled" in str(exc)
+        assert "capacity_model" in str(exc)
     else:
-        raise AssertionError("expected missing foundation_enabled to fail")
-
-    protocol_path.write_text(_protocol_text().replace("foundation_enabled = true", "foundation_enabled = false"))
-    try:
-        load_protocol(protocol_path)
-    except ValueError as exc:
-        assert "foundation_enabled must be true" in str(exc)
-    else:
-        raise AssertionError("expected disabled foundation output to fail")
+        raise AssertionError("expected missing capacity_model to fail")
 
     protocol_path.write_text(
         _protocol_text().replace("foundation_cost_stress_multiplier = 2.0", "foundation_cost_stress_multiplier = 0.5")
@@ -750,7 +751,10 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     ]
     assert run_card_payload["causality"]["causality_check"] == "micro"
     assert run_card_payload["primary_failure_mode"] == ""
-    assert "foundation_enabled = true" in quick_config.read_text()
+    quick_config_text = quick_config.read_text()
+    assert "[capacity_model]" in quick_config_text
+    assert 'mode = "off"' in quick_config_text
+    assert "[leverage_budget]" in quick_config_text
 
 
 def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_path: Path):

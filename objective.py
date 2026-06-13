@@ -1,36 +1,26 @@
 """Train objective and loop-stop math for autonomous strategy research.
 
-The core Train objective is intentionally not aggregate PnL. Aggregate PnL can
-look strong when one symbol, one regime, one large position, or one lucky time
-slice carries the run. This module instead scores trade-unit robustness:
+The Train objective scores the upstream netted-book NAV path, not aggregate PnL
+and not a per-trade return bag. Aggregate PnL can look strong when one symbol, one
+regime, one large position, or one lucky slice carries the run; the NAV path makes
+the evidence about capital over time.
 
-Selectable objective kinds today:
+`portfolio_psr_subwindow` is the objective:
 
-- `portfolio_psr_subwindow`: the active protocol objective. It computes PSR from
-  upstream portfolio-foundation metrics for full Train and every configured Train
-  subwindow, then uses the weakest evidence value as the run score.
-
-Not selectable as objective kinds today:
-
-- aggregate net return, average trade return, win rate, profit factor, gross
-  return, or cost-stressed score. Those are diagnostics or gates. They can help
-  explain why a candidate worked or failed, but they do not decide the primary
-  keep/discard score.
-
-Legacy helper `score_worst_subwindow` still exists for narrow tests and historical
-comparisons, but the protocol no longer uses it for active Train iteration.
-
-`portfolio_psr_subwindow` is calculated as:
-
-1. Read upstream-owned `realistic_costs` foundation metrics.
-2. Compute PSR for full Train and each configured subwindow.
+1. Read the upstream `realistic_costs` portfolio-foundation metrics.
+2. Compute PSR for full Train and each configured Train subwindow.
 3. Use `min(full_train_psr, min(subwindow_psrs))` as the run score.
 
-That makes the score a development filter for consistency, not a proof of an
-edge. Binary gates elsewhere still own basic viability constraints such as
-minimum trade count, subwindow coverage, concentration, cost stress, complexity,
-and Train score floor. A high score with failed gates is not a keepable
-candidate.
+PSR puts the score on a probability scale and adjusts for Sharpe uncertainty via
+the upstream Sharpe standard error. The `min(...)` shape is a development filter
+for consistency across the whole Train window, not proof of an edge. Binary gates
+elsewhere own viability constraints (trade count, subwindow coverage, evidence,
+concentration, cost stress, path risk, economic magnitude, complexity, and the
+Train score floor). A high score with failed gates is not a keepable candidate.
+
+A subwindow the upstream foundation cannot score (too few at-risk-bar return
+samples) yields no PSR, so the run is non-scoreable rather than assigned a finite
+Sharpe.
 """
 
 from __future__ import annotations
@@ -38,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
-from statistics import NormalDist, fmean, pstdev
+from statistics import NormalDist
 from typing import Sequence
 
 
@@ -101,12 +91,12 @@ class FoundationEvidence:
 
 @dataclass(frozen=True)
 class TradeSample:
-    """Completed trade input used by the objective.
+    """Completed trade from the upstream per-trade attribution ledger.
 
-    `net_return` is already after protocol-owned costs/fills. The base objective
-    scores these net returns as trade units; it does not multiply returns by
-    notional or optimize aggregate capital usage. `weight` is kept for cost
-    stress so larger emitted positions pay a larger extra round-trip penalty.
+    The per-trade tape is a derived attribution view of the one NAV book; it feeds
+    diagnostics (win rate, profit factor, average net) and the trade-bag fallback
+    for symbol concentration, but it is not scored. `net_return` is already after
+    protocol-owned costs/fills; `weight` is the emitted position weight.
     """
 
     symbol: str
@@ -134,133 +124,6 @@ class ObjectiveResult:
     full_train_psr: float | None = None
     subwindow_psrs: tuple[float, ...] = ()
     worst_subwindow_id: str = ""
-
-
-def _score_returns(values: Sequence[float]) -> float:
-    """Score one subwindow's trade returns as mean / population stddev.
-
-    Positive mean and low dispersion produce a higher score. Negative mean or
-    noisy trade outcomes pull the score down. For one trade, or for a flat set
-    of identical returns, there is no dispersion estimate to divide by, so the
-    mean is returned directly.
-    """
-
-    if not values:
-        return 0.0
-    mean = fmean(values)
-    if len(values) == 1:
-        return mean
-    sigma = pstdev(values)
-    if sigma == 0.0:
-        return mean
-    return mean / sigma
-
-
-def _time_buckets(
-    trades: Sequence[TradeSample],
-    *,
-    subwindows: int,
-    window_start: datetime | None = None,
-    window_end: datetime | None = None,
-) -> tuple[tuple[TradeSample, ...], ...]:
-    """Assign trades to contiguous time buckets over the Train window.
-
-    When `window_start` and `window_end` are provided by the protocol, empty
-    subwindows stay visible instead of shrinking the objective around emitted
-    trades. That is important: a strategy that only trades during favorable
-    parts of Train should show sparse or empty slices rather than receive a
-    friendlier window.
-    """
-
-    ordered = sorted(trades, key=lambda trade: trade.decision_time)
-    if not ordered:
-        return ()
-    start = window_start or ordered[0].decision_time
-    include_end = window_end is None
-    end = window_end or ordered[-1].decision_time
-    if end < start:
-        raise ValueError("window_end must be >= window_start")
-    if start == end:
-        return (tuple(ordered),) + tuple(() for _ in range(subwindows - 1))
-
-    total_seconds = (end - start).total_seconds()
-    buckets: list[list[TradeSample]] = [[] for _ in range(subwindows)]
-    for trade in ordered:
-        if trade.decision_time < start:
-            continue
-        if include_end:
-            if trade.decision_time > end:
-                continue
-        elif trade.decision_time >= end:
-            continue
-        offset = (trade.decision_time - start).total_seconds()
-        index = min(subwindows - 1, int(offset / total_seconds * subwindows))
-        buckets[index].append(trade)
-    return tuple(tuple(bucket) for bucket in buckets)
-
-
-def score_worst_subwindow(
-    trades: Sequence[TradeSample],
-    *,
-    subwindows: int,
-    window_start: datetime | None = None,
-    window_end: datetime | None = None,
-) -> ObjectiveResult:
-    """Score Train robustness as the weakest time slice.
-
-    Each subwindow receives a trade-unit score from `_score_returns`. The final
-    score is `min(subwindow_scores)`, so a candidate must be reasonably robust
-    across the full Train window instead of relying on one strong period.
-
-    Subwindow coverage is intentionally not enforced here. The objective reports
-    counts, while gates decide whether sparse buckets are acceptable.
-    """
-
-    if subwindows < 1:
-        raise ValueError("subwindows must be >= 1")
-    if not trades:
-        return ObjectiveResult(
-            score=None,
-            feasible=False,
-            subwindow_scores=(),
-            subwindow_trade_counts=(),
-            detail="no trades",
-        )
-
-    scores: list[float] = []
-    counts: list[int] = []
-    for chunk in _time_buckets(
-        trades,
-        subwindows=subwindows,
-        window_start=window_start,
-        window_end=window_end,
-    ):
-        values = [float(trade.net_return) for trade in chunk]
-        counts.append(len(values))
-        if any(not isfinite(value) for value in values):
-            return ObjectiveResult(
-                score=None,
-                feasible=False,
-                subwindow_scores=tuple(scores),
-                subwindow_trade_counts=tuple(counts),
-                detail="non-finite trade return",
-            )
-        scores.append(_score_returns(values))
-
-    if not scores:
-        return ObjectiveResult(
-            score=None,
-            feasible=False,
-            subwindow_scores=(),
-            subwindow_trade_counts=(),
-            detail="no valid subwindows",
-        )
-    return ObjectiveResult(
-        score=min(scores),
-        feasible=True,
-        subwindow_scores=tuple(scores),
-        subwindow_trade_counts=tuple(counts),
-    )
 
 
 def _psr(metric: FoundationMetric, *, hurdle: float) -> tuple[float | None, str]:
@@ -358,62 +221,26 @@ def score_objective(
     trades: Sequence[TradeSample],
     config: ObjectiveConfig,
     *,
-    window_start: datetime | None = None,
-    window_end: datetime | None = None,
     foundation: FoundationEvidence | None = None,
 ) -> ObjectiveResult:
-    """Dispatch to the configured Train objective."""
+    """Score the run from the upstream portfolio foundation.
 
-    if config.kind == "worst_subwindow":
-        return score_worst_subwindow(
-            trades,
-            subwindows=config.subwindows,
-            window_start=window_start,
-            window_end=window_end,
-        )
-    if config.kind == "portfolio_psr_subwindow":
-        if foundation is None:
-            return ObjectiveResult(
-                score=None,
-                feasible=False,
-                subwindow_scores=(),
-                subwindow_trade_counts=(),
-                detail="portfolio foundation unavailable",
-            )
-        return _score_foundation_scenario(foundation.realistic_costs, config)
-    raise ValueError(f"unsupported objective kind: {config.kind}")
-
-
-def score_cost_stress(
-    trades: Sequence[TradeSample],
-    *,
-    subwindows: int,
-    extra_round_trip_bps: float,
-    window_start: datetime | None = None,
-    window_end: datetime | None = None,
-) -> ObjectiveResult:
-    """Re-score after adding an extra round-trip cost penalty.
-
-    Cost stress asks whether the same trade distribution survives a harsher cost
-    assumption. The penalty is proportional to `abs(weight)` because larger
-    emitted positions should be more sensitive to extra costs.
+    `trades` are accepted for call symmetry with the loop's diagnostics path but
+    are not scored: the scored unit is the netted-book NAV path, read from the
+    foundation's realistic-costs scenario.
     """
 
-    stressed = tuple(
-        TradeSample(
-            symbol=trade.symbol,
-            decision_time=trade.decision_time,
-            net_return=trade.net_return - abs(trade.weight) * extra_round_trip_bps / 10_000.0,
-            weight=trade.weight,
+    if config.kind != "portfolio_psr_subwindow":
+        raise ValueError(f"unsupported objective kind: {config.kind}")
+    if foundation is None:
+        return ObjectiveResult(
+            score=None,
+            feasible=False,
+            subwindow_scores=(),
+            subwindow_trade_counts=(),
+            detail="portfolio foundation unavailable",
         )
-        for trade in trades
-    )
-    return score_worst_subwindow(
-        stressed,
-        subwindows=subwindows,
-        window_start=window_start,
-        window_end=window_end,
-    )
+    return _score_foundation_scenario(foundation.realistic_costs, config)
 
 
 def is_improvement(

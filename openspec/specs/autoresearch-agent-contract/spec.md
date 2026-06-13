@@ -46,13 +46,6 @@ The agent contract SHALL forbid running `quant-strategies evaluate`, importing e
 - **WHEN** the agent command list is inspected
 - **THEN** it includes no `evaluate`, `screen`, `graduate`, or `lockbox` command
 
-### Requirement: Active docs are distinguishable from historical design context
-The agent contract SHALL make the active operating sources distinguishable from historical discussion documents.
-
-#### Scenario: historical design doc is labeled
-- **WHEN** the simplified loop design discussion is read
-- **THEN** it identifies itself as historical or superseded context and points to active operating docs or specs
-
 ### Requirement: Local type checking passes
 The project SHALL keep local `mypy .` checks passing, with untyped upstream imports handled by explicit narrow configuration rather than broad ignores.
 
@@ -65,7 +58,7 @@ The project SHALL keep local `mypy .` checks passing, with untyped upstream impo
 - **THEN** missing-import ignores are scoped to `quant_strategies.*`
 
 ### Requirement: Agent contract defines artifact authority
-The agent contract SHALL distinguish active-loop inputs from generated audit/handoff artifacts, Season downstream-only artifacts, and historical or non-contract context.
+The agent contract SHALL distinguish active-loop inputs from generated audit/handoff artifacts and Season downstream-only artifacts.
 
 #### Scenario: Active loop inputs are bounded
 - **WHEN** an agent reads `program.md` for an active Train research run
@@ -75,14 +68,7 @@ The agent contract SHALL distinguish active-loop inputs from generated audit/han
 - **WHEN** an agent reads `program.md` for an active Train research run
 - **THEN** it is told that thesis locks, snapshots, and terminal manifests are generated audit or handoff artifacts rather than routine inputs for choosing Train edits
 
-#### Scenario: Historical context is not operating contract
+#### Scenario: Rest of repo is not a routine loop input
 - **WHEN** an agent reads active docs
 - **THEN** it is told not to browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks
-
-### Requirement: Historical design sketches are non-contract
-The agent contract SHALL make clear that historical design documents may contain stale implementation sketches and SHALL NOT override active operating docs or active specs.
-
-#### Scenario: Historical design doc is visibly non-contract
-- **WHEN** the historical simplified loop design is read
-- **THEN** it clearly labels implementation sketches and open questions as historical, non-contract context
 

@@ -27,13 +27,45 @@ class DataConfig:
 class FillModel:
     price: str
     entry_lag_bars: int
-    exit_lag_bars: int
 
 
 @dataclass(frozen=True)
 class CostModel:
     fee_bps_per_side: float
     slippage_bps_per_side: float
+
+
+@dataclass(frozen=True)
+class CapacityModel:
+    """Operator-frozen capacity envelope passed through to the runner.
+
+    `mode = "off"` runs no capacity pricing; the upstream portfolio book treats a
+    traded notional book with capacity off as non-scoreable, so a real thesis must
+    set `mode = "adv_impact"` with the full impact parameter set before its book
+    can score.
+    """
+
+    mode: str
+    portfolio_notional: float | None = None
+    adv_lookback_bars: int | None = None
+    adv_min_observations: int | None = None
+    max_bar_participation: float | None = None
+    max_adv_participation: float | None = None
+    impact_coefficient_bps: float | None = None
+    impact_exponent: float | None = None
+
+
+@dataclass(frozen=True)
+class LeverageBudget:
+    """Operator-frozen gross/net exposure ceiling passed through to the runner.
+
+    Intended standing exposure beyond the ceiling is a fail-closed, non-scoreable
+    feasibility verdict upstream; it is never clamped. Default is fully-invested
+    `1.0/1.0`.
+    """
+
+    max_gross_exposure: float = 1.0
+    max_net_exposure: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -46,7 +78,6 @@ class OutputConfig:
     strict_probe_limit: int | None = None
     focused_probe_limit: int | None = None
     focused_timeout_seconds: float | None = None
-    foundation_enabled: bool = False
     foundation_subwindows: int | None = None
     foundation_cost_stress_multiplier: float | None = None
 
@@ -70,6 +101,8 @@ class ProtocolConfig:
     data: DataConfig
     fill_model: FillModel
     cost_model: CostModel
+    capacity_model: CapacityModel
+    leverage_budget: LeverageBudget
     output: OutputConfig
     loop: LoopConfig
     objective: ObjectiveConfig
@@ -170,6 +203,13 @@ def _min_float(value: object, *, name: str, minimum: float) -> float:
     return parsed
 
 
+def _positive_float(value: object, *, name: str) -> float:
+    parsed = _floating(value, name=name)
+    if parsed <= 0.0:
+        raise ValueError(f"{name} must be > 0")
+    return parsed
+
+
 def _fraction(value: object, *, name: str) -> float:
     parsed = _floating(value, name=name)
     if parsed < 0.0 or parsed > 1.0:
@@ -197,11 +237,78 @@ def _optional_text(value: object) -> str | None:
     return None if value is None else str(value)
 
 
+def _capacity_mode(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"off", "adv_impact"}:
+        raise ValueError("capacity_model.mode must be one of: off, adv_impact")
+    return parsed
+
+
+def _load_capacity_model(raw: Mapping[str, Any]) -> CapacityModel:
+    mode = _capacity_mode(_required(raw, "mode"))
+    if mode == "off":
+        return CapacityModel(mode="off")
+    adv_lookback_bars = _positive_int(
+        _required(raw, "adv_lookback_bars"), name="capacity_model.adv_lookback_bars"
+    )
+    adv_min_observations = _positive_int(
+        _required(raw, "adv_min_observations"),
+        name="capacity_model.adv_min_observations",
+    )
+    if adv_min_observations > adv_lookback_bars:
+        raise ValueError(
+            "capacity_model.adv_min_observations must be <= capacity_model.adv_lookback_bars"
+        )
+    return CapacityModel(
+        mode=mode,
+        portfolio_notional=_positive_float(
+            _required(raw, "portfolio_notional"),
+            name="capacity_model.portfolio_notional",
+        ),
+        adv_lookback_bars=adv_lookback_bars,
+        adv_min_observations=adv_min_observations,
+        max_bar_participation=_positive_float(
+            _required(raw, "max_bar_participation"),
+            name="capacity_model.max_bar_participation",
+        ),
+        max_adv_participation=_positive_float(
+            _required(raw, "max_adv_participation"),
+            name="capacity_model.max_adv_participation",
+        ),
+        impact_coefficient_bps=_nonnegative_float(
+            _required(raw, "impact_coefficient_bps"),
+            name="capacity_model.impact_coefficient_bps",
+        ),
+        impact_exponent=_positive_float(
+            _required(raw, "impact_exponent"), name="capacity_model.impact_exponent"
+        ),
+    )
+
+
+def _load_leverage_budget(raw: Mapping[str, Any]) -> LeverageBudget:
+    return LeverageBudget(
+        max_gross_exposure=_min_float(
+            raw.get("max_gross_exposure", 1.0),
+            name="leverage_budget.max_gross_exposure",
+            minimum=1.0,
+        ),
+        max_net_exposure=_min_float(
+            raw.get("max_net_exposure", 1.0),
+            name="leverage_budget.max_net_exposure",
+            minimum=1.0,
+        ),
+    )
+
+
 def load_protocol(path: str | Path) -> ProtocolConfig:
     data = tomllib.loads(Path(path).read_text())
     raw_data = _required(data, "data")
     raw_fill = _required(data, "fill_model")
     raw_cost = _required(data, "cost_model")
+    raw_capacity = _required(data, "capacity_model")
+    raw_leverage = data.get("leverage_budget", {})
+    if not isinstance(raw_leverage, Mapping):
+        raise ValueError("leverage_budget must be a table")
     raw_output = _required(data, "output")
     raw_loop = _required(data, "loop")
     raw_objective = _required(data, "objective")
@@ -212,40 +319,22 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         _required(raw_fill, "entry_lag_bars"),
         name="fill_model.entry_lag_bars",
     )
-    exit_lag_bars = _nonnegative_int(
-        _required(raw_fill, "exit_lag_bars"),
-        name="fill_model.exit_lag_bars",
-    )
     objective_kind = str(_required(raw_objective, "kind"))
     if objective_kind != "portfolio_psr_subwindow":
         raise ValueError(f"objective.kind unsupported: {objective_kind}")
     subwindows = _positive_int(
         _required(raw_objective, "subwindows"), name="objective.subwindows"
     )
-    foundation_enabled = _boolean(
-        _required(raw_output, "foundation_enabled"),
-        name="output.foundation_enabled",
+    foundation_subwindows = _positive_int(
+        raw_output.get("foundation_subwindows", subwindows),
+        name="output.foundation_subwindows",
     )
-    if not foundation_enabled:
-        raise ValueError("output.foundation_enabled must be true for portfolio_psr_subwindow")
-    foundation_subwindows = (
-        _positive_int(
-            raw_output.get("foundation_subwindows", subwindows),
-            name="output.foundation_subwindows",
-        )
-        if foundation_enabled
-        else None
-    )
-    if foundation_subwindows is not None and foundation_subwindows != subwindows:
+    if foundation_subwindows != subwindows:
         raise ValueError("output.foundation_subwindows must equal objective.subwindows")
-    foundation_cost_stress_multiplier = (
-        _min_float(
-            raw_output.get("foundation_cost_stress_multiplier", 2.0),
-            name="output.foundation_cost_stress_multiplier",
-            minimum=1.0,
-        )
-        if foundation_enabled
-        else None
+    foundation_cost_stress_multiplier = _min_float(
+        raw_output.get("foundation_cost_stress_multiplier", 2.0),
+        name="output.foundation_cost_stress_multiplier",
+        minimum=1.0,
     )
 
     return ProtocolConfig(
@@ -263,7 +352,6 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         fill_model=FillModel(
             price=fill_price,
             entry_lag_bars=entry_lag_bars,
-            exit_lag_bars=exit_lag_bars,
         ),
         cost_model=CostModel(
             fee_bps_per_side=_nonnegative_float(
@@ -275,6 +363,8 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 name="cost_model.slippage_bps_per_side",
             ),
         ),
+        capacity_model=_load_capacity_model(raw_capacity),
+        leverage_budget=_load_leverage_budget(raw_leverage),
         output=OutputConfig(
             results_dir=str(_required(raw_output, "results_dir")),
             artifact_profile=str(raw_output.get("artifact_profile", "summary")),
@@ -305,7 +395,6 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                     name="output.focused_timeout_seconds",
                 )
             ),
-            foundation_enabled=foundation_enabled,
             foundation_subwindows=foundation_subwindows,
             foundation_cost_stress_multiplier=foundation_cost_stress_multiplier,
         ),
@@ -464,7 +553,8 @@ def build_quick_run_config(
         "quick_checks": protocol.output.quick_checks,
         "diagnostic_sample_trades": max(1, protocol.output.diagnostic_sample_trades),
         "causality_check": protocol.output.causality_check,
-        "foundation_enabled": protocol.output.foundation_enabled,
+        "foundation_subwindows": protocol.output.foundation_subwindows,
+        "foundation_cost_stress_multiplier": protocol.output.foundation_cost_stress_multiplier,
     }
     if protocol.output.strict_probe_limit is not None:
         output_block["strict_probe_limit"] = protocol.output.strict_probe_limit
@@ -472,11 +562,19 @@ def build_quick_run_config(
         output_block["focused_probe_limit"] = protocol.output.focused_probe_limit
     if protocol.output.focused_timeout_seconds is not None:
         output_block["focused_timeout_seconds"] = protocol.output.focused_timeout_seconds
-    if protocol.output.foundation_enabled:
-        output_block["foundation_subwindows"] = protocol.output.foundation_subwindows
-        output_block["foundation_cost_stress_multiplier"] = (
-            protocol.output.foundation_cost_stress_multiplier
-        )
+    capacity_block: dict[str, object] = {"mode": protocol.capacity_model.mode}
+    for field_name in (
+        "portfolio_notional",
+        "adv_lookback_bars",
+        "adv_min_observations",
+        "max_bar_participation",
+        "max_adv_participation",
+        "impact_coefficient_bps",
+        "impact_exponent",
+    ):
+        value = getattr(protocol.capacity_model, field_name)
+        if value is not None:
+            capacity_block[field_name] = value
     return {
         "strategy_path": protocol.strategy_path,
         "strategy_id": protocol.strategy_id,
@@ -485,12 +583,17 @@ def build_quick_run_config(
         "fill_model": {
             "price": protocol.fill_model.price,
             "entry_lag_bars": protocol.fill_model.entry_lag_bars,
-            "exit_lag_bars": protocol.fill_model.exit_lag_bars,
         },
         "cost_model": {
             "fee_bps_per_side": protocol.cost_model.fee_bps_per_side,
             "slippage_bps_per_side": protocol.cost_model.slippage_bps_per_side,
         },
+        "capacity_model": capacity_block,
+        "leverage_budget": {
+            "max_gross_exposure": protocol.leverage_budget.max_gross_exposure,
+            "max_net_exposure": protocol.leverage_budget.max_net_exposure,
+        },
+        "envelope": {"operator_frozen": True},
         "output": output_block,
     }
 
@@ -519,7 +622,16 @@ def dumps_quick_run_config(config: Mapping[str, object]) -> str:
         f"strategy_path = {_toml_value(config['strategy_path'])}",
         f"strategy_id = {_toml_value(config['strategy_id'])}",
     ]
-    for section in ["data", "params", "fill_model", "cost_model", "output"]:
+    for section in [
+        "data",
+        "params",
+        "fill_model",
+        "cost_model",
+        "capacity_model",
+        "leverage_budget",
+        "envelope",
+        "output",
+    ]:
         _write_block(lines, section, config[section])  # type: ignore[arg-type]
     return "\n".join(lines) + "\n"
 

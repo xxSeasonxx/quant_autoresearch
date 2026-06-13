@@ -1,11 +1,9 @@
 # Train Score Rationale
 
-Date: 2026-06-10
-
-Status: active design rationale for the Train loop. The executable contract
-lives in `protocol.toml`, `objective.py`, `gates.py`, `loop.py`, and the
-OpenSpec specs. This note explains why the score exists, what it measures, and
-how a new session should reason about it.
+Active rationale for the Train loop. The executable contract lives in
+`protocol.toml`, `objective.py`, `gates.py`, `loop.py`, and the OpenSpec specs.
+This note explains why the score exists, what it measures, and how a new session
+should reason about it.
 
 ## Core Decision
 
@@ -24,24 +22,29 @@ where:
 PSR = NormalCDF((sharpe - psr_hurdle_sharpe) / sharpe_standard_error)
 ```
 
-The loop computes this from upstream quick-run portfolio-foundation metrics. It
-does not compute Sharpe from completed trade bags, and it does not reconstruct
-NAV, drawdown, concentration, or effective sample size locally.
+The loop computes this from upstream quick-run portfolio-foundation metrics. The
+scored unit is the single netted-book NAV path: there is one model of money, so
+the loop does not compute Sharpe from completed trade bags and does not
+reconstruct NAV, drawdown, concentration, or effective sample size locally. The
+per-trade tape is a derived attribution view of that same book; inspect it for
+alpha attribution, but score the NAV path.
 
 The score is a Train development filter, not deployability evidence. A kept
 candidate is only a candidate for downstream human OOS, paper, and small-live
 review.
 
+A quick run can also come back infeasible: `result.succeeded` is `False`,
+`failure_stage = "feasibility"`, and `result.feasibility` carries a typed `reason`
+(for example `capacity_unpriced`, `leverage_budget_breach`, `zero_cost`,
+`insufficient_samples`) plus observed exposure. That is no score, not a low score.
+The loop records the reason in the attempt note and run card; respond to it (price
+capacity, reduce intended gross, configure costs) rather than treat it as a weak
+score to climb past.
+
 ## Why This Score
 
-The old trade-unit objective had one useful instinct: do not keep a strategy
-that only works in one favorable Train slice. Its flaw was the statistic inside
-that weakest-slice check. Completed trade returns are not a portfolio path:
-they ignore overlapping positions, idle time, compounding, exposure, drawdowns,
-and the effective number of return observations.
-
-The portfolio-foundation PSR score keeps the useful part and fixes the weak
-part:
+The score is built from the upstream netted-book NAV path, the one authoritative
+accounting of the run:
 
 - **Full Train evidence** checks whether the candidate has credible evidence
   over the whole Train path.
@@ -49,8 +52,9 @@ part:
   one lucky period from carrying the aggregate.
 - **PSR** puts the score on a probability scale and adjusts for Sharpe
   uncertainty through the upstream Sharpe standard error.
-- **Portfolio returns** make the evidence about capital over time rather than
-  isolated trade outcomes.
+- **Portfolio returns** make the evidence about capital over time: overlapping
+  positions, idle time, compounding, exposure, and drawdowns are already in the
+  NAV path, not approximated from isolated trade outcomes.
 
 The `min(...)` shape is intentionally conservative. It does not reward a strong
 full-window result if one Train regime is weak, and it does not reward one
@@ -114,6 +118,12 @@ score = min(full_train_psr, worst_subwindow_psr)
 
 `worst_subwindow_id` always identifies the weakest subwindow, even when the full
 Train PSR is the binding score.
+
+`closed_trade_count` counts netted-book round trips, and the return statistics are
+computed over at-risk bars under a minimum-sample gate. A subwindow below the
+minimum is non-scoreable: it yields no PSR, so the run is non-scoreable rather
+than assigned a finite Sharpe. The foundation summary also exposes a per-scenario
+feasibility payload and live gross/net utilization series for diagnostics.
 
 The keep rule is unchanged:
 

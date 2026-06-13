@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import argparse
 import hashlib
@@ -18,7 +18,6 @@ from objective import (
     ObjectiveResult,
     TradeSample,
     is_improvement,
-    score_cost_stress,
     score_foundation_cost_stress,
     score_objective,
 )
@@ -379,20 +378,6 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
     )
 
 
-def _parse_time(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _parse_window_end(value: str) -> datetime:
-    parsed = _parse_time(value)
-    if "T" not in value and " " not in value:
-        return parsed + timedelta(days=1)
-    return parsed
-
-
 def _make_crash_row(
     *,
     provenance: AttemptProvenance,
@@ -533,6 +518,39 @@ def _causality_payload(result: object) -> dict[str, object]:
         "timed_out": getattr(causality, "timed_out", None),
         "selected_probe_count": getattr(causality, "selected_probe_count", None),
     }
+
+
+def _feasibility_note(result: object) -> str:
+    """Summarize why a non-succeeded run is non-scoreable.
+
+    An infeasible run is no score, not a low score. The upstream verdict is typed:
+    `result.outcome.failure_stage` (e.g. "feasibility") plus, on an envelope breach,
+    `result.feasibility.{reason, observed_gross, observed_net, detail}`. Surface those
+    so the next edit responds to the reason (`capacity_unpriced` → price capacity,
+    `leverage_budget_breach` → reduce intended gross) instead of only the message.
+    """
+
+    message = str(getattr(result, "message", "run failed"))
+    outcome = getattr(result, "outcome", None)
+    failure_stage = getattr(outcome, "failure_stage", None)
+    feasibility = getattr(result, "feasibility", None)
+    parts: list[str] = []
+    if failure_stage:
+        parts.append(f"failure_stage={failure_stage}")
+    if feasibility is not None:
+        reason = getattr(feasibility, "reason", None)
+        if reason:
+            parts.append(f"feasibility={reason}")
+        for name in ("observed_gross", "observed_net"):
+            value = getattr(feasibility, name, None)
+            if value is not None:
+                parts.append(f"{name}={value}")
+        detail = getattr(feasibility, "detail", None)
+        if detail:
+            parts.append(str(detail))
+    if not parts:
+        return message
+    return f"{message} :: {'; '.join(parts)}"
 
 
 def _primary_failure_mode(
@@ -870,6 +888,7 @@ def run_iteration(
     elapsed = time.monotonic() - start
 
     if not getattr(result, "succeeded", False):
+        failure_note = _feasibility_note(result)
         _write_run_card(
             root,
             artifact_dir=provenance.artifact_dir,
@@ -878,7 +897,7 @@ def run_iteration(
             cost_stress=None,
             gates=None,
             foundation=None,
-            error=str(getattr(result, "message", "run failed")),
+            error=failure_note,
         )
         temp_row = _make_crash_row(
             provenance=provenance,
@@ -887,7 +906,7 @@ def run_iteration(
             params=params,
             components=components,
             elapsed_seconds=elapsed,
-            note=str(getattr(result, "message", "run failed")),
+            note=failure_note,
             stop_reason="",
         )
         stop_reason = _stop_reason_after_attempt(
@@ -902,7 +921,7 @@ def run_iteration(
             params=params,
             components=components,
             elapsed_seconds=elapsed,
-            note=str(getattr(result, "message", "run failed")),
+            note=failure_note,
             stop_reason=stop_reason,
         )
         _append_crash(
@@ -927,45 +946,17 @@ def run_iteration(
             gates=None,
             row=row,
             stop_reason=stop_reason,
-            message=str(getattr(result, "message", "run failed")),
+            message=failure_note,
         )
 
     foundation: FoundationEvidence | None = None
     objective: ObjectiveResult | None = None
     stress: ObjectiveResult | None = None
     try:
-        window_start = _parse_time(protocol.data.start)
-        window_end = _parse_window_end(protocol.data.end)
-        if protocol.objective.kind == "portfolio_psr_subwindow":
-            foundation = _foundation_from_result(result)
-            trades = _trades_from_result(result, required=False)
-            objective = score_objective(
-                trades,
-                protocol.objective,
-                window_start=window_start,
-                window_end=window_end,
-                foundation=foundation,
-            )
-            stress = score_foundation_cost_stress(foundation, protocol.objective)
-        else:
-            trades = _trades_from_result(result)
-            objective = score_objective(
-                trades,
-                protocol.objective,
-                window_start=window_start,
-                window_end=window_end,
-            )
-            stress = score_cost_stress(
-                trades,
-                subwindows=protocol.objective.subwindows,
-                extra_round_trip_bps=2.0
-                * (
-                    protocol.cost_model.fee_bps_per_side
-                    + protocol.cost_model.slippage_bps_per_side
-                ),
-                window_start=window_start,
-                window_end=window_end,
-            )
+        foundation = _foundation_from_result(result)
+        trades = _trades_from_result(result, required=False)
+        objective = score_objective(trades, protocol.objective, foundation=foundation)
+        stress = score_foundation_cost_stress(foundation, protocol.objective)
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
         _write_run_card(
             root,

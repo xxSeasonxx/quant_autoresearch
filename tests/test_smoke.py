@@ -13,12 +13,17 @@ def test_harness_smoke_loads_active_config():
 
     assert protocol.strategy_path == "strategy.py"
     assert protocol.output.causality_check == "micro"
-    assert protocol.output.foundation_enabled is True
+    assert protocol.capacity_model.mode == "off"
     assert quick["strategy_id"] == protocol.strategy_id
     assert quick["params"] == experiment.params
     assert quick["output"]["causality_check"] == "micro"
-    assert quick["output"]["foundation_enabled"] is True
     assert quick["output"]["foundation_subwindows"] == protocol.objective.subwindows
+    assert quick["capacity_model"]["mode"] == "off"
+    assert (
+        quick["leverage_budget"]["max_gross_exposure"]
+        == protocol.leverage_budget.max_gross_exposure
+    )
+    assert quick["envelope"]["operator_frozen"] is True
 
 
 def test_strategy_smoke_exports_contract():

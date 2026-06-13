@@ -23,6 +23,8 @@ setup, editable surface, evidence boundaries, loop behavior, and stop behavior.
 - Do not run or wire OOS evaluation inside auto-research.
 - Keep strategy logic simple, causal, and auditable.
 - Do not hide data, fill, cost, or engine limitations in strategy code.
+- Build within the operator-frozen leverage budget and capacity model; intended
+  exposure beyond the budget is a non-scoreable feasibility verdict, not a low score.
 - Treat generated artifacts as evidence, not source.
 - Do not use any skills during a Train experiment.
 

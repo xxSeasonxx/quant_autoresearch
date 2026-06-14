@@ -70,6 +70,8 @@ class FoundationMetric:
     closed_trade_count: int
     max_symbol_concentration: float | None
     warnings: tuple[str, ...] = ()
+    max_gross_utilization: float | None = None
+    max_net_utilization: float | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,8 @@ class FoundationScenario:
     scenario_id: str
     full_train: FoundationMetric
     subwindows: tuple[FoundationMetric, ...]
+    max_adv_participation: float | None = None
+    max_bar_participation: float | None = None
 
 
 @dataclass(frozen=True)

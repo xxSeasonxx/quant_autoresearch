@@ -3,21 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import csv
-import re
 
 
 @dataclass(frozen=True)
 class ResultRow:
     run_id: str
-    commit: str
-    artifact_dir: str
-    worktree_dirty: bool
-    strategy_sha256: str
-    experiment_sha256: str
-    protocol_sha256: str
-    rationale_sha256: str
-    quick_config_sha256: str
     iteration: int
+    status: str
     score: float | None
     full_train_psr: float | None
     worst_subwindow_psr: float | None
@@ -29,32 +21,30 @@ class ResultRow:
     min_subwindow_trades: int
     total_return: float | None
     max_drawdown: float | None
+    max_symbol_concentration: float | None
+    max_gross_utilization: float | None
+    max_net_utilization: float | None
+    max_adv_participation: float | None
+    max_bar_participation: float | None
     win_rate: float | None
     profit_factor: float | None
     avg_trade_net: float | None
     cost_return_sum: float | None
-    max_symbol_concentration: float | None
     complexity_count: int
-    status: str
+    failure_reason: str
     best_status: str
     continuation: str
     stop_reason: str
     elapsed_seconds: float
+    artifact_dir: str
     note: str
 
     @staticmethod
     def header() -> list[str]:
         return [
             "run_id",
-            "commit",
-            "artifact_dir",
-            "worktree_dirty",
-            "strategy_sha256",
-            "experiment_sha256",
-            "protocol_sha256",
-            "rationale_sha256",
-            "quick_config_sha256",
             "iteration",
+            "status",
             "score",
             "full_train_psr",
             "worst_subwindow_psr",
@@ -66,72 +56,60 @@ class ResultRow:
             "min_subwindow_trades",
             "total_return",
             "max_drawdown",
+            "max_symbol_concentration",
+            "max_gross_utilization",
+            "max_net_utilization",
+            "max_adv_participation",
+            "max_bar_participation",
             "win_rate",
             "profit_factor",
             "avg_trade_net",
             "cost_return_sum",
-            "max_symbol_concentration",
             "complexity_count",
-            "status",
+            "failure_reason",
             "best_status",
             "continuation",
             "stop_reason",
             "elapsed_seconds",
+            "artifact_dir",
             "note",
         ]
 
     def as_record(self) -> dict[str, str]:
+        def optional(value: float | None) -> str:
+            return "" if value is None else str(value)
+
         return {
             "run_id": self.run_id,
-            "commit": self.commit,
-            "artifact_dir": self.artifact_dir,
-            "worktree_dirty": "true" if self.worktree_dirty else "false",
-            "strategy_sha256": self.strategy_sha256,
-            "experiment_sha256": self.experiment_sha256,
-            "protocol_sha256": self.protocol_sha256,
-            "rationale_sha256": self.rationale_sha256,
-            "quick_config_sha256": self.quick_config_sha256,
             "iteration": str(self.iteration),
-            "score": "" if self.score is None else str(self.score),
-            "full_train_psr": ""
-            if self.full_train_psr is None
-            else str(self.full_train_psr),
-            "worst_subwindow_psr": ""
-            if self.worst_subwindow_psr is None
-            else str(self.worst_subwindow_psr),
+            "status": self.status,
+            "score": optional(self.score),
+            "full_train_psr": optional(self.full_train_psr),
+            "worst_subwindow_psr": optional(self.worst_subwindow_psr),
             "worst_subwindow_id": self.worst_subwindow_id,
-            "cost_stress_psr": ""
-            if self.cost_stress_psr is None
-            else str(self.cost_stress_psr),
+            "cost_stress_psr": optional(self.cost_stress_psr),
             "gates_passed": "true" if self.gates_passed else "false",
             "gate_flags": self.gate_flags,
             "trade_count": str(self.trade_count),
             "min_subwindow_trades": str(self.min_subwindow_trades),
-            "total_return": ""
-            if self.total_return is None
-            else str(self.total_return),
-            "max_drawdown": ""
-            if self.max_drawdown is None
-            else str(self.max_drawdown),
-            "win_rate": "" if self.win_rate is None else str(self.win_rate),
-            "profit_factor": ""
-            if self.profit_factor is None
-            else str(self.profit_factor),
-            "avg_trade_net": ""
-            if self.avg_trade_net is None
-            else str(self.avg_trade_net),
-            "cost_return_sum": ""
-            if self.cost_return_sum is None
-            else str(self.cost_return_sum),
-            "max_symbol_concentration": ""
-            if self.max_symbol_concentration is None
-            else str(self.max_symbol_concentration),
+            "total_return": optional(self.total_return),
+            "max_drawdown": optional(self.max_drawdown),
+            "max_symbol_concentration": optional(self.max_symbol_concentration),
+            "max_gross_utilization": optional(self.max_gross_utilization),
+            "max_net_utilization": optional(self.max_net_utilization),
+            "max_adv_participation": optional(self.max_adv_participation),
+            "max_bar_participation": optional(self.max_bar_participation),
+            "win_rate": optional(self.win_rate),
+            "profit_factor": optional(self.profit_factor),
+            "avg_trade_net": optional(self.avg_trade_net),
+            "cost_return_sum": optional(self.cost_return_sum),
             "complexity_count": str(self.complexity_count),
-            "status": self.status,
+            "failure_reason": self.failure_reason,
             "best_status": self.best_status,
             "continuation": self.continuation,
             "stop_reason": self.stop_reason,
             "elapsed_seconds": str(self.elapsed_seconds),
+            "artifact_dir": self.artifact_dir,
             "note": self.note,
         }
 
@@ -154,15 +132,6 @@ def _parse_enum(value: str, *, name: str, allowed: set[str]) -> str:
     return value
 
 
-_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _parse_hash(value: str, *, name: str) -> str:
-    if value == "missing" or _HASH_RE.fullmatch(value):
-        return value
-    raise ValueError(f"{name} must be a 64-character lowercase hex hash or missing")
-
-
 def _parse_row(row: dict[str, str]) -> ResultRow:
     missing = set(ResultRow.header()) - set(row)
     if missing:
@@ -170,19 +139,10 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         raise ValueError(f"results row is missing required fields: {fields}")
     return ResultRow(
         run_id=row["run_id"],
-        commit=row["commit"],
-        artifact_dir=row["artifact_dir"],
-        worktree_dirty=_parse_bool(row["worktree_dirty"], name="worktree_dirty"),
-        strategy_sha256=_parse_hash(row["strategy_sha256"], name="strategy_sha256"),
-        experiment_sha256=_parse_hash(
-            row["experiment_sha256"], name="experiment_sha256"
-        ),
-        protocol_sha256=_parse_hash(row["protocol_sha256"], name="protocol_sha256"),
-        rationale_sha256=_parse_hash(row["rationale_sha256"], name="rationale_sha256"),
-        quick_config_sha256=_parse_hash(
-            row["quick_config_sha256"], name="quick_config_sha256"
-        ),
         iteration=int(row["iteration"]),
+        status=_parse_enum(
+            row["status"], name="status", allowed={"keep", "discard", "crash"}
+        ),
         score=_parse_float(row["score"]),
         full_train_psr=_parse_float(row["full_train_psr"]),
         worst_subwindow_psr=_parse_float(row["worst_subwindow_psr"]),
@@ -194,15 +154,17 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         min_subwindow_trades=int(row["min_subwindow_trades"]),
         total_return=_parse_float(row["total_return"]),
         max_drawdown=_parse_float(row["max_drawdown"]),
+        max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
+        max_gross_utilization=_parse_float(row["max_gross_utilization"]),
+        max_net_utilization=_parse_float(row["max_net_utilization"]),
+        max_adv_participation=_parse_float(row["max_adv_participation"]),
+        max_bar_participation=_parse_float(row["max_bar_participation"]),
         win_rate=_parse_float(row["win_rate"]),
         profit_factor=_parse_float(row["profit_factor"]),
         avg_trade_net=_parse_float(row["avg_trade_net"]),
         cost_return_sum=_parse_float(row["cost_return_sum"]),
-        max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
         complexity_count=int(row["complexity_count"]),
-        status=_parse_enum(
-            row["status"], name="status", allowed={"keep", "discard", "crash"}
-        ),
+        failure_reason=row["failure_reason"],
         best_status=_parse_enum(
             row["best_status"],
             name="best_status",
@@ -215,6 +177,7 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         ),
         stop_reason=row["stop_reason"],
         elapsed_seconds=float(row["elapsed_seconds"]),
+        artifact_dir=row["artifact_dir"],
         note=row["note"],
     )
 

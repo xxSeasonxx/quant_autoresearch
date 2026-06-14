@@ -10,13 +10,12 @@
 # must build within the leverage budget; intended exposure beyond it is a
 # fail-closed, non-scoreable feasibility verdict upstream, not a low score.
 #
-# These are neutral template defaults for crypto-perp thesis development. Season
-# sets the real universe/window/costs/objective/gates when a new thesis starts.
+# Configured for the crypto-perp funding-crowding reversal thesis.
 
 # The pure strategy file and strategy id passed through to quant_strategies. The
 # strategy's emitted decisions must carry this strategy_id.
 strategy_path = "strategy.py"
-strategy_id = "autoresearch_template"
+strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 
 [data]
 # Public quant_strategies data loader kind. Data source choice changes what
@@ -49,16 +48,22 @@ fee_bps_per_side = 5.0
 slippage_bps_per_side = 1.0
 
 [capacity_model]
-# Operator-frozen capacity envelope. "off" runs no capacity pricing; the upstream
-# portfolio book treats a traded notional book with capacity off as non-scoreable
-# (a typed `capacity_unpriced` feasibility verdict). Before a real thesis run,
-# Season sets mode = "adv_impact" with portfolio_notional and the ADV/impact
-# parameter set so the book can score.
-mode = "off"
+# Operator-frozen capacity envelope. adv_impact prices market impact into the NAV
+# path and enforces ADV / per-bar participation limits; it requires volume history.
+mode = "adv_impact"
+portfolio_notional = 1000000.0
+adv_lookback_bars = 1440
+adv_min_observations = 60
+max_bar_participation = 0.50
+max_adv_participation = 0.25
+impact_coefficient_bps = 10.0
+impact_exponent = 0.5
 
 [leverage_budget]
 # Operator-frozen gross/net exposure ceiling. Intended standing exposure beyond
-# the ceiling fails closed upstream and is never clamped. 1.0/1.0 is fully invested.
+# the ceiling fails closed upstream and is never clamped. At the capacity-fitted
+# weight this book's gross/net sit far inside fully invested; 1.0/1.0 is the
+# default ceiling.
 max_gross_exposure = 1.0
 max_net_exposure = 1.0
 

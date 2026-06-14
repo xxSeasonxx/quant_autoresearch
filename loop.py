@@ -6,7 +6,6 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
-import subprocess
 import time
 from typing import Callable, Mapping, Sequence
 
@@ -49,12 +48,6 @@ class IterationOutcome:
 class AttemptProvenance:
     run_id: str
     artifact_dir: str
-    worktree_dirty: bool
-    strategy_sha256: str
-    experiment_sha256: str
-    protocol_sha256: str
-    rationale_sha256: str
-    quick_config_sha256: str
 
 
 def validate_thesis(mechanism: str, falsifier: str) -> str | None:
@@ -97,18 +90,6 @@ def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, .
     return tuple(components)
 
 
-def _current_commit(workdir: Path) -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short=7", "HEAD"],
-            cwd=workdir,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
 def _sha256_path(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -116,26 +97,24 @@ def _sha256_path(path: Path) -> str:
         return "missing"
 
 
-def _tracked_worktree_dirty(workdir: Path) -> bool:
-    try:
-        output = subprocess.check_output(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=workdir,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    return bool(output.strip())
+def _snapshot_source_hashes(root: Path, row: ResultRow) -> dict[str, str] | None:
+    """Recompute an attempt's source hashes from its preserved snapshot files.
 
+    Provenance is no longer carried inline in `results.tsv`; the per-attempt
+    snapshot copies the actual strategy/params/protocol/rationale, so the repair
+    check rehashes those to decide whether a crashed attempt's source changed.
+    Returns None when the snapshot is incomplete.
+    """
 
-def _same_source_snapshot(row: ResultRow, snapshot: Mapping[str, str]) -> bool:
-    return (
-        row.strategy_sha256 == snapshot["strategy_sha256"]
-        and row.experiment_sha256 == snapshot["experiment_sha256"]
-        and row.protocol_sha256 == snapshot["protocol_sha256"]
-        and row.rationale_sha256 == snapshot["rationale_sha256"]
-    )
+    paths = _snapshot_paths_for_attempt(root, row)
+    if paths is None:
+        return None
+    return {
+        "strategy_sha256": _sha256_path(Path(paths["strategy"])),
+        "experiment_sha256": _sha256_path(Path(paths["experiment"])),
+        "protocol_sha256": _sha256_path(Path(paths["protocol"])),
+        "rationale_sha256": _sha256_path(Path(paths["rationale"])),
+    }
 
 
 def _source_snapshot(
@@ -228,14 +207,20 @@ def _ensure_active_thesis_lock(
         raise ValueError("active thesis results path changed; start a new thesis lifecycle")
 
 
-def _ensure_can_attempt(rows: Sequence[ResultRow], snapshot: Mapping[str, str]) -> None:
+def _ensure_can_attempt(
+    rows: Sequence[ResultRow], snapshot: Mapping[str, str], *, root: Path
+) -> None:
     if not rows:
         return
     latest = rows[-1]
     if latest.continuation == "terminal":
         raise ValueError(f"thesis already stopped: {latest.stop_reason}")
-    if latest.continuation == "repair_required" and _same_source_snapshot(latest, snapshot):
-        raise ValueError("previous crash requires a source, params, protocol, or rationale repair")
+    if latest.continuation == "repair_required":
+        prior = _snapshot_source_hashes(root, latest)
+        if prior is not None and prior == dict(snapshot):
+            raise ValueError(
+                "previous crash requires a source, params, protocol, or rationale repair"
+            )
 
 
 def _default_runner(config_path, *, repo_root=None, event_sink=None):
@@ -340,6 +325,8 @@ def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
         closed_trade_count=_foundation_count(raw, "closed_trade_count"),
         max_symbol_concentration=_foundation_float(raw, "max_symbol_concentration"),
         warnings=_warnings(raw.get("warnings")),
+        max_gross_utilization=_foundation_float(raw, "max_gross_utilization"),
+        max_net_utilization=_foundation_float(raw, "max_net_utilization"),
     )
     _validate_foundation_metric(metric)
     return metric
@@ -349,6 +336,8 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
     subwindows = raw.get("subwindows", ())
     if not isinstance(subwindows, list):
         raise ValueError("portfolio foundation scenario missing subwindows")
+    capacity = raw.get("capacity")
+    capacity_map = capacity if isinstance(capacity, Mapping) else {}
     return FoundationScenario(
         scenario_id=str(raw["scenario_id"]),
         full_train=_foundation_metric(raw["full_train"]),  # type: ignore[arg-type]
@@ -356,6 +345,8 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
             _foundation_metric(item)  # type: ignore[arg-type]
             for item in subwindows
         ),
+        max_adv_participation=_foundation_float(capacity_map, "max_adv_participation"),
+        max_bar_participation=_foundation_float(capacity_map, "max_bar_participation"),
     )
 
 
@@ -378,28 +369,36 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
     )
 
 
+def _failure_reason(result: object) -> str:
+    """Short typed reason for a non-scoreable run, for the results.tsv column.
+
+    Prefers the engine's feasibility reason (e.g. `capacity_limit_breach`), then
+    the failure stage (e.g. `strategy_import`); empty when neither is set.
+    """
+
+    feasibility = getattr(result, "feasibility", None)
+    reason = getattr(feasibility, "reason", None) if feasibility is not None else None
+    if reason:
+        return str(reason)
+    failure_stage = getattr(getattr(result, "outcome", None), "failure_stage", None)
+    return str(failure_stage) if failure_stage else ""
+
+
 def _make_crash_row(
     *,
     provenance: AttemptProvenance,
-    commit: str,
     iteration: int,
     params: Mapping[str, object],
     components: Sequence[str],
     elapsed_seconds: float,
     note: str,
+    failure_reason: str,
     stop_reason: str,
 ) -> ResultRow:
     return ResultRow(
         run_id=provenance.run_id,
-        commit=commit,
-        artifact_dir=provenance.artifact_dir,
-        worktree_dirty=provenance.worktree_dirty,
-        strategy_sha256=provenance.strategy_sha256,
-        experiment_sha256=provenance.experiment_sha256,
-        protocol_sha256=provenance.protocol_sha256,
-        rationale_sha256=provenance.rationale_sha256,
-        quick_config_sha256=provenance.quick_config_sha256,
         iteration=iteration,
+        status="crash",
         score=None,
         full_train_psr=None,
         worst_subwindow_psr=None,
@@ -411,18 +410,92 @@ def _make_crash_row(
         min_subwindow_trades=0,
         total_return=None,
         max_drawdown=None,
+        max_symbol_concentration=None,
+        max_gross_utilization=None,
+        max_net_utilization=None,
+        max_adv_participation=None,
+        max_bar_participation=None,
         win_rate=None,
         profit_factor=None,
         avg_trade_net=None,
         cost_return_sum=None,
-        max_symbol_concentration=None,
         complexity_count=max(len(params), len(tuple(components))),
-        status="crash",
+        failure_reason=failure_reason,
         best_status="unchanged",
         continuation="terminal" if stop_reason else "repair_required",
         stop_reason=stop_reason,
         elapsed_seconds=elapsed_seconds,
+        artifact_dir=provenance.artifact_dir,
         note=note,
+    )
+
+
+def _scored_result_row(
+    *,
+    provenance: AttemptProvenance,
+    iteration: int,
+    objective: ObjectiveResult,
+    cost_stress_score: float | None,
+    gates: GateSet,
+    trades: Sequence[TradeSample],
+    foundation_scenario: FoundationScenario | None,
+    params: Mapping[str, object],
+    components: Sequence[str],
+    status: str,
+    best_status: str,
+    continuation: str,
+    stop_reason: str,
+    elapsed_seconds: float,
+) -> ResultRow:
+    full = None if foundation_scenario is None else foundation_scenario.full_train
+    return ResultRow(
+        run_id=provenance.run_id,
+        iteration=iteration,
+        status=status,
+        score=objective.score,
+        full_train_psr=objective.full_train_psr,
+        worst_subwindow_psr=_worst_subwindow_psr(objective),
+        worst_subwindow_id=objective.worst_subwindow_id,
+        cost_stress_psr=cost_stress_score,
+        gates_passed=gates.passed,
+        gate_flags=gates.flags(),
+        trade_count=_reported_trade_count(trades, foundation_scenario),
+        min_subwindow_trades=_min_subwindow_trades(objective),
+        total_return=None if full is None else full.total_return,
+        max_drawdown=None if full is None else full.max_drawdown,
+        max_symbol_concentration=(
+            symbol_concentration(trades)
+            if foundation_scenario is None and trades
+            else (None if full is None else full.max_symbol_concentration)
+        ),
+        max_gross_utilization=None if full is None else full.max_gross_utilization,
+        max_net_utilization=None if full is None else full.max_net_utilization,
+        max_adv_participation=(
+            None if foundation_scenario is None else foundation_scenario.max_adv_participation
+        ),
+        max_bar_participation=(
+            None if foundation_scenario is None else foundation_scenario.max_bar_participation
+        ),
+        win_rate=(
+            sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
+            if trades
+            else None
+        ),
+        profit_factor=_profit_factor(trades),
+        avg_trade_net=(
+            float(sum(trade.net_return for trade in trades) / len(trades))
+            if trades
+            else None
+        ),
+        cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
+        complexity_count=max(len(params), len(tuple(components))),
+        failure_reason="",
+        best_status=best_status,
+        continuation=continuation,
+        stop_reason=stop_reason,
+        elapsed_seconds=elapsed_seconds,
+        artifact_dir=provenance.artifact_dir,
+        note=objective.detail,
     )
 
 
@@ -492,6 +565,8 @@ def _metric_payload(metric: FoundationMetric) -> dict[str, object]:
         "max_drawdown": metric.max_drawdown,
         "closed_trade_count": metric.closed_trade_count,
         "max_symbol_concentration": metric.max_symbol_concentration,
+        "max_gross_utilization": metric.max_gross_utilization,
+        "max_net_utilization": metric.max_net_utilization,
         "warnings": list(metric.warnings),
     }
 
@@ -503,6 +578,8 @@ def _scenario_payload(scenario: FoundationScenario | None) -> dict[str, object] 
         "scenario_id": scenario.scenario_id,
         "full_train": _metric_payload(scenario.full_train),
         "subwindows": [_metric_payload(metric) for metric in scenario.subwindows],
+        "max_adv_participation": scenario.max_adv_participation,
+        "max_bar_participation": scenario.max_bar_participation,
     }
 
 
@@ -766,6 +843,87 @@ def _write_terminal_manifest(
     destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def _finalize_crash(
+    root: Path,
+    *,
+    results_path: str | Path,
+    prior_rows: Sequence[ResultRow],
+    loop_config,
+    provenance: AttemptProvenance,
+    iteration: int,
+    params: Mapping[str, object],
+    components: Sequence[str],
+    elapsed_seconds: float,
+    note: str,
+    failure_reason: str,
+    result: object | None,
+    objective: ObjectiveResult | None,
+    cost_stress: ObjectiveResult | None,
+    gates: GateSet | None,
+    foundation: FoundationEvidence | None,
+    strategy_path: str | Path,
+    protocol_path: str | Path,
+    experiment_path: str | Path,
+    rationale_path: str | Path,
+) -> IterationOutcome:
+    _write_run_card(
+        root,
+        artifact_dir=provenance.artifact_dir,
+        result=result,
+        objective=objective,
+        cost_stress=cost_stress,
+        gates=gates,
+        foundation=foundation,
+        error=note,
+    )
+    temp_row = _make_crash_row(
+        provenance=provenance,
+        iteration=iteration,
+        params=params,
+        components=components,
+        elapsed_seconds=elapsed_seconds,
+        note=note,
+        failure_reason=failure_reason,
+        stop_reason="",
+    )
+    stop_reason = _stop_reason_after_attempt(
+        (*prior_rows, temp_row),
+        gates=None,
+        loop_config=loop_config,
+    )
+    crash_row = _make_crash_row(
+        provenance=provenance,
+        iteration=iteration,
+        params=params,
+        components=components,
+        elapsed_seconds=elapsed_seconds,
+        note=note,
+        failure_reason=failure_reason,
+        stop_reason=stop_reason,
+    )
+    _append_crash(results_path=results_path, row=crash_row)
+    row = read_results(results_path)[-1]
+    if row.stop_reason:
+        _write_terminal_manifest(
+            root,
+            row=row,
+            rows=(*prior_rows, row),
+            strategy_path=strategy_path,
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
+        )
+    return IterationOutcome(
+        status="crash",
+        score=None,
+        gates_passed=False,
+        gates=None,
+        row=row,
+        stop_reason=stop_reason,
+        message=note,
+    )
+
+
 def run_iteration(
     protocol: ProtocolConfig,
     *,
@@ -790,7 +948,7 @@ def run_iteration(
         protocol_path=protocol_path,
         rationale_path=rationale_path,
     )
-    _ensure_can_attempt(prior_rows, source_hashes)
+    _ensure_can_attempt(prior_rows, source_hashes, root=root)
     run_id = f"attempt-{iteration:04d}"
     run_dir = root / ".autoresearch" / "quick"
     config_path = run_dir / f"{run_id}.toml"
@@ -801,12 +959,12 @@ def run_iteration(
         config_path,
         results_dir=artifact_dir,
     )
+    # The runner resolves the config's relative `strategy_path` against the config
+    # file's own directory, so the strategy must sit beside the written quick config.
+    _copy_if_present(root / protocol.strategy_path, config_path.parent / protocol.strategy_path)
     provenance = AttemptProvenance(
         run_id=run_id,
         artifact_dir=str(artifact_dir),
-        worktree_dirty=_tracked_worktree_dirty(root),
-        quick_config_sha256=_sha256_path(config_path),
-        **source_hashes,
     )
     _write_attempt_snapshot(
         root,
@@ -819,134 +977,56 @@ def run_iteration(
     )
 
     run = runner or _default_runner
-    commit = _current_commit(root)
     try:
         result = run(config_path, repo_root=root)
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
         elapsed = time.monotonic() - start
-        _write_run_card(
+        return _finalize_crash(
             root,
-            artifact_dir=provenance.artifact_dir,
-            result=None,
-            objective=None,
-            cost_stress=None,
-            gates=None,
-            foundation=None,
-            error=str(exc),
-        )
-        stop_reason = _stop_reason_after_attempt(
-            (
-                *prior_rows,
-                _make_crash_row(
-                    provenance=provenance,
-                    commit=commit,
-                    iteration=iteration,
-                    params=params,
-                    components=components,
-                    elapsed_seconds=elapsed,
-                    note=str(exc),
-                    stop_reason="",
-                ),
-            ),
-            gates=None,
+            results_path=results_path,
+            prior_rows=prior_rows,
             loop_config=protocol.loop,
-        )
-        crash_row = _make_crash_row(
             provenance=provenance,
-            commit=commit,
             iteration=iteration,
             params=params,
             components=components,
             elapsed_seconds=elapsed,
             note=str(exc),
-            stop_reason=stop_reason,
-        )
-        _append_crash(
-            results_path=results_path,
-            row=crash_row,
-        )
-        row = read_results(results_path)[-1]
-        if row.stop_reason:
-            _write_terminal_manifest(
-                root,
-                row=row,
-                rows=(*prior_rows, row),
-                strategy_path=protocol.strategy_path,
-                protocol_path=protocol_path,
-                experiment_path=experiment_path,
-                rationale_path=rationale_path,
-            )
-        return IterationOutcome(
-            status="crash",
-            score=None,
-            gates_passed=False,
+            failure_reason="",
+            result=None,
+            objective=None,
+            cost_stress=None,
             gates=None,
-            row=row,
-            stop_reason=stop_reason,
-            message=str(exc),
+            foundation=None,
+            strategy_path=protocol.strategy_path,
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
         )
     elapsed = time.monotonic() - start
 
     if not getattr(result, "succeeded", False):
-        failure_note = _feasibility_note(result)
-        _write_run_card(
+        return _finalize_crash(
             root,
-            artifact_dir=provenance.artifact_dir,
+            results_path=results_path,
+            prior_rows=prior_rows,
+            loop_config=protocol.loop,
+            provenance=provenance,
+            iteration=iteration,
+            params=params,
+            components=components,
+            elapsed_seconds=elapsed,
+            note=_feasibility_note(result),
+            failure_reason=_failure_reason(result),
             result=result,
             objective=None,
             cost_stress=None,
             gates=None,
             foundation=None,
-            error=failure_note,
-        )
-        temp_row = _make_crash_row(
-            provenance=provenance,
-            commit=commit,
-            iteration=iteration,
-            params=params,
-            components=components,
-            elapsed_seconds=elapsed,
-            note=failure_note,
-            stop_reason="",
-        )
-        stop_reason = _stop_reason_after_attempt(
-            (*prior_rows, temp_row),
-            gates=None,
-            loop_config=protocol.loop,
-        )
-        crash_row = _make_crash_row(
-            provenance=provenance,
-            commit=commit,
-            iteration=iteration,
-            params=params,
-            components=components,
-            elapsed_seconds=elapsed,
-            note=failure_note,
-            stop_reason=stop_reason,
-        )
-        _append_crash(
-            results_path=results_path,
-            row=crash_row,
-        )
-        row = read_results(results_path)[-1]
-        if row.stop_reason:
-            _write_terminal_manifest(
-                root,
-                row=row,
-                rows=(*prior_rows, row),
-                strategy_path=protocol.strategy_path,
-                protocol_path=protocol_path,
-                experiment_path=experiment_path,
-                rationale_path=rationale_path,
-            )
-        return IterationOutcome(
-            status="crash",
-            score=None,
-            gates_passed=False,
-            gates=None,
-            row=row,
-            stop_reason=stop_reason,
-            message=failure_note,
+            strategy_path=protocol.strategy_path,
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
         )
 
     foundation: FoundationEvidence | None = None
@@ -958,64 +1038,27 @@ def run_iteration(
         objective = score_objective(trades, protocol.objective, foundation=foundation)
         stress = score_foundation_cost_stress(foundation, protocol.objective)
     except Exception as exc:  # noqa: BLE001 - preserve attempted-iteration logging.
-        _write_run_card(
+        return _finalize_crash(
             root,
-            artifact_dir=provenance.artifact_dir,
+            results_path=results_path,
+            prior_rows=prior_rows,
+            loop_config=protocol.loop,
+            provenance=provenance,
+            iteration=iteration,
+            params=params,
+            components=components,
+            elapsed_seconds=elapsed,
+            note=str(exc),
+            failure_reason="",
             result=result,
             objective=objective,
             cost_stress=stress,
             gates=None,
             foundation=foundation,
-            error=str(exc),
-        )
-        temp_row = _make_crash_row(
-            provenance=provenance,
-            commit=commit,
-            iteration=iteration,
-            params=params,
-            components=components,
-            elapsed_seconds=elapsed,
-            note=str(exc),
-            stop_reason="",
-        )
-        stop_reason = _stop_reason_after_attempt(
-            (*prior_rows, temp_row),
-            gates=None,
-            loop_config=protocol.loop,
-        )
-        crash_row = _make_crash_row(
-            provenance=provenance,
-            commit=commit,
-            iteration=iteration,
-            params=params,
-            components=components,
-            elapsed_seconds=elapsed,
-            note=str(exc),
-            stop_reason=stop_reason,
-        )
-        _append_crash(
-            results_path=results_path,
-            row=crash_row,
-        )
-        row = read_results(results_path)[-1]
-        if row.stop_reason:
-            _write_terminal_manifest(
-                root,
-                row=row,
-                rows=(*prior_rows, row),
-                strategy_path=protocol.strategy_path,
-                protocol_path=protocol_path,
-                experiment_path=experiment_path,
-                rationale_path=rationale_path,
-            )
-        return IterationOutcome(
-            status="crash",
-            score=None,
-            gates_passed=False,
-            gates=None,
-            row=row,
-            stop_reason=stop_reason,
-            message=str(exc),
+            strategy_path=protocol.strategy_path,
+            protocol_path=protocol_path,
+            experiment_path=experiment_path,
+            rationale_path=rationale_path,
         )
     cost_stress_score = stress.score
     foundation_scenario = None if foundation is None else foundation.realistic_costs
@@ -1043,60 +1086,21 @@ def run_iteration(
     best_status = "updated" if keep else "unchanged"
     rows_for_stop = (
         *prior_rows,
-        ResultRow(
-            run_id=provenance.run_id,
-            commit=commit,
-            artifact_dir=provenance.artifact_dir,
-            worktree_dirty=provenance.worktree_dirty,
-            strategy_sha256=provenance.strategy_sha256,
-            experiment_sha256=provenance.experiment_sha256,
-            protocol_sha256=provenance.protocol_sha256,
-            rationale_sha256=provenance.rationale_sha256,
-            quick_config_sha256=provenance.quick_config_sha256,
+        _scored_result_row(
+            provenance=provenance,
             iteration=iteration,
-            score=objective.score,
-            full_train_psr=objective.full_train_psr,
-            worst_subwindow_psr=_worst_subwindow_psr(objective),
-            worst_subwindow_id=objective.worst_subwindow_id,
-            cost_stress_psr=cost_stress_score,
-            gates_passed=gates.passed,
-            gate_flags=gates.flags(),
-            trade_count=_reported_trade_count(trades, foundation_scenario),
-            min_subwindow_trades=_min_subwindow_trades(objective),
-            total_return=None
-            if foundation_scenario is None
-            else foundation_scenario.full_train.total_return,
-            max_drawdown=None
-            if foundation_scenario is None
-            else foundation_scenario.full_train.max_drawdown,
-            win_rate=(
-                sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
-                if trades
-                else None
-            ),
-            profit_factor=_profit_factor(trades),
-            avg_trade_net=(
-                float(sum(trade.net_return for trade in trades) / len(trades))
-                if trades
-                else None
-            ),
-            cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
-            max_symbol_concentration=(
-                symbol_concentration(trades)
-                if foundation_scenario is None and trades
-                else (
-                    None
-                    if foundation_scenario is None
-                    else foundation_scenario.full_train.max_symbol_concentration
-                )
-            ),
-            complexity_count=max(len(params), len(tuple(components))),
+            objective=objective,
+            cost_stress_score=cost_stress_score,
+            gates=gates,
+            trades=trades,
+            foundation_scenario=foundation_scenario,
+            params=params,
+            components=components,
             status=status,
             best_status=best_status,
             continuation="allowed",
             stop_reason="",
             elapsed_seconds=elapsed,
-            note=objective.detail,
         ),
     )
     stop_reason = _stop_reason_after_attempt(
@@ -1107,60 +1111,21 @@ def run_iteration(
     continuation = "terminal" if stop_reason else "allowed"
     append_result(
         results_path,
-        ResultRow(
-            run_id=provenance.run_id,
-            commit=commit,
-            artifact_dir=provenance.artifact_dir,
-            worktree_dirty=provenance.worktree_dirty,
-            strategy_sha256=provenance.strategy_sha256,
-            experiment_sha256=provenance.experiment_sha256,
-            protocol_sha256=provenance.protocol_sha256,
-            rationale_sha256=provenance.rationale_sha256,
-            quick_config_sha256=provenance.quick_config_sha256,
+        _scored_result_row(
+            provenance=provenance,
             iteration=iteration,
-            score=objective.score,
-            full_train_psr=objective.full_train_psr,
-            worst_subwindow_psr=_worst_subwindow_psr(objective),
-            worst_subwindow_id=objective.worst_subwindow_id,
-            cost_stress_psr=cost_stress_score,
-            gates_passed=gates.passed,
-            gate_flags=gates.flags(),
-            trade_count=_reported_trade_count(trades, foundation_scenario),
-            min_subwindow_trades=_min_subwindow_trades(objective),
-            total_return=None
-            if foundation_scenario is None
-            else foundation_scenario.full_train.total_return,
-            max_drawdown=None
-            if foundation_scenario is None
-            else foundation_scenario.full_train.max_drawdown,
-            win_rate=(
-                sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
-                if trades
-                else None
-            ),
-            profit_factor=_profit_factor(trades),
-            avg_trade_net=(
-                float(sum(trade.net_return for trade in trades) / len(trades))
-                if trades
-                else None
-            ),
-            cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
-            max_symbol_concentration=(
-                symbol_concentration(trades)
-                if foundation_scenario is None and trades
-                else (
-                    None
-                    if foundation_scenario is None
-                    else foundation_scenario.full_train.max_symbol_concentration
-                )
-            ),
-            complexity_count=max(len(params), len(tuple(components))),
+            objective=objective,
+            cost_stress_score=cost_stress_score,
+            gates=gates,
+            trades=trades,
+            foundation_scenario=foundation_scenario,
+            params=params,
+            components=components,
             status=status,
             best_status=best_status,
             continuation=continuation,
             stop_reason=stop_reason,
             elapsed_seconds=elapsed,
-            note=objective.detail,
         ),
     )
     row = read_results(results_path)[-1]
@@ -1220,7 +1185,7 @@ def climb_once(
         protocol_path=protocol_path,
         rationale_path="rationale.md",
     )
-    _ensure_can_attempt(rows, snapshot)
+    _ensure_can_attempt(rows, snapshot, root=Path("."))
     experiment = load_experiment(params_path)
     declared_components = (
         tuple(components)

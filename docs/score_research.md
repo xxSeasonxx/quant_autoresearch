@@ -168,13 +168,15 @@ state. It reports:
 - gate summary: `gates_passed`, `gate_flags`;
 - evidence basics: foundation `trade_count`, `min_subwindow_trades`,
   `total_return`, `max_drawdown`, `max_symbol_concentration`;
+- exposure and capacity: `max_gross_utilization`, `max_net_utilization`,
+  `max_adv_participation`, `max_bar_participation`;
 - trade-tape diagnostics when available: `win_rate`, `profit_factor`,
   `avg_trade_net`, `cost_return_sum`;
 - lifecycle fields: status, best status, continuation, stop reason, elapsed
-  seconds, provenance hashes.
+  seconds, `failure_reason` for non-scoreable runs, and the artifact directory.
 
-Detailed vectors and warnings go to the per-attempt `run_card.json`, not the
-TSV. The run card carries subwindow PSRs, full gate outcomes, foundation
+Source provenance is preserved in the per-attempt snapshot, and detailed vectors
+and warnings go to the per-attempt `run_card.json`, not the TSV. The run card carries subwindow PSRs, full gate outcomes, foundation
 scenario summaries, causality evidence, warnings, and a primary failure mode.
 
 Before a structural strategy edit, the agent should inspect the latest run card

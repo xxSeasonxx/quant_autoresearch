@@ -13,12 +13,12 @@ def test_harness_smoke_loads_active_config():
 
     assert protocol.strategy_path == "strategy.py"
     assert protocol.output.causality_check == "micro"
-    assert protocol.capacity_model.mode == "off"
+    assert protocol.capacity_model.mode in {"off", "adv_impact"}
     assert quick["strategy_id"] == protocol.strategy_id
     assert quick["params"] == experiment.params
     assert quick["output"]["causality_check"] == "micro"
     assert quick["output"]["foundation_subwindows"] == protocol.objective.subwindows
-    assert quick["capacity_model"]["mode"] == "off"
+    assert quick["capacity_model"]["mode"] == protocol.capacity_model.mode
     assert (
         quick["leverage_budget"]["max_gross_exposure"]
         == protocol.leverage_budget.max_gross_exposure
@@ -27,6 +27,6 @@ def test_harness_smoke_loads_active_config():
 
 
 def test_strategy_smoke_exports_contract():
-    assert strategy.__all__ == ["validate_params", "generate_decisions"]
+    assert set(strategy.__all__) == {"validate_params", "generate_decisions"}
     assert callable(strategy.validate_params)
     assert callable(strategy.generate_decisions)

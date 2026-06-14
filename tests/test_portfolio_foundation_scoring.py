@@ -34,6 +34,8 @@ def _metric(
     effective_sample_size: float = 120.0,
     max_symbol_concentration: float = 0.4,
     warnings: tuple[str, ...] = (),
+    max_gross_utilization: float = 0.02,
+    max_net_utilization: float = 0.02,
 ) -> FoundationMetric:
     return FoundationMetric(
         window_id=window_id,
@@ -46,6 +48,8 @@ def _metric(
         closed_trade_count=closed_trade_count,
         max_symbol_concentration=max_symbol_concentration,
         warnings=warnings,
+        max_gross_utilization=max_gross_utilization,
+        max_net_utilization=max_net_utilization,
     )
 
 
@@ -102,14 +106,18 @@ def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[st
             "max_drawdown": metric.max_drawdown,
             "closed_trade_count": metric.closed_trade_count,
             "max_symbol_concentration": metric.max_symbol_concentration,
+            "max_gross_utilization": metric.max_gross_utilization,
+            "max_net_utilization": metric.max_net_utilization,
             "warnings": list(metric.warnings),
         }
 
+    capacity = {"max_adv_participation": 0.05, "max_bar_participation": 0.1}
     foundation = foundation or _foundation()
     return {
         "scenarios": {
             "realistic_costs": {
                 "scenario_id": "realistic_costs",
+                "capacity": capacity,
                 "full_train": metric_payload(foundation.realistic_costs.full_train),
                 "subwindows": [
                     metric_payload(metric)
@@ -118,6 +126,7 @@ def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[st
             },
             "cost_stress": {
                 "scenario_id": "cost_stress",
+                "capacity": capacity,
                 "full_train": metric_payload(foundation.cost_stress.full_train),
                 "subwindows": [
                     metric_payload(metric)
@@ -269,7 +278,13 @@ def test_protocol_materializes_foundation_and_micro(tmp_path: Path):
     protocol = load_protocol(protocol_path)
     quick = build_quick_run_config(protocol, {"lookback": 3})
     output = quick["output"]
+    capacity_model = quick["capacity_model"]
+    leverage_budget = quick["leverage_budget"]
+    envelope = quick["envelope"]
     assert isinstance(output, Mapping)
+    assert isinstance(capacity_model, Mapping)
+    assert isinstance(leverage_budget, Mapping)
+    assert isinstance(envelope, Mapping)
 
     assert protocol.output.causality_check == "micro"
     assert protocol.objective.kind == "portfolio_psr_subwindow"
@@ -278,9 +293,9 @@ def test_protocol_materializes_foundation_and_micro(tmp_path: Path):
     assert output["causality_check"] == "micro"
     assert output["foundation_subwindows"] == 3
     assert output["foundation_cost_stress_multiplier"] == 2.0
-    assert quick["capacity_model"]["mode"] == "off"
-    assert quick["leverage_budget"]["max_net_exposure"] == 1.0
-    assert quick["envelope"]["operator_frozen"] is True
+    assert capacity_model["mode"] == "off"
+    assert leverage_budget["max_net_exposure"] == 1.0
+    assert envelope["operator_frozen"] is True
 
 
 def test_protocol_rejects_missing_capacity_and_low_cost_stress_multiplier(tmp_path: Path):
@@ -297,7 +312,10 @@ def test_protocol_rejects_missing_capacity_and_low_cost_stress_multiplier(tmp_pa
         raise AssertionError("expected missing capacity_model to fail")
 
     protocol_path.write_text(
-        _protocol_text().replace("foundation_cost_stress_multiplier = 2.0", "foundation_cost_stress_multiplier = 0.5")
+        _protocol_text().replace(
+            "foundation_cost_stress_multiplier = 2.0",
+            "foundation_cost_stress_multiplier = 0.5",
+        )
     )
     try:
         load_protocol(protocol_path)
@@ -626,15 +644,8 @@ def test_cost_stress_gate_failure_does_not_change_base_score():
 def test_result_log_replaces_empty_legacy_header_and_rejects_nonempty_legacy(tmp_path: Path):
     row = ResultRow(
         run_id="attempt-0001",
-        commit="abcdef0",
-        artifact_dir="results/autoresearch/attempt-0001",
-        worktree_dirty=False,
-        strategy_sha256="a" * 64,
-        experiment_sha256="b" * 64,
-        protocol_sha256="c" * 64,
-        rationale_sha256="d" * 64,
-        quick_config_sha256="e" * 64,
         iteration=1,
+        status="keep",
         score=0.6914624612740131,
         full_train_psr=0.9772498680518208,
         worst_subwindow_psr=0.6914624612740131,
@@ -646,17 +657,22 @@ def test_result_log_replaces_empty_legacy_header_and_rejects_nonempty_legacy(tmp
         min_subwindow_trades=12,
         total_return=0.04,
         max_drawdown=-0.03,
+        max_symbol_concentration=0.4,
+        max_gross_utilization=0.02,
+        max_net_utilization=0.02,
+        max_adv_participation=0.05,
+        max_bar_participation=0.1,
         win_rate=0.55,
         profit_factor=1.4,
         avg_trade_net=0.001,
         cost_return_sum=0.02,
-        max_symbol_concentration=0.4,
         complexity_count=1,
-        status="keep",
+        failure_reason="",
         best_status="updated",
         continuation="allowed",
         stop_reason="",
         elapsed_seconds=1.25,
+        artifact_dir="results/autoresearch/attempt-0001",
         note="",
     )
 
@@ -666,9 +682,10 @@ def test_result_log_replaces_empty_legacy_header_and_rejects_nonempty_legacy(tmp
     append_result(header_only, row)
     header = header_only.read_text().splitlines()[0].split("\t")
     assert header == ResultRow.header()
-    assert "subwindow_trade_counts" not in header
-    assert "cost_stress" not in header
-    assert "gross_return_sum" not in header
+    assert "strategy_sha256" not in header
+    assert "commit" not in header
+    assert "max_gross_utilization" in header
+    assert "failure_reason" in header
     assert read_results(header_only)[0] == row
 
     nonempty = tmp_path / "nonempty.tsv"
@@ -741,6 +758,10 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert rows[0].total_return == 0.05
     assert rows[0].win_rate == 0.5
     assert rows[0].cost_return_sum == 0.004
+    assert rows[0].max_gross_utilization == 0.02
+    assert rows[0].max_adv_participation == 0.05
+    assert rows[0].max_bar_participation == 0.1
+    assert rows[0].failure_reason == ""
     run_card_payload = json.loads(run_card.read_text())
     assert run_card_payload["score_parts"]["full_train_psr"] == NormalDist().cdf(0.4 / 0.2)
     assert run_card_payload["score_parts"]["worst_subwindow_id"] == "train_2"
@@ -755,6 +776,9 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert "[capacity_model]" in quick_config_text
     assert 'mode = "off"' in quick_config_text
     assert "[leverage_budget]" in quick_config_text
+    # The strategy is co-located with the quick config so the runner resolves the
+    # config's relative strategy_path against its own directory.
+    assert (tmp_path / ".autoresearch/quick/strategy.py").exists()
 
 
 def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_path: Path):

@@ -60,3 +60,17 @@ breadth/leverage*, not weaken the score.
 
 This section is the durable diagnosis trail, rejected-alternative summary, and
 migration rationale for the money-first objective cutover.
+
+## Universe resolver v1
+
+New-thesis setup gained a small return-blind universe resolver before the first
+Train result exists. The resolver reads catalog symbol constants and readiness
+metadata from `quant_data`, applies explicit exclusions, validates dataset and
+derived-symbol windows, sorts the eligible symbols, and writes a hashed artifact
+under `.autoresearch/universe/`.
+
+`propose-protocol` can now read that artifact through `universe_artifact` in the
+setup brief. It maps the resolved symbols into the recommended protocol table and
+records the resolver hash in the proposal. The resolver does not edit
+`protocol.toml`, run Train, or inspect PnL, returns, score diagnostics, prior
+attempts, `results.tsv`, run cards, or generated Train artifacts.

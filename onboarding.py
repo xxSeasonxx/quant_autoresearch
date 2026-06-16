@@ -10,6 +10,7 @@ import json
 import tomllib
 
 from protocol import ProtocolConfig, load_protocol
+from universe_resolver import UniverseArtifact, load_universe_artifact
 
 
 def protocol_sha256(path: str | Path) -> str:
@@ -102,17 +103,68 @@ def _text_list(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
-def _symbols(data: Mapping[str, Any]) -> tuple[str, ...]:
+def _explicit_symbols(data: Mapping[str, Any]) -> tuple[str, ...]:
     if "symbols" in data:
         source = {"symbols": data["symbols"]}
     elif "target_universe" in data:
         source = {"symbols": data["target_universe"]}
     else:
-        source = {"symbols": []}
-    symbols = _text_list(source, "symbols")
-    if not symbols:
+        return ()
+    return _text_list(source, "symbols")
+
+
+def _resolve_universe_artifact(path_text: str) -> UniverseArtifact:
+    return load_universe_artifact(Path(path_text))
+
+
+def _artifact_rule(artifact: UniverseArtifact) -> Mapping[str, object]:
+    rule = artifact.payload.get("rule")
+    if not isinstance(rule, Mapping):
+        raise ValueError("universe artifact missing rule")
+    return rule
+
+
+def _validate_universe_artifact_rule(
+    artifact: UniverseArtifact,
+    data: Mapping[str, Any],
+) -> None:
+    rule = _artifact_rule(artifact)
+    expected_pairs = {
+        "data_kind": data.get("data_kind"),
+        "dataset": data.get("dataset"),
+        "start": data.get("train_start"),
+        "end": data.get("train_end"),
+    }
+    for key, expected in expected_pairs.items():
+        if expected in (None, ""):
+            continue
+        if rule.get(key) != expected:
+            brief_key = "train_start" if key == "start" else "train_end" if key == "end" else key
+            raise ValueError(f"universe_artifact rule.{key} must match {brief_key}")
+
+    rule_exclusions = rule.get("exclusions")
+    expected_exclusions = sorted(_text_list(data, "exclusions"))
+    if rule_exclusions != expected_exclusions:
+        raise ValueError("universe_artifact rule.exclusions must match exclusions")
+
+
+def _brief_symbols(data: Mapping[str, Any]) -> tuple[tuple[str, ...], str, str | None]:
+    explicit = _explicit_symbols(data)
+    artifact_path = _optional_text(data, "universe_artifact")
+    artifact: UniverseArtifact | None = None
+    if artifact_path:
+        artifact = _resolve_universe_artifact(artifact_path)
+        _validate_universe_artifact_rule(artifact, data)
+    has_explicit_key = "symbols" in data or "target_universe" in data
+    if has_explicit_key and not explicit and artifact is None:
         raise ValueError("symbols must include at least one symbol")
-    return symbols
+    if explicit and artifact is not None and explicit != artifact.resolved_symbols:
+        raise ValueError("symbols must exactly match universe_artifact resolved_symbols")
+    if artifact is not None:
+        return artifact.resolved_symbols, artifact_path, artifact.resolver_sha256
+    if explicit:
+        return explicit, "", None
+    raise ValueError("either symbols or universe_artifact must include at least one symbol")
 
 
 def _finite_float(data: Mapping[str, Any], key: str) -> float:
@@ -200,6 +252,8 @@ class StrategyBrief:
     bar_cadence: str
     annualization_periods_per_year: int
     symbols: tuple[str, ...]
+    universe_artifact: str
+    universe_resolver_sha256: str | None
     capital_notional: float
     adv_lookback_bars: int
     adv_min_observations: int
@@ -234,6 +288,7 @@ class StrategyBrief:
 
 def load_strategy_brief(path: str | Path) -> StrategyBrief:
     data = _load_brief_mapping(path)
+    symbols, universe_artifact, universe_resolver_sha256 = _brief_symbols(data)
     notional_key = "capital_notional" if "capital_notional" in data else "portfolio_notional"
     adv_lookback_bars = _positive_int(data, "adv_lookback_bars")
     adv_min_observations = _positive_int(data, "adv_min_observations")
@@ -256,7 +311,9 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         annualization_periods_per_year=_positive_int(
             data, "annualization_periods_per_year"
         ),
-        symbols=_symbols(data),
+        symbols=symbols,
+        universe_artifact=universe_artifact,
+        universe_resolver_sha256=universe_resolver_sha256,
         capital_notional=_positive_float(data, notional_key),
         adv_lookback_bars=adv_lookback_bars,
         adv_min_observations=adv_min_observations,
@@ -453,9 +510,14 @@ def _proposal_payload_without_hash(
         },
     }
     warnings = [
-        "Symbols are explicit Season-approved inputs; this helper does not run a return-blind universe resolver.",
         "Train micro causality is a bounded score-admissibility check, not retention, paper, live, or deployability proof.",
     ]
+    if brief.universe_resolver_sha256 is None:
+        warnings.append("Symbols are explicit Season-approved inputs; no resolver artifact was used.")
+    else:
+        warnings.append(
+            "Resolved symbols are eligibility-based from the resolver artifact, not return-ranked or Train-result-ranked."
+        )
     if current.output.causality_check != "micro":
         warnings.append("Current protocol causality is not micro; the proposal keeps Train causality bounded on micro.")
     return {
@@ -472,6 +534,8 @@ def _proposal_payload_without_hash(
             "decision_cadence": brief.decision_cadence,
             "bar_cadence": brief.bar_cadence,
             "data_needs": list(brief.data_needs),
+            "universe_artifact": brief.universe_artifact,
+            "universe_resolver_sha256": brief.universe_resolver_sha256,
             "exclusions": list(brief.exclusions),
             "editable_params": list(brief.editable_params),
             "baseline_expectations": brief.baseline_expectations,
@@ -481,7 +545,11 @@ def _proposal_payload_without_hash(
         "rationale": {
             "data.kind": "Match the data source to the observable and fields needed at decision time.",
             "data.dataset": "Use the dataset that provides the required causal fields and readiness coverage.",
-            "data.symbols": "Use only the explicit universe Season approved for this setup pass.",
+            "data.symbols": (
+                "Use the resolver artifact's eligibility-filtered symbols."
+                if brief.universe_resolver_sha256 is not None
+                else "Use only the explicit universe Season approved for this setup pass."
+            ),
             "data.start": "Set the Train start before any result is inspected; do not tune it to outcomes.",
             "data.end": "Set the Train end before any result is inspected; OOS remains outside the loop.",
             "data.load_start": "Use only as an execution/data-readiness buffer, not as scored Train evidence.",
@@ -582,6 +650,16 @@ def _proposal_markdown(proposal: ProtocolProposal) -> str:
     checklist = "\n".join(f"- [ ] {item}" for item in checklist_items)
     warnings = "\n".join(f"- {item}" for item in proposal.warnings)
     thesis = proposal.thesis
+    universe_hash = thesis.get("universe_resolver_sha256")
+    universe_section = ""
+    if isinstance(universe_hash, str) and universe_hash:
+        universe_section = f"""
+## Universe Resolver
+
+- Artifact: `{thesis["universe_artifact"]}`
+- Resolver SHA-256: `{universe_hash}`
+- Symbol list: eligibility-based, not return-ranked or Train-result-ranked.
+"""
     return f"""# Protocol Proposal
 
 ## Thesis
@@ -590,6 +668,7 @@ def _proposal_markdown(proposal: ProtocolProposal) -> str:
 - Observable: {thesis["observable"]}
 - Falsifier: {thesis["falsifier"]}
 - Horizon: {thesis["horizon"]}
+{universe_section}
 
 ## Recommendation Table
 

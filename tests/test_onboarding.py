@@ -8,6 +8,7 @@ import pytest
 
 import loop
 from onboarding import build_protocol_proposal, protocol_sha256, write_protocol_proposal
+from universe_resolver import universe_payload_sha256
 
 
 def _protocol_text() -> str:
@@ -91,12 +92,20 @@ def _brief_text(
     *,
     mechanism: str = "Funding crowding mean reverts after large positive prints.",
     falsifier: str = "No stable return after costs across subwindows.",
-    symbols: str = '"BTC-PERP", "ETH-PERP", "SOL-PERP"',
+    symbols: str | None = '"BTC-PERP", "ETH-PERP", "SOL-PERP"',
+    universe_artifact: str = "",
+    dataset: str = "crypto_perp_minute",
+    exclusions: str = '"illiquid venues"',
     max_iterations: int = 50,
     target_volatility: float = 0.18,
     max_abs_drawdown: float = 0.22,
     min_annualized_return: float = 0.12,
 ) -> str:
+    universe_lines = ""
+    if symbols is not None:
+        universe_lines += f"symbols = [{symbols}]\n"
+    if universe_artifact:
+        universe_lines += f"universe_artifact = {universe_artifact!r}\n"
     return f"""
 # Test Brief
 
@@ -108,14 +117,14 @@ horizon = "intraday to multi-day"
 decision_cadence = "hourly rebalance, multi-day hold"
 data_needs = ["funding events", "minute mark bars", "volume for capacity"]
 data_kind = "crypto_perp_funding"
-dataset = "crypto_perp_minute"
+dataset = {dataset!r}
 train_start = "2024-07-01"
 train_end = "2025-12-31"
 load_start = "2024-06-24"
 load_end = "2026-01-07"
 bar_cadence = "1m"
 annualization_periods_per_year = 525600
-symbols = [{symbols}]
+{universe_lines.rstrip()}
 capital_notional = 2500000.0
 adv_lookback_bars = 2880
 adv_min_observations = 120
@@ -143,11 +152,50 @@ min_abs_improvement = 0.002
 min_rel_improvement = 0.01
 max_components = 4
 max_params = 12
-exclusions = ["illiquid venues"]
+exclusions = [{exclusions}]
 editable_params = ["lookback", "threshold"]
 baseline_expectations = "Baseline may fail breadth before the universe resolver exists."
 ```
 """
+
+
+def _write_universe_artifact(
+    path: Path,
+    symbols: list[str],
+    *,
+    exclusions: list[str] | None = None,
+) -> str:
+    resolved_exclusions = exclusions or []
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "created_at": "2026-06-16T00:00:00+00:00",
+        "rule": {
+            "data_kind": "crypto_perp_funding",
+            "dataset": "crypto_perp_1min_with_funding",
+            "start": "2024-07-01",
+            "end": "2025-12-31",
+            "exclusions": resolved_exclusions,
+            "readiness_options": {
+                "max_lag_days": None,
+                "require_research_ready": False,
+                "allowed_derived_statuses": ["research_ready"],
+                "capacity_model": "adv_impact",
+            },
+        },
+        "resolved_symbols": symbols,
+        "excluded_symbols": [],
+        "data_snapshot": {
+            "dataset": "crypto_perp_1min_with_funding",
+            "dataset_status": {"status": "usable_with_caveats"},
+            "derived_health": {"sha256": "digest", "symbol_count": len(symbols)},
+            "snapshot_sha256": "snapshot",
+        },
+        "resolver_sha256": "",
+    }
+    payload["resolver_sha256"] = universe_payload_sha256(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return str(payload["resolver_sha256"])
 
 
 def _write_setup(tmp_path: Path) -> tuple[Path, Path]:
@@ -203,6 +251,128 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert proposal.approval["approved"] is False
 
 
+def test_protocol_proposal_accepts_universe_artifact_without_explicit_symbols(
+    tmp_path: Path,
+):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    artifact_hash = _write_universe_artifact(
+        artifact_path,
+        ["BTC-PERP", "ETH-PERP", "SOL-PERP"],
+    )
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols=None,
+            universe_artifact=str(artifact_path),
+            dataset="crypto_perp_1min_with_funding",
+            exclusions="",
+        )
+    )
+
+    proposal = build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+    assert proposal.recommended_protocol["data"]["symbols"] == [
+        "BTC-PERP",
+        "ETH-PERP",
+        "SOL-PERP",
+    ]
+    assert proposal.thesis["universe_artifact"] == str(artifact_path)
+    assert proposal.thesis["universe_resolver_sha256"] == artifact_hash
+    assert any("eligibility-based" in warning for warning in proposal.warnings)
+
+
+def test_protocol_proposal_accepts_matching_symbols_and_universe_artifact(
+    tmp_path: Path,
+):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    _write_universe_artifact(artifact_path, ["BTC-PERP", "ETH-PERP", "SOL-PERP"])
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols='"BTC-PERP", "ETH-PERP", "SOL-PERP"',
+            universe_artifact=str(artifact_path),
+            dataset="crypto_perp_1min_with_funding",
+            exclusions="",
+        )
+    )
+
+    proposal = build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+    assert proposal.recommended_protocol["data"]["symbols"] == [
+        "BTC-PERP",
+        "ETH-PERP",
+        "SOL-PERP",
+    ]
+
+
+def test_protocol_proposal_rejects_mismatching_symbols_and_universe_artifact(
+    tmp_path: Path,
+):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    _write_universe_artifact(artifact_path, ["BTC-PERP", "ETH-PERP", "SOL-PERP"])
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols='"BTC-PERP", "ETH-PERP"',
+            universe_artifact=str(artifact_path),
+            dataset="crypto_perp_1min_with_funding",
+            exclusions="",
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="symbols must exactly match universe_artifact resolved_symbols",
+    ):
+        build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+
+def test_protocol_proposal_rejects_stale_universe_artifact_rule(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    _write_universe_artifact(artifact_path, ["BTC-PERP", "ETH-PERP", "SOL-PERP"])
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols=None,
+            universe_artifact=str(artifact_path),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="universe_artifact rule.dataset must match dataset",
+    ):
+        build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+
+def test_protocol_proposal_rejects_malformed_universe_artifact(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text('{"schema_version": 1}\n')
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols=None,
+            universe_artifact=str(artifact_path),
+            dataset="crypto_perp_1min_with_funding",
+            exclusions="",
+        )
+    )
+
+    with pytest.raises(ValueError, match="universe artifact missing created_at"):
+        build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+
 @pytest.mark.parametrize(
     ("brief", "message"),
     [
@@ -255,6 +425,35 @@ def test_propose_protocol_writes_artifacts_without_mutating_protocol(tmp_path: P
     markdown = out.with_suffix(".md").read_text()
     assert "| Protocol field | Current value | Recommended value | Reason |" in markdown
     assert "Approval Checklist" in markdown
+
+
+def test_propose_protocol_markdown_includes_universe_artifact_hash(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    artifact_path = tmp_path / ".autoresearch" / "universe" / "latest.json"
+    artifact_hash = _write_universe_artifact(
+        artifact_path,
+        ["BTC-PERP", "ETH-PERP", "SOL-PERP"],
+    )
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(
+        _brief_text(
+            symbols=None,
+            universe_artifact=str(artifact_path),
+            dataset="crypto_perp_1min_with_funding",
+            exclusions="",
+        )
+    )
+    out = tmp_path / ".autoresearch" / "protocol_proposals" / "latest.json"
+
+    write_protocol_proposal(brief_path, out, protocol_path=protocol_path)
+
+    payload = json.loads(out.read_text())
+    markdown = out.with_suffix(".md").read_text()
+    assert payload["thesis"]["universe_resolver_sha256"] == artifact_hash
+    assert "## Universe Resolver" in markdown
+    assert artifact_hash in markdown
+    assert "eligibility-based, not return-ranked" in markdown
 
 
 def test_baseline_refuses_missing_unapproved_stale_and_active_lifecycle(

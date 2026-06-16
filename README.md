@@ -20,6 +20,7 @@ baseline preflight.
 | `experiment.toml` | Agent-editable bounded strategy params. |
 | `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
 | `rationale.md` | Working thesis, signal components, and variant log. |
+| `universe_resolver.py` | Return-blind catalog/readiness universe resolver for new-thesis setup. |
 | `docs/harness-objective-roadmap.md` | Active roadmap for remaining harness process improvements. |
 | `docs/score_research.md` | Train money-score rationale and scoring boundaries. |
 | `loop.py` | Thin status and climb entry point. |
@@ -37,7 +38,7 @@ The agent may edit:
 - `experiment.toml` `[params]`, within the existing `[bounds.*]`
 - `rationale.md` when variants are tried or signal components change
 
-The agent does not edit:
+The agent does not edit during an active thesis loop:
 
 - symbols
 - Train start/end
@@ -51,7 +52,9 @@ The agent does not edit:
 - `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
 
 Those live in `protocol.toml` and are chosen through `new-strategy.md` before a
-thesis starts.
+thesis starts. A new-thesis setup can use explicit `symbols` or a
+`.autoresearch/universe/` resolver artifact; `propose-protocol` maps the approved
+symbol list into the recommendation table but does not edit `protocol.toml`.
 
 ## Artifact Authority
 
@@ -108,17 +111,20 @@ components declared in `rationale.md` under `### Component:` headings.
 
 ```bash
 conda run -n quant python -m pytest
+conda run -n quant python -m loop resolve-universe --data-kind crypto_perp_funding --dataset crypto_perp_1min_with_funding --start 2025-03-01 --end 2025-12-31 --exclude MATIC-PERP --out .autoresearch/universe/latest.json
 conda run -n quant python -m loop propose-protocol --brief .autoresearch/protocol_briefs/latest.md --out .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop baseline --mechanism "<why it should work>" --falsifier "<what kills it>" --approved-proposal .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop status
 conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
 ```
 
-The `propose-protocol` command writes proposal artifacts only; it does not edit
-`protocol.toml`. The `baseline` command validates an approved proposal before
-the first attempt, then uses the normal climb path. The `climb` command runs the
-current candidate once and logs the attempt. The autonomous editing loop is
-driven by the agent contract in `program.md`.
+The `resolve-universe` command writes a return-blind eligibility artifact from
+catalog/readiness metadata only. The `propose-protocol` command writes proposal
+artifacts only; it does not edit `protocol.toml`. The `baseline` command
+validates an approved proposal before the first attempt, then uses the normal
+climb path. The `climb` command runs the current candidate once and logs the
+attempt. The autonomous editing loop is driven by the agent contract in
+`program.md`.
 
 The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.
 

@@ -23,29 +23,28 @@ The money-first Train objective is the current scoring contract:
   deterministic `propose-protocol` / `baseline` CLI boundary. The proposal CLI
   writes review artifacts only; baseline requires an approved proposal hash and
   refuses to run when active lifecycle state already exists.
-
-The current 3-symbol funding sleeve is expected to fail the deflated money floor.
-That verdict is evidence that the process needs a cleaner mandate and broader
-return-blind universe path, not a reason to weaken the score.
+- The optional `resolve-universe` CLI resolves a pre-baseline, return-blind
+  symbol list from `quant_data.catalog` and `quant_data.readiness` metadata. The
+  resolver writes `.autoresearch/universe/` artifacts and never edits
+  `protocol.toml` or inspects Train results.
 
 ## Open Work
 
-### Return-Blind Universe Resolver
+### Universe Provenance In Lifecycle Artifacts
 
-Replace hand-picked symbols with a protocol-owned universe rule resolved before
-the first attempt. The resolver may use data readiness, finite mark coverage,
-liquidity, capacity support, data kind, eligibility, and operator exclusions. It
-must not read realized return, PnL, Sharpe, PSR, Calmar, win rate, or prior Train
-outcomes.
+Attach the approved universe artifact identity to lifecycle state after Season
+approves a resolver-backed protocol. The protocol still owns the actual Train
+symbol list; the resolver artifact explains how that list was chosen before any
+Train result existed.
 
-The resolved list, rule config, data snapshot identity, and exclusions should be
-recorded in the thesis lock and attempt artifacts.
+The thesis lock and attempt artifacts should record the resolved list, rule
+config, data snapshot identity, resolver hash, and exclusions.
 
 Done when:
 
-- the same rule and data snapshot resolve the same symbol list;
-- threshold changes move the list predictably;
-- tests prove the resolver does not consume return or score fields;
+- resolver-backed lifecycles preserve universe artifact identity;
+- stale or mismatching universe provenance fails closed;
+- terminal manifests include the approved universe source;
 - a universe change requires a fresh lifecycle.
 
 ### Lifecycle Reseed Flow
@@ -64,20 +63,17 @@ Done when:
 - the handoff tells Season whether the prior lifecycle died by money floor,
   capacity, data, causality, complexity, plateau, or max iterations.
 
-### Setup Documentation Split
+### Setup Documentation Coverage
 
-Create a focused new-thesis setup guide that owns mandate collection, protocol
-fit, universe selection, lifecycle reset, and first-run checklist. Keep
-`program.md` as the active Train-loop operating contract. Keep score math in
-`docs/score_research.md`. Keep chronology and rejected alternatives in
-`HISTORY.md`.
+Keep new-thesis setup, loop operation, scoring, roadmap, and history in their
+owning documents: `new-strategy.md`, `program.md`, `docs/score_research.md`,
+this roadmap, and `HISTORY.md`.
 
 Done when:
 
 - a new session can start a thesis without reading chat history;
 - each durable rule has one owning active document;
-- active docs contain no completed task timelines, stale review dispositions, or
-  paper/live readiness claims;
+- active docs contain no completed task timelines or stale review dispositions;
 - README points to the correct owner for setup, scoring, loop operation, and
   roadmap state.
 

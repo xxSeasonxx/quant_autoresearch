@@ -31,6 +31,7 @@ from protocol import (
     write_quick_run_config,
 )
 from results_log import ResultRow, append_result, read_results, status_summary
+from universe_resolver import write_universe_artifact
 
 
 Runner = Callable[..., object]
@@ -1399,6 +1400,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     propose.add_argument("--brief", required=True)
     propose.add_argument("--out", required=True)
     propose.add_argument("--protocol", default="protocol.toml")
+    resolve = subparsers.add_parser("resolve-universe")
+    resolve.add_argument("--data-kind", required=True)
+    resolve.add_argument("--dataset")
+    resolve.add_argument("--start", required=True)
+    resolve.add_argument("--end", required=True)
+    resolve.add_argument("--exclude", action="append", default=[])
+    resolve.add_argument("--out", required=True)
+    resolve.add_argument("--max-lag-days", type=int)
+    resolve.add_argument("--require-research-ready", action="store_true")
+    resolve.add_argument("--allow-derived-status", action="append", default=[])
+    resolve.add_argument(
+        "--capacity-model",
+        choices=("off", "adv_impact"),
+        default="adv_impact",
+    )
     baseline = subparsers.add_parser("baseline")
     baseline.add_argument("--mechanism", required=True)
     baseline.add_argument("--falsifier", required=True)
@@ -1420,6 +1436,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"proposal_json: {args.out}")
         print(f"proposal_markdown: {Path(args.out).with_suffix('.md')}")
         print(f"proposal_sha256: {proposal.proposal_sha256}")
+        return 0
+    if args.command == "resolve-universe":
+        payload = write_universe_artifact(
+            out_path=args.out,
+            data_kind=args.data_kind,
+            dataset=args.dataset,
+            start=args.start,
+            end=args.end,
+            exclusions=args.exclude,
+            max_lag_days=args.max_lag_days,
+            require_research_ready=args.require_research_ready,
+            allowed_derived_statuses=args.allow_derived_status or ("research_ready",),
+            capacity_model=args.capacity_model,
+        )
+        resolved_symbols = payload["resolved_symbols"]
+        if not isinstance(resolved_symbols, list):
+            raise ValueError("resolver returned malformed resolved_symbols")
+        print(f"universe_json: {args.out}")
+        print(f"resolved_symbol_count: {len(resolved_symbols)}")
+        print(f"resolver_sha256: {payload['resolver_sha256']}")
         return 0
     if args.command == "baseline":
         outcome = baseline_once(

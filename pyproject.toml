@@ -26,5 +26,5 @@ exclude = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["quant_strategies.*"]
+module = ["quant_data.*", "quant_strategies.*"]
 ignore_missing_imports = true

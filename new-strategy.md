@@ -14,7 +14,7 @@ unapproved baselines. It does not call an LLM and does not edit `protocol.toml`.
 
 1. Ask Season for the mandate in plain language:
   - mechanism, observable, falsifier, and expected horizon;
-  - desired symbols or exclusions;
+  - data kind, dataset, desired symbols, or exclusions;
   - capital/notional, target volatility, max tolerable drawdown, and minimum
   annualized return;
   - Train window, data needs, attempt budget, and baseline expectations when
@@ -26,13 +26,15 @@ unapproved baselines. It does not call an LLM and does not edit `protocol.toml`.
   `/Users/Season_Yang/Personal/quant-data/docs/consumer/` for the editable
    surface, current protocol, data readiness, cadence, liquidity, and capacity
    support.
-4. Create `.autoresearch/protocol_briefs/latest.md` from the template below. Keep
+4. When the universe should be eligibility-based, run `resolve-universe` and
+  write the artifact under `.autoresearch/universe/`.
+5. Create `.autoresearch/protocol_briefs/latest.md` from the template below. Keep
   `new-strategy.md` stable; do not use this guide itself as the CLI brief.
-5. Run `propose-protocol`.
-6. Present Season a recommendation table with current value, recommended value,
+6. Run `propose-protocol`.
+7. Present Season a recommendation table with current value, recommended value,
   reason, and tradeoff for each protocol-owned change.
-7. Wait for explicit Season approval before editing `protocol.toml`.
-8. After approval, edit `protocol.toml`, update `rationale.md`, record approval
+8. Wait for explicit Season approval before editing `protocol.toml`.
+9. After approval, edit `protocol.toml`, update `rationale.md`, record approval
   in the proposal JSON, and run `baseline`.
 
 Do not inspect Train results, OOS results, PnL, Sharpe, PSR, Calmar, win rate, or
@@ -65,6 +67,7 @@ bar_cadence = ""
 annualization_periods_per_year = 525600
 
 symbols = []
+universe_artifact = ""
 exclusions = []
 
 capital_notional = 1000000.0
@@ -113,8 +116,11 @@ State these recommendations plainly in the review table:
 - `annualization_periods_per_year` comes from data cadence and market calendar,
 and must be reviewed for every new data kind or bar cadence;
 - Train causality stays bounded on `output.causality_check = "micro"`;
-- symbols are explicit Season-approved inputs until a return-blind resolver
-exists.
+- provide either explicit `symbols` or a `universe_artifact`;
+- when both `symbols` and `universe_artifact` are present, the ordered lists must
+match exactly;
+- a resolver artifact is an eligibility filter from catalog/readiness metadata,
+not a return ranking.
 
 Common annualization values:
 
@@ -129,6 +135,27 @@ Common annualization values:
 
 
 ## Proposal Command
+
+When using an eligibility-based universe, first resolve the symbol list:
+
+```bash
+conda run -n quant python -m loop resolve-universe \
+  --data-kind crypto_perp_funding \
+  --dataset crypto_perp_1min_with_funding \
+  --start 2025-03-01 \
+  --end 2025-12-31 \
+  --exclude MATIC-PERP \
+  --out .autoresearch/universe/latest.json
+```
+
+Then reference the artifact in the setup brief:
+
+```toml
+universe_artifact = ".autoresearch/universe/latest.json"
+```
+
+`resolve-universe` uses catalog symbol constants and readiness metadata only. It
+does not edit `protocol.toml`, run Train, or inspect results.
 
 ```bash
 conda run -n quant python -m loop propose-protocol \

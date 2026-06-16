@@ -16,6 +16,7 @@ from objective import (
     FoundationScenario,
     FoundationSizing,
     ObjectiveConfig,
+    TradeSample,
     deflated_window_floor,
     score_foundation_cost_stress,
     score_objective,
@@ -53,9 +54,18 @@ def _metric(
     # Default the diagnostic Sharpe inputs to be consistent with the money moments
     # so the PSR cross-check identity holds: sharpe = mean/vol (per period),
     # sharpe_se = 1/sqrt(n_eff). Tests that probe SE-source independence override.
-    if sharpe is None and mean_return is not None and return_volatility not in (None, 0.0):
+    if (
+        sharpe is None
+        and mean_return is not None
+        and return_volatility is not None
+        and return_volatility != 0.0
+    ):
         sharpe = mean_return / return_volatility
-    if sharpe_se is None and effective_sample_size not in (None, 0.0):
+    if (
+        sharpe_se is None
+        and effective_sample_size is not None
+        and effective_sample_size != 0.0
+    ):
         assert effective_sample_size is not None
         sharpe_se = 1.0 / sqrt(effective_sample_size)
     return FoundationMetric(
@@ -213,7 +223,7 @@ class FakeFoundation:
 @dataclass(frozen=True)
 class FakeCausality:
     causality_check: str = "micro"
-    verified: bool = True
+    verified: bool = False
     replay_warning: str | None = None
     timed_out: bool = False
     selected_probe_count: int = 3
@@ -222,6 +232,7 @@ class FakeCausality:
 @dataclass(frozen=True)
 class FakeEvidence:
     causality: FakeCausality
+    causality_admissible: bool = True
 
 
 @dataclass(frozen=True)
@@ -253,8 +264,8 @@ def _gate_config() -> GateConfig:
 def _evaluate(
     foundation: FoundationEvidence,
     *,
-    trades: tuple[FakeTrade, ...] = (),
-    causality_verified: bool | None = True,
+    trades: tuple[TradeSample, ...] = (),
+    causality_admissible: bool | None = True,
     config: GateConfig | None = None,
 ):
     objective = score_objective((), _config(), foundation=foundation)
@@ -266,7 +277,7 @@ def _evaluate(
         config=config or _gate_config(),
         objective=objective,
         cost_stress_full_train_return=cost_stress.full_train_return,
-        causality_verified=causality_verified,
+        causality_admissible=causality_admissible,
         foundation_scenario=foundation.realistic_costs,
     )
     return objective, cost_stress, gates
@@ -309,8 +320,8 @@ results_dir = "results"
 artifact_profile = "diagnostic"
 quick_checks = true
 causality_check = "micro"
-focused_probe_limit = 40
-focused_timeout_seconds = 600.0
+micro_probe_limit = 40
+micro_timeout_seconds = 600.0
 diagnostic_sample_trades = 5
 foundation_subwindows = 3
 foundation_cost_stress_multiplier = 2.0
@@ -360,8 +371,8 @@ def test_protocol_materializes_money_objective_and_micro(tmp_path: Path):
     assert protocol.gates.score_haircut_se == 2.8
     assert protocol.gates.min_cost_stress_return_retention == 0.5
     assert output["causality_check"] == "micro"
-    assert output["focused_probe_limit"] == 40
-    assert output["focused_timeout_seconds"] == 600.0
+    assert output["micro_probe_limit"] == 40
+    assert output["micro_timeout_seconds"] == 600.0
 
     assert protocol.risk_budget.mode == "calibrate_vol"
     assert protocol.risk_budget.annualization_periods_per_year == 525600
@@ -422,6 +433,39 @@ def test_score_is_weakest_window_lcb_at_k_rank_one():
     assert result.full_train_return == 0.0012 * _P
     assert result.worst_window_return == 0.0009 * _P
     assert result.subwindow_trade_counts == (20, 12, 20)
+
+
+def test_worst_window_return_matches_lcb_binding_window_not_lowest_point_return():
+    high_variance_window = _metric(
+        "train_2",
+        mean_return=0.0020,
+        return_volatility=0.0200,
+        closed_trade_count=12,
+    )
+    low_point_return_window = _metric(
+        "train_1",
+        mean_return=0.0010,
+        return_volatility=0.0001,
+    )
+    foundation = FoundationEvidence(
+        realistic_costs=FoundationScenario(
+            scenario_id="realistic_costs",
+            full_train=_metric("full_train", mean_return=0.0030),
+            subwindows=(
+                low_point_return_window,
+                high_variance_window,
+                _metric("train_3", mean_return=0.0015, return_volatility=0.0001),
+            ),
+        ),
+        cost_stress=_foundation().cost_stress,
+        sizing=_sizing(),
+    )
+
+    result = score_objective((), _config(), foundation=foundation)
+
+    assert result.worst_window_id == "train_2"
+    assert result.worst_window_return == 0.0020 * _P
+    assert min(result.window_returns) == 0.0010 * _P
 
 
 def test_scaling_deployed_return_moves_the_score():
@@ -577,10 +621,11 @@ def test_cost_stress_retention_non_binding_when_realistic_nonpositive():
     assert not gates.by_name["money_floor"].passed  # money floor is the kill
 
 
-def test_causality_gate_fails_when_unverified():
-    _, _, gates = _evaluate(_foundation(), causality_verified=False)
+def test_causality_gate_fails_when_not_admissible():
+    _, _, gates = _evaluate(_foundation(), causality_admissible=False)
     assert not gates.by_name["causality"].passed
-    _, _, gates_none = _evaluate(_foundation(), causality_verified=None)
+    assert gates.by_name["causality"].detail == "not_admissible"
+    _, _, gates_none = _evaluate(_foundation(), causality_admissible=None)
     assert not gates_none.by_name["causality"].passed
 
 
@@ -603,7 +648,7 @@ def test_sample_size_gate_binds_for_thin_evidence():
 
 def test_failed_gate_does_not_change_score():
     foundation = _foundation()
-    objective, _, gates = _evaluate(foundation, causality_verified=False)
+    objective, _, gates = _evaluate(foundation, causality_admissible=False)
     assert not gates.passed
     assert objective.score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
 
@@ -766,6 +811,8 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert realistic["full_train"]["mean_return"] == 0.0012
     assert realistic["full_train"]["return_volatility"] == 0.0010
     assert payload["causality"]["causality_check"] == "micro"
+    assert payload["causality"]["admissible"] is True
+    assert payload["causality"]["verified"] is False
     assert payload["primary_failure_mode"] == ""
 
 
@@ -797,14 +844,17 @@ def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_p
     assert row.win_rate is None
 
 
-def test_run_iteration_discards_when_causality_unverified(tmp_path: Path):
+def test_run_iteration_discards_when_causality_not_admissible(tmp_path: Path):
     _write_workspace(tmp_path)
     protocol = load_protocol(tmp_path / "protocol.toml")
     result = FakeRunResult(
         succeeded=True,
         economics=FakeEconomics(trades=()),
         foundation=FakeFoundation(),
-        evidence=FakeEvidence(causality=FakeCausality(verified=False)),
+        evidence=FakeEvidence(
+            causality=FakeCausality(verified=False),
+            causality_admissible=False,
+        ),
     )
 
     outcome = run_iteration(
@@ -825,6 +875,8 @@ def test_run_iteration_discards_when_causality_unverified(tmp_path: Path):
     assert outcome.status == "discard"
     assert "causality=fail" in row.gate_flags
     assert row.score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
+    assert run_card["causality"]["admissible"] is False
+    assert run_card["causality"]["verified"] is False
     assert run_card["primary_failure_mode"] == "causality"
 
 
@@ -858,6 +910,46 @@ def test_run_iteration_discards_when_money_floor_fails(tmp_path: Path):
     assert outcome.status == "discard"
     assert "money_floor=fail" in row.gate_flags
     assert run_card["primary_failure_mode"] == "money_floor"
+
+
+def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Path):
+    _write_workspace(tmp_path)
+    protocol = load_protocol(tmp_path / "protocol.toml")
+    payload = _foundation_payload()
+    scenarios = payload["scenarios"]
+    assert isinstance(scenarios, dict)
+    realistic = scenarios["realistic_costs"]
+    assert isinstance(realistic, dict)
+    full_train = realistic["full_train"]
+    assert isinstance(full_train, dict)
+    full_train["mean_return"] = float("inf")
+    result = FakeRunResult(
+        succeeded=True,
+        economics=None,
+        foundation=RawFoundation(payload),
+        evidence=FakeEvidence(causality=FakeCausality()),
+    )
+
+    outcome = run_iteration(
+        protocol,
+        params={},
+        components=("signal",),
+        results_path=tmp_path / "results.tsv",
+        iteration=1,
+        best_score=None,
+        runner=lambda *args, **kwargs: result,
+        workdir=tmp_path,
+    )
+
+    row = read_results(tmp_path / "results.tsv")[0]
+    run_card = json.loads(
+        (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
+    )
+    assert outcome.status == "discard"
+    assert row.status == "discard"
+    assert row.score is None
+    assert "non-scoreable window" in row.note
+    assert run_card["primary_failure_mode"] == "score_unavailable"
 
 
 def test_run_iteration_crashes_on_malformed_foundation_payload(tmp_path: Path):

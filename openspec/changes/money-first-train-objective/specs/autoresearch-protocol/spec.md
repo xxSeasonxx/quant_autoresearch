@@ -34,7 +34,7 @@ The protocol SHALL expose `objective.psr_hurdle_sharpe` to parameterize the diag
 - **AND** the run score and gates do not depend on it
 
 ### Requirement: Protocol supports micro causality policy
-The protocol loader SHALL accept `output.causality_check = "micro"` and pass it through to the materialized quick-run config. The protocol SHALL expose the operator-owned causality replay budget (`output.focused_timeout_seconds`, `output.focused_probe_limit`) and materialize it, so a legitimate run can verify causality within budget given that causality verification is a hard gate.
+The protocol loader SHALL accept `output.causality_check = "micro"` and pass it through to the materialized quick-run config. The protocol SHALL expose the operator-owned micro causality replay budget (`output.micro_timeout_seconds`, `output.micro_probe_limit`) and materialize it. Micro causality SHALL be treated as a Train score-admissibility check, not retention, paper-trade, or deployability proof.
 
 #### Scenario: micro causality loads
 - **WHEN** the protocol sets `output.causality_check = "micro"`
@@ -42,5 +42,5 @@ The protocol loader SHALL accept `output.causality_check = "micro"` and pass it 
 - **AND** the quick-run output config preserves `causality_check = "micro"`
 
 #### Scenario: replay budget is materialized
-- **WHEN** the protocol defines `output.focused_timeout_seconds` and `output.focused_probe_limit`
+- **WHEN** the protocol defines `output.micro_timeout_seconds` and `output.micro_probe_limit`
 - **THEN** the materialized quick-run config carries those replay-budget values

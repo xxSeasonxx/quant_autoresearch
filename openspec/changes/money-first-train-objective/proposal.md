@@ -7,7 +7,8 @@ loop converged on a survivor making ~0.27%/yr while deploying ~1% of its budget,
 with 5–10× capacity headroom unused. Upstream now owns book scale (risk-budget
 sizing shipped), so the loop controls only shape — but the score still ignores
 deployed money. This change switches the loop to optimize deployable money,
-uncertainty-haircut, so a Train survivor means "ready to paper-trade."
+uncertainty-haircut, so a Train survivor is a candidate for Season's downstream
+OOS, paper, and small-live review.
 
 ## What Changes
 
@@ -26,8 +27,9 @@ uncertainty-haircut, so a Train survivor means "ready to paper-trade."
   correction for the best-of-N search).
 - Replace PSR-only cost stress with a money-aware full-train return-retention gate
   (`min_cost_stress_return_retention`).
-- Make causality-verify a hard gate (a `verified:false` replay is not a survivor),
-  and raise the replay budget so verification is not a spurious timeout.
+- Make causality admissibility a hard gate and pass the micro replay budget that
+  the selected `causality_check = "micro"` mode actually consumes. Micro replay
+  is a Train score-admissibility check, not retention or deployability proof.
 - Make `min_effective_sample_size` / `min_trades_per_subwindow` strict enough that a
   thin slice cannot drive the SE-haircut score on noise; treat a zero-variance or
   unscoreable window as non-scoreable.
@@ -44,12 +46,12 @@ uncertainty-haircut, so a Train survivor means "ready to paper-trade."
 ### Modified Capabilities
 - `autoresearch-objective-gates`: default objective becomes the money-denominated
   weakest-window return LCB; the economic-return gate becomes a deflated money floor;
-  cost-stress becomes money-aware return retention; causality becomes a hard gate;
+  cost-stress becomes money-aware return retention; causality admissibility becomes a hard gate;
   sample-size gates become load-bearing for the score; PSR/Sharpe/Calmar become
   diagnostics.
 - `autoresearch-protocol`: `objective.kind = return_lcb_subwindow`; add
   `min_annualized_return`, `gates.score_haircut_se` (`k_accept`),
-  `min_cost_stress_return_retention`, and a larger causality replay budget; remove
+  `min_cost_stress_return_retention`, and a larger micro causality replay budget; remove
   `min_total_return`, `train_score_floor`, `min_cost_stress_psr`.
 - `autoresearch-results`: ledger records money score, deflated floor, deployed
   annualized return per window, return retention, sizing-report fields

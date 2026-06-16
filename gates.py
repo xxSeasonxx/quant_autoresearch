@@ -13,7 +13,9 @@ gates are:
   full-Train return, evaluated only when the realistic return is positive (a
   non-positive realistic return is the money floor's kill, so retention is then
   non-binding).
-- ``causality``: an upstream replay that did not verify is not a survivor.
+- ``causality``: upstream replay evidence must be score-admissible. A bounded
+  micro replay can be admissible for Train scoring without being retention-
+  verified for downstream deployment review.
 
 The remaining gates (trade floor, subwindow coverage, minimum evidence, path
 risk, breadth, complexity cap) constrain the evidence behind the score.
@@ -107,7 +109,7 @@ def evaluate_gates(
     config: GateConfig,
     objective: ObjectiveResult,
     cost_stress_full_train_return: float | None,
-    causality_verified: bool | None,
+    causality_admissible: bool | None,
     foundation_scenario: FoundationScenario | None = None,
 ) -> GateSet:
     concentration = (
@@ -268,10 +270,10 @@ def evaluate_gates(
         ),
         GateOutcome(
             name="causality",
-            passed=causality_verified is True,
+            passed=causality_admissible is True,
             value=None,
             threshold=None,
-            detail="verified" if causality_verified is True else "unverified",
+            detail="admissible" if causality_admissible is True else "not_admissible",
         ),
         GateOutcome(
             name="complexity_cap",

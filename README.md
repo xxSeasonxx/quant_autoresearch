@@ -76,12 +76,25 @@ For one thesis:
    all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
    ```
 
-9. Append one provenance-bearing row to `results.tsv`.
+9. Append one compact row to `results.tsv`; source provenance is preserved in the
+   attempt snapshot under the row's `artifact_dir`.
 10. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
-`results.tsv` records a compact, human-scannable metric set per attempt: objective score, full-Train PSR, worst-subwindow PSR/id, cost-stress PSR, gate flags, foundation closed-trade count, minimum subwindow trades, total return, max drawdown, max symbol concentration, gross/net utilization, ADV/bar participation, win rate, profit factor, average trade net, cost return sum, complexity count, a typed failure reason for non-scoreable runs, the artifact directory, and lifecycle state. Source provenance is preserved in the per-attempt snapshot; richer vectors, gate details, foundation warnings, and causality evidence live in the per-attempt `run_card.json` under the generated artifact directory. Only `keep` updates the best Train survivor; ordinary discarded variants may still remain useful working bases for thesis-guided follow-up edits. The complexity gate counts validated bounded params and signal components declared in `rationale.md` under `### Component:` headings.
+`results.tsv` records a compact, human-scannable metric set per attempt:
+deployed-return LCB score, worst-window id and annualized return, deflated money
+floor, full-Train annualized return, cost-stress return retention, sizing,
+diagnostic PSR fields, gate flags, foundation closed-trade count, minimum
+subwindow trades, total return, max drawdown, max symbol concentration, win rate,
+profit factor, average trade net, cost return sum, complexity count, typed failure
+reason, artifact directory, and lifecycle state. Source provenance is preserved
+in the per-attempt snapshot; richer vectors, gate details, foundation warnings,
+and causality evidence live in the per-attempt `run_card.json` under the generated
+artifact directory. Only `keep` updates the best Train survivor; ordinary
+discarded variants may still remain useful working bases for thesis-guided
+follow-up edits. The complexity gate counts validated bounded params and signal
+components declared in `rationale.md` under `### Component:` headings.
 
 ## Commands
 

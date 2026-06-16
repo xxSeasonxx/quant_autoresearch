@@ -49,9 +49,10 @@ ranks almost identically to Sharpe, and a raw-return score drops the uncertainty
 penalty — the worst thing to drop in a best-of-many in-sample search. The LCB keeps
 money as the unit *and* folds the penalty back in. It factors as
 `(uncertainty-deflated Sharpe) × (deployed volatility)`. Alternatives rejected:
-raw `return_subwindow` (kept as undeflated diagnostic only); any ratio (drops the
-deployed-vol/money lever); `sharpe_se × vol` SE proxy (mixes per-period Sharpe SE
-with annualized vol, understates SE by ≈√P).
+raw deployed return as the score (kept only as `worst_window_annualized_return`
+and per-window run-card diagnostics); any ratio (drops the deployed-vol/money
+lever); `sharpe_se × vol` SE proxy (mixes per-period Sharpe SE with annualized
+vol, understates SE by ≈√P).
 
 Cross-check used as a test oracle: `SE_w = R_w / t_w` with
 `t_w = sharpe_w / sharpe_se_w = Φ⁻¹(PSR_w)`, so `LCB_w = R_w · (1 − k/t_w)`. This
@@ -75,13 +76,12 @@ Positivity guard: the gate is evaluated only when `R_full^realistic > 0`; when i
 the retention ratio (sign-ambiguous) is treated as non-binding. Removes
 `min_cost_stress_psr` and the PSR cost-stress scorer's gating role.
 
-### D4 — Causality is a hard gate, coupled to a larger replay budget
-A run with `causality_verified = false` is not a survivor. Because the observed
-`verified:false` came from the micro-replay *timing out*, this gate ships together
-with a raised `[output]` replay budget (`focused_timeout_seconds`, and/or
-`focused_probe_limit`); the gate is enabled only after a legitimate run verifies
-within the new budget. The two land in the same change so the gate never fails for a
-non-substantive timeout.
+### D4 — Causality admissibility is a hard gate, coupled to the micro budget
+A run whose upstream evidence is not `causality_admissible` is not a survivor. The
+selected replay mode is `causality_check = "micro"`, so the protocol passes
+`micro_probe_limit` and `micro_timeout_seconds` through to the quick-run config.
+Micro replay can be admissible for Train scoring while still not being retention,
+paper-trade, or deployability proof.
 
 ### D5 — Sample-size gates are load-bearing for the score
 Because the SE haircut lets the thinnest subwindow drive the score, set
@@ -114,9 +114,9 @@ zero-variance window.
   exact linear consistency with `SE_w`. Over long windows this diverges from compounded
   return; acceptable because the score is a robustness-deflated comparator, not a NAV
   projection, and the foundation reports compounded `total_return` separately.
-- [Raised replay budget slows iteration] → Quick-run wall-clock rises with the probe
-  budget. Mitigation: raise only as far as needed to verify a legitimate run; keep
-  `causality_check = "micro"`.
+- [Micro replay budget slows iteration] → Quick-run wall-clock rises with the probe
+  budget. Mitigation: stay on `causality_check = "micro"` and avoid strict/focused
+  replay modes during Train iteration.
 - [Hard cutover invalidates old artifacts] → No compatibility mode. Regenerate
   fixtures and artifacts; old PSR-scored run dirs are not migrated.
 
@@ -133,6 +133,6 @@ zero-variance window.
 
 - `min_cost_stress_return_retention` default is `0.5`; confirm or tune once a
   legitimate book exists to measure against.
-- Exact raised values for `focused_timeout_seconds` / `focused_probe_limit` are tuned
-  empirically in apply (D4) against a real run; the contract is "verifies within budget,"
-  not a fixed number.
+- `micro_probe_limit` and `micro_timeout_seconds` may need further tuning if the
+  runner reports `causality_admissible = false`; strict/focused replay is not part
+  of the Train iteration contract.

@@ -32,6 +32,28 @@ def _funding_bars() -> list[dict[str, object]]:
     return bars
 
 
+def _funding_prefix_bars_with_delayed_availability() -> list[dict[str, object]]:
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    rates = {"AAA": 0.0002, "BBB": -0.0003}
+    bars: list[dict[str, object]] = []
+    for symbol in ("AAA", "BBB"):
+        for index in range(66):
+            timestamp = base + timedelta(minutes=index)
+            is_event = index == 65
+            bars.append(
+                {
+                    "symbol": symbol,
+                    "timestamp": timestamp,
+                    "close": 100.0,
+                    "funding_timestamp": timestamp,
+                    "funding_rate": rates[symbol] if is_event else 0.0,
+                    "has_funding_event": is_event,
+                    "available_at": timestamp + timedelta(minutes=1),
+                }
+            )
+    return bars
+
+
 def test_harness_smoke_loads_active_config():
     protocol = load_protocol(Path("protocol.toml"))
     experiment = load_experiment(Path("experiment.toml"))
@@ -72,3 +94,16 @@ def test_strategy_scale_search_is_dead():
     shape = [(d.instrument.symbol, d.decision_time, d.target) for d in decisions]
     spurious_shape = [(d.instrument.symbol, d.decision_time, d.target) for d in spurious]
     assert shape == spurious_shape
+
+
+def test_strategy_schedules_funding_event_without_future_bar_grid():
+    bars = _funding_prefix_bars_with_delayed_availability()
+    params = {"top_n": 5, "min_abs_funding_bps": 1.0, "decision_lag_minutes": 1}
+
+    decisions = strategy.generate_decisions(bars, params)
+
+    assert len(decisions) == 2
+    assert {decision.instrument.symbol for decision in decisions} == {"AAA", "BBB"}
+    assert {decision.decision_time for decision in decisions} == {
+        datetime(2025, 1, 1, 1, 6, tzinfo=timezone.utc)
+    }

@@ -23,10 +23,11 @@ The objective layer SHALL support `objective.kind = "return_lcb_subwindow"` as t
 - **THEN** the objective score is unavailable
 - **AND** the run is non-scoreable rather than assigned a finite score
 
-#### Scenario: raw return remains an undeflated diagnostic
-- **WHEN** `return_subwindow` is computed
-- **THEN** it reports the weakest-window point-estimate deployed return with no uncertainty haircut
-- **AND** it is a diagnostic only, never the default score
+#### Scenario: raw deployed returns remain diagnostics
+- **WHEN** an iteration records score parts
+- **THEN** the result row reports `worst_window_annualized_return` for the LCB-binding `worst_window_id`
+- **AND** the run card reports every window's annualized return and standard error
+- **AND** raw deployed returns are diagnostics only, never the default score
 
 #### Scenario: unknown objective kind is rejected
 - **WHEN** `objective.kind` is not a supported value
@@ -35,9 +36,9 @@ The objective layer SHALL support `objective.kind = "return_lcb_subwindow"` as t
 ## MODIFIED Requirements
 
 ### Requirement: Foundation-backed gates are binary and separate from score
-For portfolio-foundation scoring, the loop SHALL compute binary gates for trade floor, subwindow closed-trade coverage, return/effective-sample evidence, the deflated money floor, cost-stress return retention, foundation symbol concentration, max drawdown, causality verification, and complexity cap. These gates SHALL NOT be blended into the objective score.
+For portfolio-foundation scoring, the loop SHALL compute binary gates for trade floor, subwindow closed-trade coverage, return/effective-sample evidence, the deflated money floor, cost-stress return retention, foundation symbol concentration, max drawdown, causality admissibility, and complexity cap. These gates SHALL NOT be blended into the objective score.
 
-The deflated money floor SHALL require `min over windows of [ R_w - k_accept * SE_w ] >= min_annualized_return`, using the same per-window `R_w` and `SE_w` as the objective score and the protocol-owned acceptance haircut `k_accept`. The cost-stress return-retention gate SHALL require `R_full(cost_stress) / R_full(realistic) >= min_cost_stress_return_retention`, evaluated only when `R_full(realistic) > 0`; when `R_full(realistic) <= 0` the retention gate is non-binding because the money floor is the binding economic kill. The causality gate SHALL fail when the upstream causality verification did not verify.
+The deflated money floor SHALL require `min over windows of [ R_w - k_accept * SE_w ] >= min_annualized_return`, using the same per-window `R_w` and `SE_w` as the objective score and the protocol-owned acceptance haircut `k_accept`. The cost-stress return-retention gate SHALL require `R_full(cost_stress) / R_full(realistic) >= min_cost_stress_return_retention`, evaluated only when `R_full(realistic) > 0`; when `R_full(realistic) <= 0` the retention gate is non-binding because the money floor is the binding economic kill. The causality gate SHALL fail when upstream causality evidence is not score-admissible. Micro causality can be score-admissible without being retention-verified.
 
 #### Scenario: deflated money floor fails despite positive point estimate
 - **WHEN** the weakest-window point-estimate return is positive but its deflated lower bound `R_w - k_accept * SE_w` is below `min_annualized_return`
@@ -48,8 +49,8 @@ The deflated money floor SHALL require `min over windows of [ R_w - k_accept * S
 - **WHEN** `R_full(realistic) > 0` and the cost-stress full-Train return retains less than `min_cost_stress_return_retention` of the realistic full-Train return
 - **THEN** the cost-stress retention gate fails
 
-#### Scenario: unverified causality fails gate
-- **WHEN** the upstream causality verification reports not verified
+#### Scenario: non-admissible causality fails gate
+- **WHEN** the upstream causality evidence reports not score-admissible
 - **THEN** the causality gate fails
 - **AND** the candidate is not a survivor
 

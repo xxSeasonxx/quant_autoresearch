@@ -95,6 +95,8 @@ class OutputConfig:
     strict_probe_limit: int | None = None
     focused_probe_limit: int | None = None
     focused_timeout_seconds: float | None = None
+    micro_probe_limit: int | None = None
+    micro_timeout_seconds: float | None = None
     foundation_subwindows: int | None = None
     foundation_cost_stress_multiplier: float | None = None
 
@@ -457,6 +459,22 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                     name="output.focused_timeout_seconds",
                 )
             ),
+            micro_probe_limit=(
+                None
+                if raw_output.get("micro_probe_limit") is None
+                else _positive_int(
+                    raw_output.get("micro_probe_limit"),
+                    name="output.micro_probe_limit",
+                )
+            ),
+            micro_timeout_seconds=(
+                None
+                if raw_output.get("micro_timeout_seconds") is None
+                else _nonnegative_float(
+                    raw_output.get("micro_timeout_seconds"),
+                    name="output.micro_timeout_seconds",
+                )
+            ),
             foundation_subwindows=foundation_subwindows,
             foundation_cost_stress_multiplier=foundation_cost_stress_multiplier,
         ),
@@ -629,6 +647,10 @@ def build_quick_run_config(
         output_block["focused_probe_limit"] = protocol.output.focused_probe_limit
     if protocol.output.focused_timeout_seconds is not None:
         output_block["focused_timeout_seconds"] = protocol.output.focused_timeout_seconds
+    if protocol.output.micro_probe_limit is not None:
+        output_block["micro_probe_limit"] = protocol.output.micro_probe_limit
+    if protocol.output.micro_timeout_seconds is not None:
+        output_block["micro_timeout_seconds"] = protocol.output.micro_timeout_seconds
     capacity_block: dict[str, object] = {"mode": protocol.capacity_model.mode}
     for field_name in (
         "portfolio_notional",

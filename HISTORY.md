@@ -30,8 +30,9 @@ money:
   `max_iterations`, so changing the loop budget cannot silently move the bar.
 - **Cost stress** → a money-aware return-retention gate replaced the PSR cost-stress
   gate.
-- **Causality** → promoted to a hard gate, shipped with a raised replay budget so a
-  legitimate run verifies within budget rather than failing on a timeout.
+- **Causality** -> promoted to a hard score-admissibility gate. Micro replay uses
+  its own bounded probe and timeout budget and is not retention, paper-trade, or
+  deployability proof.
 - **Diagnostics** → PSR/Sharpe/Calmar retained as diagnostics only; the strategy
   `weight` knob and the dead `experiment.toml` params were removed (scale search is
   owned upstream), making the complexity gate meaningful.
@@ -57,5 +58,5 @@ subwindow sits ~0.23 SE above zero, so any real `k_accept` drives the floor
 negative. That is the score working; the correct verdict is *reseed with more
 breadth/leverage*, not weaken the score.
 
-Full diagnosis trail, rejected alternatives, and the staged roadmap:
-`docs/harness-objective-redesign.md` and `docs/harness-objective-roadmap.md`.
+This section is the durable diagnosis trail, rejected-alternative summary, and
+migration rationale for the money-first objective cutover.

@@ -23,7 +23,6 @@ at least two eligible funding-sign targets before holding the book.
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 import math
@@ -106,7 +105,6 @@ def generate_decisions(
         return []
 
     events_by_time = _funding_events_by_time(bars, symbols=symbols)
-    valid_decision_times = _valid_common_decision_times(bars, symbols=symbols)
     close_index = _close_index(bars, symbols=symbols)
     latest_by_symbol: dict[str, _FundingEvent] = {}
     standing_targets: dict[str, float] = {symbol: 0.0 for symbol in symbols}
@@ -117,9 +115,11 @@ def generate_decisions(
         for event in events_by_time[as_of_time]:
             latest_by_symbol[event.symbol] = event
 
-        decision_time = _first_bar_at_or_after(valid_decision_times, as_of_time + decision_lag)
-        if decision_time is None:
-            continue
+        decision_time = _decision_time_for_events(
+            as_of_time,
+            events_by_time[as_of_time],
+            decision_lag=decision_lag,
+        )
         tradable = [
             event
             for event in latest_by_symbol.values()
@@ -364,25 +364,14 @@ def _complete_mark_symbols(
     )
 
 
-def _valid_common_decision_times(
-    bars: Sequence[Mapping[str, object]],
+def _decision_time_for_events(
+    as_of_time: datetime,
+    events: Sequence[_FundingEvent],
     *,
-    symbols: Sequence[str],
-) -> tuple[datetime, ...]:
-    times_by_symbol = _finite_bar_times_by_symbol(bars)
-    symbol_sets = [set(times_by_symbol.get(symbol, ())) for symbol in symbols]
-    if not symbol_sets:
-        return ()
-    common = set.intersection(*symbol_sets)
-    next_bar_safe = {timestamp - timedelta(minutes=1) for timestamp in common}
-    return tuple(sorted(common & next_bar_safe))
-
-
-def _first_bar_at_or_after(bar_times: Sequence[datetime], target: datetime) -> datetime | None:
-    position = bisect_left(bar_times, target)
-    if position >= len(bar_times):
-        return None
-    return bar_times[position]
+    decision_lag: timedelta,
+) -> datetime:
+    event_available_at = max((event.available_at for event in events), default=as_of_time)
+    return max(as_of_time + decision_lag, event_available_at)
 
 
 def _require_fields(bars: Sequence[Mapping[str, object]], required: set[str]) -> None:

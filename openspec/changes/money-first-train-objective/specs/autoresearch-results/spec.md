@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: results.tsv has stable columns
-`results.tsv` SHALL include stable columns for run id, commit, candidate/protocol/artifact provenance, iteration, score, money-score parts (deflated money floor, worst-window deployed annualized return), sizing-report fields (book scale, deployed and max-feasible volatility, capacity-bound flag), gate flags, foundation full-Train closed-trade count, minimum subwindow trades, basic economics, compact portfolio-foundation diagnostics including diagnostic PSR, complexity count, status, best status, continuation state, stop reason, elapsed seconds, and note. The `climb` command SHALL print the latest appended row using these same fields in a parseable `key: value` format.
+`results.tsv` SHALL include stable columns for run id, iteration, score, money-score parts (deflated money floor, full-Train annualized return, LCB-binding worst-window id and annualized return), sizing-report fields (book scale, deployed and max-feasible volatility, capacity-bound flag), gate flags, foundation full-Train closed-trade count, minimum subwindow trades, basic economics, compact portfolio-foundation diagnostics including diagnostic PSR, complexity count, status, best status, continuation state, stop reason, elapsed seconds, artifact directory, and note. Source provenance SHALL be preserved by the per-attempt snapshot under `artifact_dir`, not by inline provenance columns. The `climb` command SHALL print the latest appended row using these same fields in a parseable `key: value` format.
 
 #### Scenario: header is initialized
 - **WHEN** a thesis run starts without `results.tsv`
@@ -17,7 +17,8 @@
 
 #### Scenario: row identifies candidate snapshot
 - **WHEN** an iteration appends a result row
-- **THEN** the row includes hashes for the strategy, experiment params/config, protocol, rationale, and materialized quick-run config
+- **THEN** the row includes the generated artifact directory for that attempt
+- **AND** that artifact directory contains a snapshot of the strategy, experiment params/config, protocol, rationale, and materialized quick-run config
 
 #### Scenario: row identifies generated artifacts
 - **WHEN** an iteration appends a result row

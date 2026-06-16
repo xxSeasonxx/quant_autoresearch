@@ -6,6 +6,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+from math import isfinite
 import time
 from typing import Callable, Mapping, Sequence
 
@@ -276,6 +277,7 @@ def _foundation_float(
     name: str,
     *,
     required: bool = False,
+    nonfinite_as_none: bool = False,
 ) -> float | None:
     value = raw.get(name)
     if value is None:
@@ -285,7 +287,9 @@ def _foundation_float(
     parsed = _optional_float(value)
     if parsed is None:
         raise ValueError(f"missing foundation value: {name}")
-    if not parsed == parsed or parsed in {float("inf"), float("-inf")}:
+    if not isfinite(parsed):
+        if nonfinite_as_none:
+            return None
         raise ValueError(f"non-finite foundation value: {name}")
     return parsed
 
@@ -320,12 +324,18 @@ def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
     metric = FoundationMetric(
         window_id=str(raw["window_id"]),
         return_sample_count=_foundation_count(raw, "return_sample_count"),
-        effective_sample_size=_foundation_float(raw, "effective_sample_size"),
-        mean_return=_foundation_float(raw, "mean_return"),
-        return_volatility=_foundation_float(raw, "return_volatility"),
-        sharpe=_foundation_float(raw, "sharpe"),
-        sharpe_standard_error=_foundation_float(raw, "sharpe_standard_error"),
-        total_return=_foundation_float(raw, "total_return"),
+        effective_sample_size=_foundation_float(
+            raw, "effective_sample_size", nonfinite_as_none=True
+        ),
+        mean_return=_foundation_float(raw, "mean_return", nonfinite_as_none=True),
+        return_volatility=_foundation_float(
+            raw, "return_volatility", nonfinite_as_none=True
+        ),
+        sharpe=_foundation_float(raw, "sharpe", nonfinite_as_none=True),
+        sharpe_standard_error=_foundation_float(
+            raw, "sharpe_standard_error", nonfinite_as_none=True
+        ),
+        total_return=_foundation_float(raw, "total_return", nonfinite_as_none=True),
         max_drawdown=_foundation_float(raw, "max_drawdown"),
         closed_trade_count=_foundation_count(raw, "closed_trade_count"),
         max_symbol_concentration=_foundation_float(raw, "max_symbol_concentration"),
@@ -644,14 +654,19 @@ def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, 
     ]
 
 
-def _causality_verified(result: object) -> bool | None:
-    """Upstream causality verdict for the hard causality gate.
+def _causality_admissible(result: object) -> bool | None:
+    """Upstream causality admissibility verdict for Train scoring.
 
-    `None` when no causality evidence is present; the gate treats anything other
-    than an explicit `True` as unverified.
+    Modern upstream quick runs expose `evidence.causality_admissible` separately
+    from `evidence.causality.verified`: micro replay can be admissible for Train
+    scoring while still not retention-verified. Older result objects fall back to
+    the verification bit.
     """
 
     evidence = getattr(result, "evidence", None)
+    admissible = getattr(evidence, "causality_admissible", None)
+    if isinstance(admissible, bool):
+        return admissible
     causality = getattr(evidence, "causality", None)
     if causality is None:
         return None
@@ -666,6 +681,7 @@ def _causality_payload(result: object) -> dict[str, object]:
         return {}
     return {
         "causality_check": getattr(causality, "causality_check", None),
+        "admissible": _causality_admissible(result),
         "verified": getattr(causality, "verified", None),
         "replay_warning": getattr(causality, "replay_warning", None),
         "timed_out": getattr(causality, "timed_out", None),
@@ -1165,7 +1181,7 @@ def run_iteration(
         config=protocol.gates,
         objective=objective,
         cost_stress_full_train_return=stress.full_train_return,
-        causality_verified=_causality_verified(result),
+        causality_admissible=_causality_admissible(result),
         foundation_scenario=foundation_scenario,
     )
     _write_run_card(

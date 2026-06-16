@@ -156,9 +156,10 @@ class ObjectiveResult:
     `score` is the weakest-window deployed-return lower bound at `k_rank`, `None`
     when any window cannot yield a lower bound (the run is non-scoreable).
     `feasible` only means the objective math produced a score; it does not mean
-    all strategy gates passed. `window_returns`/`window_return_ses` are the
-    per-window `R_w`/`SE_w` (full Train first, then each subwindow) the money-floor
-    gate reuses. PSR fields are diagnostics only.
+    all strategy gates passed. `worst_window_return` is the point return for the
+    LCB-binding `worst_window_id`, not the minimum point return. `window_returns`/
+    `window_return_ses` are the per-window `R_w`/`SE_w` (full Train first, then
+    each subwindow) the money-floor gate reuses. PSR fields are diagnostics only.
     """
 
     score: float | None
@@ -295,7 +296,7 @@ def _score_foundation_scenario(
         window_returns=tuple(window_returns),
         window_return_ses=tuple(window_return_ses),
         full_train_return=full_train_return,
-        worst_window_return=min(window_returns),
+        worst_window_return=window_returns[worst_index],
         full_train_psr=full_psr,
         subwindow_psrs=subwindow_psrs,
         worst_subwindow_psr=worst_subwindow_psr,

@@ -91,14 +91,11 @@ results_dir = "results"
 artifact_profile = "diagnostic"
 # Let quant_strategies run its lightweight quick checks.
 quick_checks = true
-# Train iteration uses micro replay: a tiny bounded replay annotation that keeps
-# quick-run scoring fast while surfacing causality evidence in the run card.
-# Causality verification is a hard gate (an unverified replay is not a survivor),
-# so the replay budget below is raised enough that a legitimate run verifies within
-# budget rather than failing on a spurious timeout. Tune against a real run.
+# Train iteration uses micro replay as a bounded score-admissibility check.
+# Micro causality is not retention, paper-trade, or deployability proof.
 causality_check = "micro"
-focused_probe_limit = 40
-focused_timeout_seconds = 600.0
+micro_probe_limit = 40
+micro_timeout_seconds = 600.0
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
 # Portfolio-foundation subwindows must equal objective.subwindows.

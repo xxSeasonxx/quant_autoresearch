@@ -25,7 +25,7 @@ The protocol SHALL expose finite operator-owned thresholds for minimum return sa
 - **WHEN** a foundation-backed gate threshold is non-finite or outside its valid range
 - **THEN** protocol loading rejects the config before quick-run materialization
 
-### Requirement: Protocol owns diagnostic PSR parameters
+### Requirement: Protocol owns PSR scoring parameters
 The protocol SHALL expose `objective.psr_hurdle_sharpe` to parameterize the diagnostic PSR computation. PSR is a diagnostic only and SHALL NOT be the run score or a gate. This value SHALL be finite and SHALL remain fixed for the thesis lifecycle through the active thesis protocol hash.
 
 #### Scenario: PSR hurdle parameterizes the diagnostic

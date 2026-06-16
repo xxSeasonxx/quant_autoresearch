@@ -6,10 +6,15 @@ The shape is intentionally close to Karpathy's `autoresearch`: a short `program.
 
 This is not a trading system, investment advice, or proof of deployability.
 
+For a new plain-language strategy idea, start with `new-strategy.md`. It owns
+mandate collection, protocol proposal, approval, lifecycle reset, and first
+baseline preflight.
+
 ## Repository Map
 
 | Path | Role |
 | --- | --- |
+| `new-strategy.md` | New-thesis setup guide; the filled brief lives under `.autoresearch/protocol_briefs/`. |
 | `program.md` | One-page agent operating contract. |
 | `strategy.py` | Agent-editable target book: standing weight-of-NAV `TargetDecision`s. |
 | `experiment.toml` | Agent-editable bounded strategy params. |
@@ -45,7 +50,8 @@ The agent does not edit:
 - gate thresholds
 - `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
 
-Those live in `protocol.toml` and are chosen before a thesis starts.
+Those live in `protocol.toml` and are chosen through `new-strategy.md` before a
+thesis starts.
 
 ## Artifact Authority
 
@@ -102,11 +108,17 @@ components declared in `rationale.md` under `### Component:` headings.
 
 ```bash
 conda run -n quant python -m pytest
+conda run -n quant python -m loop propose-protocol --brief .autoresearch/protocol_briefs/latest.md --out .autoresearch/protocol_proposals/latest.json
+conda run -n quant python -m loop baseline --mechanism "<why it should work>" --falsifier "<what kills it>" --approved-proposal .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop status
 conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
 ```
 
-The `climb` command runs the current candidate once and logs the attempt. The autonomous editing loop is driven by the agent contract in `program.md`.
+The `propose-protocol` command writes proposal artifacts only; it does not edit
+`protocol.toml`. The `baseline` command validates an approved proposal before
+the first attempt, then uses the normal climb path. The `climb` command runs the
+current candidate once and logs the attempt. The autonomous editing loop is
+driven by the agent contract in `program.md`.
 
 The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.
 

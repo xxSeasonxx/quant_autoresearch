@@ -32,62 +32,28 @@ weak.
 
 ## Setup
 
-To start a new thesis run, work with Season to:
+If this is a new thesis or reseed, follow `new-strategy.md` before running the
+first baseline. That guide owns mandate intake, protocol recommendation, Season
+approval, lifecycle reset, and first-baseline preflight.
 
-1. Agree on a run tag and thesis: one mechanism sentence, one observable, and
-   one falsifier.
-2. Start from a clean branch or a clearly named working branch for this run.
-3. Read the in-scope files:
-   - `README.md` for the project map.
-   - `program.md` for this operating contract.
-   - `protocol.toml` for Train data, costs, fills, objective, gates, and stop rules.
-   - `experiment.toml` for bounded params.
-   - `strategy.py` for editable signal logic.
-   - `rationale.md` for thesis and variant notes.
-   - `/Users/Season_Yang/Personal/quant-data/docs/consumer/` for data readiness
-     and data-boundary context. Do not browse outside that folder unless Season asks.
-4. Complete the New Thesis Protocol Fit pass below before the first attempt.
-5. Write the working thesis in `rationale.md`: mechanism, observable, falsifier,
-   assumptions, and first failure mode to watch.
-6. Verify the configured Train data is available through `quant_data` /
-   `quant_strategies`.
-7. Initialize the active lifecycle state: for a fresh thesis, `results.tsv` is
-   header-only and `.autoresearch/thesis_lock.json` does not carry an old thesis.
-   Archive prior generated evidence first if it needs to be preserved.
-8. Confirm setup, then begin the loop.
+After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
+Ordinary Train iteration uses only:
 
-### New Thesis Protocol Fit
-
-Before the first attempt of a new thesis, check whether the frozen Train
-contract fits the mechanism. This is setup, not optimization against Train
-results.
-
-The agent may propose protocol changes only before the active lifecycle starts:
-
-- data kind, dataset, and symbol universe, based on data readiness, finite mark
-  coverage, liquidity/capacity support, and whether the mechanism applies;
-- objective and subwindow shape, when the thesis horizon makes the default
-  evidence shape inappropriate;
-- gate thresholds that define the minimum evidence needed for the stated claim
-  to be worth downstream review, not thresholds selected to fit expected
-  candidate behavior;
-- bounded `experiment.toml` params and bounds that expose only
-  mechanism-relevant degrees of freedom.
-
-For each proposed value, state why it follows from the mechanism, observable, and
-falsifier. Season must approve protocol changes before the loop starts.
-
-A symbol universe may change later only through a reseed, not as an ordinary
-loop edit. Record the reason in `rationale.md`, update `protocol.toml`, reset the
-thesis lifecycle, and start a new run. Within an active loop, the strategy may
-change symbol treatment, allocation, ranking, scaling, side logic, or causal
-eligibility rules when they express the thesis and remain visible in
-`rationale.md`.
+- `program.md` for this operating contract;
+- `protocol.toml` for frozen Train data, costs, fills, objective, gates, and stop rules;
+- `experiment.toml` for bounded params;
+- `strategy.py` for editable target-book logic;
+- `rationale.md` for thesis, components, variants, and lessons;
+- recent `results.tsv`;
+- the latest run card and diagnostics.
 
 During ordinary Train iteration, do not browse the rest of this repo. Use the
 in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
 only to debug a run failure, check an explicitly in-scope contract, or follow a
 direct request from Season.
+
+If protocol-owned assumptions need to change, write the reseed case in
+`rationale.md` and stop ordinary iteration. Season can approve a new lifecycle.
 
 ## Experimentation
 
@@ -220,7 +186,7 @@ bold variants are good when they test the mechanism.
 
 ## Output Format
 
-Run one attempt with:
+Run one ordinary Train attempt with `climb`:
 
 ```bash
 conda run -n quant python -m loop climb \
@@ -228,10 +194,10 @@ conda run -n quant python -m loop climb \
   --falsifier "<what kills it>"
 ```
 
-`climb` runs exactly one candidate, writes the artifact directory and
-`run_card.json`, appends exactly one row to `results.tsv`, and prints the latest
-result fields as parseable key/value lines. Read the printed summary and the
-attempt's `run_card.json`.
+`climb` runs one candidate, writes the artifact directory and `run_card.json`,
+appends one row to `results.tsv`, and prints the latest result fields as
+parseable key/value lines. Read the printed summary and the attempt's
+`run_card.json`.
 
 ## Logging Results
 

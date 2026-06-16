@@ -8,9 +8,10 @@ import hashlib
 import json
 from math import isfinite
 import time
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from gates import GateSet, evaluate_gates, symbol_concentration
+from onboarding import protocol_sha256, write_protocol_proposal
 from objective import (
     FoundationEvidence,
     FoundationMetric,
@@ -1334,8 +1335,59 @@ def climb_once(
     )
 
 
+def _load_approved_proposal(path: str | Path) -> Mapping[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        raise ValueError(f"approved proposal not found: {source}")
+    try:
+        payload = json.loads(source.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"approved proposal is unreadable: {source}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("approved proposal must be a JSON object")
+    approval = payload.get("approval")
+    if not isinstance(approval, Mapping):
+        raise ValueError("approved proposal missing approval block")
+    if approval.get("approved") is not True:
+        raise ValueError("proposal is not approved")
+    approved_hash = approval.get("protocol_sha256")
+    if not isinstance(approved_hash, str) or not approved_hash:
+        raise ValueError("approved proposal missing approval.protocol_sha256")
+    current_hash = protocol_sha256("protocol.toml")
+    if current_hash != approved_hash:
+        raise ValueError("protocol.toml no longer matches approved proposal hash")
+    return payload
+
+
+def _ensure_no_active_lifecycle(results_path: str | Path = "results.tsv") -> None:
+    if read_results(results_path):
+        raise ValueError("active lifecycle state already exists")
+    if _lock_path(Path(".")).exists():
+        raise ValueError("active lifecycle state already exists")
+
+
+def baseline_once(
+    *,
+    mechanism: str,
+    falsifier: str,
+    approved_proposal: str | Path,
+) -> IterationOutcome:
+    _load_approved_proposal(approved_proposal)
+    _ensure_no_active_lifecycle()
+    return climb_once(mechanism=mechanism, falsifier=falsifier)
+
+
 def _print_status(summary: Mapping[str, object]) -> None:
     for key, value in summary.items():
+        print(f"{key}: {value}")
+
+
+def _print_outcome(outcome: IterationOutcome) -> None:
+    if outcome.row is None:
+        print(f"status: {outcome.status}")
+        print(f"score: {outcome.score}")
+        return
+    for key, value in outcome.row.as_record().items():
         print(f"{key}: {value}")
 
 
@@ -1343,6 +1395,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="quant-autoresearch")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    propose = subparsers.add_parser("propose-protocol")
+    propose.add_argument("--brief", required=True)
+    propose.add_argument("--out", required=True)
+    propose.add_argument("--protocol", default="protocol.toml")
+    baseline = subparsers.add_parser("baseline")
+    baseline.add_argument("--mechanism", required=True)
+    baseline.add_argument("--falsifier", required=True)
+    baseline.add_argument("--approved-proposal", required=True)
     climb = subparsers.add_parser("climb")
     climb.add_argument("--mechanism", required=True)
     climb.add_argument("--falsifier", required=True)
@@ -1351,14 +1411,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "status":
         _print_status(run_status())
         return 0
+    if args.command == "propose-protocol":
+        proposal = write_protocol_proposal(
+            args.brief,
+            args.out,
+            protocol_path=args.protocol,
+        )
+        print(f"proposal_json: {args.out}")
+        print(f"proposal_markdown: {Path(args.out).with_suffix('.md')}")
+        print(f"proposal_sha256: {proposal.proposal_sha256}")
+        return 0
+    if args.command == "baseline":
+        outcome = baseline_once(
+            mechanism=args.mechanism,
+            falsifier=args.falsifier,
+            approved_proposal=args.approved_proposal,
+        )
+        _print_outcome(outcome)
+        return 0
     if args.command == "climb":
         outcome = climb_once(mechanism=args.mechanism, falsifier=args.falsifier)
-        if outcome.row is None:
-            print(f"status: {outcome.status}")
-            print(f"score: {outcome.score}")
-        else:
-            for key, value in outcome.row.as_record().items():
-                print(f"{key}: {value}")
+        _print_outcome(outcome)
         return 0
     raise AssertionError(args.command)
 

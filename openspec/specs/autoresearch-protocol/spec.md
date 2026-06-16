@@ -119,6 +119,38 @@ The active default protocol SHALL document why the default symbol universe, Trai
 - **WHEN** `protocol.toml` is read
 - **THEN** symbol, Train window, and subwindow rationale is available near the corresponding protocol-owned values
 
+### Requirement: Protocol proposal is deterministic and approval-bound
+The protocol proposal helper SHALL parse a structured new-thesis setup brief,
+load the current `protocol.toml`, and write proposal artifacts with recommended
+protocol-owned values, rationale, warnings, and an approval checklist. It SHALL
+NOT call an LLM and SHALL NOT edit `protocol.toml`.
+
+#### Scenario: mandate values map to protocol fields
+- **WHEN** a setup brief provides target volatility, max tolerable drawdown,
+  minimum annualized return, symbols, Train data/window, cadence-derived
+  annualization, capital notional, capacity fields, leverage ceilings, objective
+  subwindows, gate thresholds, complexity caps, and loop settings
+- **THEN** the proposal maps those values to `[risk_budget].target_volatility`,
+  `gates.max_abs_drawdown`, `gates.min_annualized_return`, `[data]`,
+  `[capacity_model]`, `[leverage_budget]`, `[objective]`, `[gates]`, and
+  `[loop]`
+- **AND** it recommends `output.causality_check = "micro"`
+
+#### Scenario: acceptance haircut is derived in the proposal
+- **WHEN** a setup brief provides `max_iterations = N`
+- **THEN** the proposal recommends
+  `gates.score_haircut_se = round(sqrt(2 * ln(N)), 2)`
+
+#### Scenario: proposal does not mutate protocol
+- **WHEN** `propose-protocol` is run
+- **THEN** it writes JSON and Markdown proposal artifacts
+- **AND** the current `protocol.toml` content is unchanged
+
+#### Scenario: invalid setup brief fails clearly
+- **WHEN** a setup brief is missing mechanism or falsifier, has empty symbols, or
+  contains invalid numeric mandate values
+- **THEN** proposal generation fails with a clear `ValueError`
+
 ### Requirement: Protocol owns quick-run foundation output controls
 The protocol SHALL expose operator-owned quick-run foundation output settings and materialize them into public `quant_strategies.runner.run_config` output config. Foundation subwindow count SHALL match the configured objective subwindow count for portfolio-foundation scoring.
 
@@ -173,4 +205,3 @@ The protocol SHALL set `objective.kind = "return_lcb_subwindow"` as the operator
 - **WHEN** the protocol defines `gates.score_haircut_se`
 - **THEN** the gate configuration uses that value for the deflated money floor
 - **AND** changing `max_iterations` does not change `k_accept`
-

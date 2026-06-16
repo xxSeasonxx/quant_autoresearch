@@ -19,30 +19,16 @@ The money-first Train objective is the current scoring contract:
   vectors, gates, sizing, causality evidence, and failure mode;
 - Train micro causality is a bounded score-admissibility check, not retention,
   paper-trade, or deployability proof.
+- New-thesis onboarding is owned by the root `new-strategy.md` guide and the
+  deterministic `propose-protocol` / `baseline` CLI boundary. The proposal CLI
+  writes review artifacts only; baseline requires an approved proposal hash and
+  refuses to run when active lifecycle state already exists.
 
 The current 3-symbol funding sleeve is expected to fail the deflated money floor.
 That verdict is evidence that the process needs a cleaner mandate and broader
 return-blind universe path, not a reason to weaken the score.
 
 ## Open Work
-
-### Operator Mandate
-
-Build a pre-run mandate layer that turns Season's plain-language research intent
-into protocol-owned values before a thesis lifecycle starts.
-
-The mandate should cover capital/notional, target volatility, drawdown tolerance,
-return hurdle, deployment intent, universe breadth, capacity limits, cost stress,
-and attempt budget. The derived protocol values must be deterministic and visible:
-`[risk_budget]`, max drawdown, minimum annualized return, acceptance haircut,
-universe rule thresholds, and loop limits.
-
-Done when:
-
-- a mandate input has one deterministic protocol output;
-- tests cover the mandate-to-protocol derivation;
-- `program.md` links to the setup flow instead of owning mandate translation;
-- ordinary Train iteration still treats `protocol.toml` as frozen.
 
 ### Return-Blind Universe Resolver
 

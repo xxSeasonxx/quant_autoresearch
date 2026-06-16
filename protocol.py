@@ -69,6 +69,23 @@ class LeverageBudget:
 
 
 @dataclass(frozen=True)
+class RiskBudgetConfig:
+    """Operator-frozen conversion from target-book shape to executable book size.
+
+    Upstream owns the sizing math; this is the operator-frozen config passed
+    through. `calibrate_vol` sizes the book to `target_volatility`; `fixed_scale`
+    applies `book_scale` to the normalized shape. `annualization_periods_per_year`
+    must match the bar cadence and is the run-level `P` the money score reads back
+    from the sizing report.
+    """
+
+    mode: str
+    annualization_periods_per_year: int
+    target_volatility: float | None = None
+    book_scale: float | None = None
+
+
+@dataclass(frozen=True)
 class OutputConfig:
     results_dir: str
     artifact_profile: str = "summary"
@@ -103,6 +120,7 @@ class ProtocolConfig:
     cost_model: CostModel
     capacity_model: CapacityModel
     leverage_budget: LeverageBudget
+    risk_budget: RiskBudgetConfig
     output: OutputConfig
     loop: LoopConfig
     objective: ObjectiveConfig
@@ -285,6 +303,46 @@ def _load_capacity_model(raw: Mapping[str, Any]) -> CapacityModel:
     )
 
 
+def _risk_budget_mode(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"calibrate_vol", "fixed_scale"}:
+        raise ValueError("risk_budget.mode must be one of: calibrate_vol, fixed_scale")
+    return parsed
+
+
+def _load_risk_budget(raw: Mapping[str, Any]) -> RiskBudgetConfig:
+    mode = _risk_budget_mode(_required(raw, "mode"))
+    periods = _positive_int(
+        _required(raw, "annualization_periods_per_year"),
+        name="risk_budget.annualization_periods_per_year",
+    )
+    target_volatility: float | None = None
+    book_scale: float | None = None
+    if mode == "calibrate_vol":
+        target_volatility = _positive_float(
+            _required(raw, "target_volatility"),
+            name="risk_budget.target_volatility",
+        )
+        if "book_scale" in raw:
+            raise ValueError(
+                "risk_budget.book_scale is only valid when mode = 'fixed_scale'"
+            )
+    else:
+        book_scale = _positive_float(
+            _required(raw, "book_scale"), name="risk_budget.book_scale"
+        )
+        if "target_volatility" in raw:
+            raise ValueError(
+                "risk_budget.target_volatility is only valid when mode = 'calibrate_vol'"
+            )
+    return RiskBudgetConfig(
+        mode=mode,
+        annualization_periods_per_year=periods,
+        target_volatility=target_volatility,
+        book_scale=book_scale,
+    )
+
+
 def _load_leverage_budget(raw: Mapping[str, Any]) -> LeverageBudget:
     return LeverageBudget(
         max_gross_exposure=_min_float(
@@ -309,6 +367,9 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
     raw_leverage = data.get("leverage_budget", {})
     if not isinstance(raw_leverage, Mapping):
         raise ValueError("leverage_budget must be a table")
+    raw_risk_budget = _required(data, "risk_budget")
+    if not isinstance(raw_risk_budget, Mapping):
+        raise ValueError("risk_budget must be a table")
     raw_output = _required(data, "output")
     raw_loop = _required(data, "loop")
     raw_objective = _required(data, "objective")
@@ -320,7 +381,7 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         name="fill_model.entry_lag_bars",
     )
     objective_kind = str(_required(raw_objective, "kind"))
-    if objective_kind != "portfolio_psr_subwindow":
+    if objective_kind != "return_lcb_subwindow":
         raise ValueError(f"objective.kind unsupported: {objective_kind}")
     subwindows = _positive_int(
         _required(raw_objective, "subwindows"), name="objective.subwindows"
@@ -365,6 +426,7 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         ),
         capacity_model=_load_capacity_model(raw_capacity),
         leverage_budget=_load_leverage_budget(raw_leverage),
+        risk_budget=_load_risk_budget(raw_risk_budget),
         output=OutputConfig(
             results_dir=str(_required(raw_output, "results_dir")),
             artifact_profile=str(raw_output.get("artifact_profile", "summary")),
@@ -449,17 +511,26 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "max_symbol_concentration"),
                 name="gates.max_symbol_concentration",
             ),
-            min_cost_stress_psr=_fraction(
-                _required(raw_gates, "min_cost_stress_psr"),
-                name="gates.min_cost_stress_psr",
+            min_cost_stress_return_retention=_fraction(
+                _required(raw_gates, "min_cost_stress_return_retention"),
+                name="gates.min_cost_stress_return_retention",
             ),
             max_abs_drawdown=_fraction(
                 _required(raw_gates, "max_abs_drawdown"),
                 name="gates.max_abs_drawdown",
             ),
-            min_total_return=_floating(
-                _required(raw_gates, "min_total_return"),
-                name="gates.min_total_return",
+            min_annualized_return=_floating(
+                _required(raw_gates, "min_annualized_return"),
+                name="gates.min_annualized_return",
+            ),
+            # Acceptance haircut k_accept for the deflated money floor. Set it to
+            # the multiple-testing correction for the best-of-N search,
+            # ~sqrt(2 * ln N_attempts) (~2.8 at N=50). It is explicit, not derived
+            # from loop.max_iterations, so changing the loop budget never silently
+            # moves the acceptance bar.
+            score_haircut_se=_positive_float(
+                _required(raw_gates, "score_haircut_se"),
+                name="gates.score_haircut_se",
             ),
             max_components=_positive_int(
                 _required(raw_gates, "max_components"),
@@ -467,10 +538,6 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             ),
             max_params=_nonnegative_int(
                 _required(raw_gates, "max_params"), name="gates.max_params"
-            ),
-            train_score_floor=_floating(
-                _required(raw_gates, "train_score_floor"),
-                name="gates.train_score_floor",
             ),
             subwindows=subwindows,
         ),
@@ -575,6 +642,14 @@ def build_quick_run_config(
         value = getattr(protocol.capacity_model, field_name)
         if value is not None:
             capacity_block[field_name] = value
+    risk_budget_block: dict[str, object] = {
+        "mode": protocol.risk_budget.mode,
+        "annualization_periods_per_year": protocol.risk_budget.annualization_periods_per_year,
+    }
+    if protocol.risk_budget.target_volatility is not None:
+        risk_budget_block["target_volatility"] = protocol.risk_budget.target_volatility
+    if protocol.risk_budget.book_scale is not None:
+        risk_budget_block["book_scale"] = protocol.risk_budget.book_scale
     return {
         "strategy_path": protocol.strategy_path,
         "strategy_id": protocol.strategy_id,
@@ -593,6 +668,7 @@ def build_quick_run_config(
             "max_gross_exposure": protocol.leverage_budget.max_gross_exposure,
             "max_net_exposure": protocol.leverage_budget.max_net_exposure,
         },
+        "risk_budget": risk_budget_block,
         "envelope": {"operator_frozen": True},
         "output": output_block,
     }
@@ -629,6 +705,7 @@ def dumps_quick_run_config(config: Mapping[str, object]) -> str:
         "cost_model",
         "capacity_model",
         "leverage_budget",
+        "risk_budget",
         "envelope",
         "output",
     ]:

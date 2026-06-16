@@ -10,7 +10,7 @@
 # must build within the leverage budget; intended exposure beyond it is a
 # fail-closed, non-scoreable feasibility verdict upstream, not a low score.
 #
-# Configured for the crypto-perp funding-crowding reversal thesis.
+# Configured for the crypto-perp funding-anchor carry thesis.
 
 # The pure strategy file and strategy id passed through to quant_strategies. The
 # strategy's emitted decisions must carry this strategy_id.
@@ -23,7 +23,7 @@ strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
 kind = "crypto_perp_funding"
 # Fixed Train universe. The agent must not cherry-pick symbols in params; a
 # universe change is an explicit protocol edit recorded in rationale.md.
-symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
+symbols = ["BTC-PERP", "ETH-PERP", "ADA-PERP"]
 # Train-only window. A date-only end is read as the half-open [start, end + 1 day)
 # objective window. OOS windows are deliberately absent from this loop.
 start = "2025-03-01"
@@ -67,6 +67,21 @@ impact_exponent = 0.5
 max_gross_exposure = 1.0
 max_net_exposure = 1.0
 
+[risk_budget]
+# Operator-frozen sizing mandate: upstream converts the strategy's normalized
+# target-book shape into an executable book size. The agent emits only shape; this
+# block owns scale, replacing the retired strategy weight knob.
+# calibrate_vol sizes the book to target_volatility (annualized); capacity caps can
+# bind below the target, in which case upstream reports capacity_bound and sizes to
+# the max-feasible volatility.
+mode = "calibrate_vol"
+# Must match the bar cadence: 24/7 crypto-perp minute bars = 365 * 24 * 60. This is
+# the run-level P the money score reads back from the sizing report; upstream emits
+# an annualization-cadence advisory if it does not match the data.
+annualization_periods_per_year = 525600
+# Target annualized volatility for the deployed book.
+target_volatility = 0.15
+
 [output]
 # Must stay under results/ because quant_strategies rejects non-generated output
 # directories.
@@ -78,9 +93,12 @@ artifact_profile = "diagnostic"
 quick_checks = true
 # Train iteration uses micro replay: a tiny bounded replay annotation that keeps
 # quick-run scoring fast while surfacing causality evidence in the run card.
+# Causality verification is a hard gate (an unverified replay is not a survivor),
+# so the replay budget below is raised enough that a legitimate run verifies within
+# budget rather than failing on a spurious timeout. Tune against a real run.
 causality_check = "micro"
-focused_probe_limit = 10
-focused_timeout_seconds = 180.0
+focused_probe_limit = 40
+focused_timeout_seconds = 600.0
 # Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
 # Portfolio-foundation subwindows must equal objective.subwindows.
@@ -91,9 +109,9 @@ foundation_cost_stress_multiplier = 2.0
 [loop]
 # M: stop after this many consecutive completed non-improving attempts once a
 # feasible baseline exists.
-plateau_patience = 10
+plateau_patience = 50
 # N: hard cap on completed attempts for this thesis.
-max_iterations = 100
+max_iterations = 50
 # eps: absolute score improvement required to reset plateau patience.
 min_abs_improvement = 0.001
 # rho: relative score improvement required. 0 disables the relative component; the
@@ -101,21 +119,23 @@ min_abs_improvement = 0.001
 min_rel_improvement = 0.0
 # Initial attempts allowed to find any feasible baseline before the thesis dies on
 # Train.
-baseline_grace_iterations = 10
+baseline_grace_iterations = 50
 
 [objective]
 # Robustness target selected before the thesis starts. The agent cannot pick a
 # friendlier objective after seeing results.
-# - portfolio_psr_subwindow: compute PSR from upstream portfolio-foundation
-#   full-Train and subwindow return statistics, then use the weakest evidence
-#   value as the run score.
-kind = "portfolio_psr_subwindow"
+# - return_lcb_subwindow: the weakest-window lower bound on deployed annualized
+#   return. For full Train and each subwindow, R_w = mean_return_w * P and
+#   SE_w = return_volatility_w * P / sqrt(effective_sample_size_w), with P read
+#   from the upstream sizing report; the run score is min_w (R_w - k_rank * SE_w),
+#   k_rank = 1. Money-denominated: scaling deployed return moves the score.
+kind = "return_lcb_subwindow"
 # K: number of contiguous Train time slices. Six slices over the window gives
 # roughly bi-monthly robustness checks while keeping per-slice trade floors
 # attainable for simple short-horizon ideas.
 subwindows = 6
-# Hurdle Sharpe in the same non-annualized units as upstream quick-run foundation
-# Sharpe. Keep at 0.0 unless Season chooses a stricter thesis-level hurdle.
+# Hurdle Sharpe for the DIAGNOSTIC PSR only. PSR is neither the score nor a gate.
+# Keep at 0.0 unless Season wants a stricter diagnostic hurdle.
 psr_hurdle_sharpe = 0.0
 
 [gates]
@@ -133,15 +153,22 @@ min_effective_sample_size = 50.0
 # Maximum share of net activity carried by one symbol. Lower is stricter
 # diversification.
 max_symbol_concentration = 0.70
-# Minimum portfolio-foundation PSR under the upstream cost-stress scenario.
-min_cost_stress_psr = 0.50
+# Minimum cost-stress return retention: cost-stress full-Train annualized return
+# as a fraction of the realistic full-Train annualized return. Evaluated only when
+# the realistic full-Train return is positive.
+min_cost_stress_return_retention = 0.50
 # Maximum absolute full-Train drawdown allowed by the development filter.
 max_abs_drawdown = 0.25
-# Minimum full-Train portfolio total return required for economic magnitude.
-min_total_return = 0.0
+# Deflated money floor: the weakest-window deployed annualized return, haircut by
+# k_accept standard errors, must clear this hurdle. A survivor means the book makes
+# at least this much, robustly, after the best-of-N correction.
+min_annualized_return = 0.10
+# Acceptance haircut k_accept (in standard errors) for the money floor. Set it to
+# the multiple-testing correction for the best-of-N search, ~sqrt(2 * ln N_attempts)
+# (~2.8 at N=50). Explicit, not derived from loop.max_iterations, so changing the
+# loop budget never silently moves the acceptance bar.
+score_haircut_se = 2.8
 # Simplicity cap: maximum declared signal components in rationale.md.
 max_components = 3
 # Simplicity cap: maximum strategy params in experiment.toml [params].
 max_params = 50
-# Minimum base Train score required to pass the Train floor gate.
-train_score_floor = 0.0

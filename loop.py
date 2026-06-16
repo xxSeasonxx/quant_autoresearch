@@ -14,6 +14,7 @@ from objective import (
     FoundationEvidence,
     FoundationMetric,
     FoundationScenario,
+    FoundationSizing,
     ObjectiveResult,
     TradeSample,
     is_improvement,
@@ -298,6 +299,8 @@ def _foundation_count(raw: Mapping[str, object], name: str) -> int:
 def _validate_foundation_metric(metric: FoundationMetric) -> None:
     if metric.effective_sample_size is not None and metric.effective_sample_size < 0.0:
         raise ValueError("foundation effective_sample_size must be >= 0")
+    if metric.return_volatility is not None and metric.return_volatility < 0.0:
+        raise ValueError("foundation return_volatility must be >= 0")
     if metric.max_drawdown is not None and metric.max_drawdown > 0.0:
         raise ValueError("foundation max_drawdown must be <= 0")
     concentration = metric.max_symbol_concentration
@@ -318,6 +321,8 @@ def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
         window_id=str(raw["window_id"]),
         return_sample_count=_foundation_count(raw, "return_sample_count"),
         effective_sample_size=_foundation_float(raw, "effective_sample_size"),
+        mean_return=_foundation_float(raw, "mean_return"),
+        return_volatility=_foundation_float(raw, "return_volatility"),
         sharpe=_foundation_float(raw, "sharpe"),
         sharpe_standard_error=_foundation_float(raw, "sharpe_standard_error"),
         total_return=_foundation_float(raw, "total_return"),
@@ -350,6 +355,26 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
     )
 
 
+def _foundation_sizing(raw: object) -> FoundationSizing:
+    if not isinstance(raw, Mapping):
+        raise ValueError("portfolio foundation payload missing sizing_report")
+    periods = raw.get("annualization_periods_per_year")
+    if isinstance(periods, bool) or not isinstance(periods, int) or periods <= 0:
+        raise ValueError(
+            "sizing_report annualization_periods_per_year must be a positive integer"
+        )
+    capacity_bound = raw.get("capacity_bound")
+    if capacity_bound is not None and not isinstance(capacity_bound, bool):
+        raise ValueError("sizing_report capacity_bound must be a boolean")
+    return FoundationSizing(
+        annualization_periods_per_year=periods,
+        book_scale=_foundation_float(raw, "book_scale"),
+        deployed_volatility=_foundation_float(raw, "deployed_volatility"),
+        max_feasible_volatility=_foundation_float(raw, "max_feasible_volatility"),
+        capacity_bound=capacity_bound,
+    )
+
+
 def _foundation_from_result(result: object) -> FoundationEvidence:
     foundation = getattr(result, "foundation", None)
     if foundation is None:
@@ -366,6 +391,7 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
     return FoundationEvidence(
         realistic_costs=_foundation_scenario(realistic),
         cost_stress=_foundation_scenario(cost_stress),
+        sizing=_foundation_sizing(matrix_payload.get("sizing_report")),
     )
 
 
@@ -400,10 +426,17 @@ def _make_crash_row(
         iteration=iteration,
         status="crash",
         score=None,
+        worst_window_id="",
+        deflated_money_floor=None,
+        full_train_annualized_return=None,
+        worst_window_annualized_return=None,
+        cost_stress_return_retention=None,
+        book_scale=None,
+        deployed_volatility=None,
+        max_feasible_volatility=None,
+        capacity_bound=None,
         full_train_psr=None,
         worst_subwindow_psr=None,
-        worst_subwindow_id="",
-        cost_stress_psr=None,
         gates_passed=False,
         gate_flags="run_config=fail",
         trade_count=0,
@@ -411,10 +444,6 @@ def _make_crash_row(
         total_return=None,
         max_drawdown=None,
         max_symbol_concentration=None,
-        max_gross_utilization=None,
-        max_net_utilization=None,
-        max_adv_participation=None,
-        max_bar_participation=None,
         win_rate=None,
         profit_factor=None,
         avg_trade_net=None,
@@ -430,12 +459,17 @@ def _make_crash_row(
     )
 
 
+def _gate_value(gates: GateSet, name: str) -> float | None:
+    outcome = gates.by_name.get(name)
+    return None if outcome is None else outcome.value
+
+
 def _scored_result_row(
     *,
     provenance: AttemptProvenance,
     iteration: int,
     objective: ObjectiveResult,
-    cost_stress_score: float | None,
+    sizing: FoundationSizing | None,
     gates: GateSet,
     trades: Sequence[TradeSample],
     foundation_scenario: FoundationScenario | None,
@@ -453,10 +487,19 @@ def _scored_result_row(
         iteration=iteration,
         status=status,
         score=objective.score,
+        worst_window_id=objective.worst_window_id,
+        deflated_money_floor=_gate_value(gates, "money_floor"),
+        full_train_annualized_return=objective.full_train_return,
+        worst_window_annualized_return=objective.worst_window_return,
+        cost_stress_return_retention=_gate_value(gates, "cost_stress_retention"),
+        book_scale=None if sizing is None else sizing.book_scale,
+        deployed_volatility=None if sizing is None else sizing.deployed_volatility,
+        max_feasible_volatility=(
+            None if sizing is None else sizing.max_feasible_volatility
+        ),
+        capacity_bound=None if sizing is None else sizing.capacity_bound,
         full_train_psr=objective.full_train_psr,
-        worst_subwindow_psr=_worst_subwindow_psr(objective),
-        worst_subwindow_id=objective.worst_subwindow_id,
-        cost_stress_psr=cost_stress_score,
+        worst_subwindow_psr=objective.worst_subwindow_psr,
         gates_passed=gates.passed,
         gate_flags=gates.flags(),
         trade_count=_reported_trade_count(trades, foundation_scenario),
@@ -467,14 +510,6 @@ def _scored_result_row(
             symbol_concentration(trades)
             if foundation_scenario is None and trades
             else (None if full is None else full.max_symbol_concentration)
-        ),
-        max_gross_utilization=None if full is None else full.max_gross_utilization,
-        max_net_utilization=None if full is None else full.max_net_utilization,
-        max_adv_participation=(
-            None if foundation_scenario is None else foundation_scenario.max_adv_participation
-        ),
-        max_bar_participation=(
-            None if foundation_scenario is None else foundation_scenario.max_bar_participation
         ),
         win_rate=(
             sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
@@ -533,12 +568,6 @@ def _reported_trade_count(
     return len(trades)
 
 
-def _worst_subwindow_psr(objective: ObjectiveResult) -> float | None:
-    if not objective.subwindow_psrs:
-        return None
-    return min(objective.subwindow_psrs)
-
-
 def _gate_records(gates: GateSet | None) -> list[dict[str, object]]:
     if gates is None:
         return []
@@ -559,6 +588,8 @@ def _metric_payload(metric: FoundationMetric) -> dict[str, object]:
         "window_id": metric.window_id,
         "return_sample_count": metric.return_sample_count,
         "effective_sample_size": metric.effective_sample_size,
+        "mean_return": metric.mean_return,
+        "return_volatility": metric.return_volatility,
         "sharpe": metric.sharpe,
         "sharpe_standard_error": metric.sharpe_standard_error,
         "total_return": metric.total_return,
@@ -581,6 +612,51 @@ def _scenario_payload(scenario: FoundationScenario | None) -> dict[str, object] 
         "max_adv_participation": scenario.max_adv_participation,
         "max_bar_participation": scenario.max_bar_participation,
     }
+
+
+def _sizing_payload(foundation: FoundationEvidence | None) -> dict[str, object] | None:
+    if foundation is None:
+        return None
+    sizing = foundation.sizing
+    return {
+        "annualization_periods_per_year": sizing.annualization_periods_per_year,
+        "book_scale": sizing.book_scale,
+        "deployed_volatility": sizing.deployed_volatility,
+        "max_feasible_volatility": sizing.max_feasible_volatility,
+        "capacity_bound": sizing.capacity_bound,
+    }
+
+
+def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, object]]:
+    if objective is None:
+        return []
+    return [
+        {
+            "window_id": window_id,
+            "annualized_return": annualized,
+            "standard_error": standard_error,
+        }
+        for window_id, annualized, standard_error in zip(
+            objective.window_ids,
+            objective.window_returns,
+            objective.window_return_ses,
+        )
+    ]
+
+
+def _causality_verified(result: object) -> bool | None:
+    """Upstream causality verdict for the hard causality gate.
+
+    `None` when no causality evidence is present; the gate treats anything other
+    than an explicit `True` as unverified.
+    """
+
+    evidence = getattr(result, "evidence", None)
+    causality = getattr(evidence, "causality", None)
+    if causality is None:
+        return None
+    verified = getattr(causality, "verified", None)
+    return verified if isinstance(verified, bool) else None
 
 
 def _causality_payload(result: object) -> dict[str, object]:
@@ -664,18 +740,38 @@ def _write_run_card(
     payload = {
         "score": None if objective is None else objective.score,
         "score_parts": {
-            "full_train_psr": None if objective is None else objective.full_train_psr,
-            "subwindow_psrs": []
+            "worst_window_id": "" if objective is None else objective.worst_window_id,
+            "full_train_annualized_return": None
             if objective is None
-            else list(objective.subwindow_psrs),
-            "worst_subwindow_psr": None
+            else objective.full_train_return,
+            "worst_window_annualized_return": None
             if objective is None
-            else _worst_subwindow_psr(objective),
-            "worst_subwindow_id": ""
-            if objective is None
-            else objective.worst_subwindow_id,
-            "cost_stress_psr": None if cost_stress is None else cost_stress.score,
+            else objective.worst_window_return,
+            "deflated_money_floor": _gate_value(gates, "money_floor")
+            if gates is not None
+            else None,
+            "cost_stress_return_retention": _gate_value(gates, "cost_stress_retention")
+            if gates is not None
+            else None,
+            "windows": _window_return_payload(objective),
+            "cost_stress_full_train_annualized_return": None
+            if cost_stress is None
+            else cost_stress.full_train_return,
+            "diagnostics": {
+                "full_train_psr": None if objective is None else objective.full_train_psr,
+                "subwindow_psrs": []
+                if objective is None
+                else list(objective.subwindow_psrs),
+                "worst_subwindow_psr": None
+                if objective is None
+                else objective.worst_subwindow_psr,
+                "worst_subwindow_id": ""
+                if objective is None
+                else objective.worst_subwindow_id,
+                "cost_stress_score": None if cost_stress is None else cost_stress.score,
+            },
         },
+        "sizing_report": _sizing_payload(foundation),
         "gates": _gate_records(gates),
         "foundation": {
             "realistic_costs": None
@@ -1060,16 +1156,16 @@ def run_iteration(
             experiment_path=experiment_path,
             rationale_path=rationale_path,
         )
-    cost_stress_score = stress.score
     foundation_scenario = None if foundation is None else foundation.realistic_costs
+    sizing = None if foundation is None else foundation.sizing
     gates = evaluate_gates(
         trades,
         params=params,
         components=components,
         config=protocol.gates,
-        cost_stress_score=cost_stress_score,
-        train_score=objective.score,
-        subwindow_trade_counts=objective.subwindow_trade_counts,
+        objective=objective,
+        cost_stress_full_train_return=stress.full_train_return,
+        causality_verified=_causality_verified(result),
         foundation_scenario=foundation_scenario,
     )
     _write_run_card(
@@ -1090,7 +1186,7 @@ def run_iteration(
             provenance=provenance,
             iteration=iteration,
             objective=objective,
-            cost_stress_score=cost_stress_score,
+            sizing=sizing,
             gates=gates,
             trades=trades,
             foundation_scenario=foundation_scenario,
@@ -1115,7 +1211,7 @@ def run_iteration(
             provenance=provenance,
             iteration=iteration,
             objective=objective,
-            cost_stress_score=cost_stress_score,
+            sizing=sizing,
             gates=gates,
             trades=trades,
             foundation_scenario=foundation_scenario,

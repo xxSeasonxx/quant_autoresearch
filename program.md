@@ -12,11 +12,15 @@ and OOS contamination can easily create false edges.
 ## North Star
 
 Your job is to push for the strongest real, tradeable economic return this Train
-thesis can support under the fixed protocol. Think like a skeptical quant: every
-change must be causal, feasible, auditable, and explainable from the target book,
-diagnostics, and sampled trades. The score and gates are evidence filters, not
-the thing to game. Never improve a number by hiding leverage, capacity, cost,
-fill, data, or OOS problems.
+thesis can support under the fixed protocol. The run score is the deployed
+annualized return, uncertainty-haircut: the weakest-window lower bound on the
+book's annualized return at its upstream-sized book, subject to robustness and
+practicality gates. A Train survivor means "ready to paper-trade," not "consistent
+but uninvested." Think like a skeptical quant: every change must be causal,
+feasible, auditable, and explainable from the target book, diagnostics, and
+sampled trades. The score and gates are evidence filters, not the thing to game.
+Never improve a number by hiding leverage, capacity, cost, fill, data, or OOS
+problems.
 
 Run one bounded Train thesis from baseline to configured stop: find or falsify the
 simplest causal candidate that survives the Train gates and is worth Season's
@@ -42,12 +46,43 @@ To start a new thesis run, work with Season to:
    - `rationale.md` for thesis and variant notes.
    - `/Users/Season_Yang/Personal/quant-data/docs/consumer/` for data readiness
      and data-boundary context. Do not browse outside that folder unless Season asks.
-4. Write the working thesis in `rationale.md`: mechanism, observable, falsifier,
+4. Complete the New Thesis Protocol Fit pass below before the first attempt.
+5. Write the working thesis in `rationale.md`: mechanism, observable, falsifier,
    assumptions, and first failure mode to watch.
-5. Verify the configured Train data is available through `quant_data` /
+6. Verify the configured Train data is available through `quant_data` /
    `quant_strategies`.
-6. Initialize `results.tsv` with only the header row if it does not exist.
-7. Confirm setup, then begin the loop.
+7. Initialize the active lifecycle state: for a fresh thesis, `results.tsv` is
+   header-only and `.autoresearch/thesis_lock.json` does not carry an old thesis.
+   Archive prior generated evidence first if it needs to be preserved.
+8. Confirm setup, then begin the loop.
+
+### New Thesis Protocol Fit
+
+Before the first attempt of a new thesis, check whether the frozen Train
+contract fits the mechanism. This is setup, not optimization against Train
+results.
+
+The agent may propose protocol changes only before the active lifecycle starts:
+
+- data kind, dataset, and symbol universe, based on data readiness, finite mark
+  coverage, liquidity/capacity support, and whether the mechanism applies;
+- objective and subwindow shape, when the thesis horizon makes the default
+  evidence shape inappropriate;
+- gate thresholds that define the minimum evidence needed for the stated claim
+  to be worth downstream review, not thresholds selected to fit expected
+  candidate behavior;
+- bounded `experiment.toml` params and bounds that expose only
+  mechanism-relevant degrees of freedom.
+
+For each proposed value, state why it follows from the mechanism, observable, and
+falsifier. Season must approve protocol changes before the loop starts.
+
+A symbol universe may change later only through a reseed, not as an ordinary
+loop edit. Record the reason in `rationale.md`, update `protocol.toml`, reset the
+thesis lifecycle, and start a new run. Within an active loop, the strategy may
+change symbol treatment, allocation, ranking, scaling, side logic, or causal
+eligibility rules when they express the thesis and remain visible in
+`rationale.md`.
 
 During ordinary Train iteration, do not browse the rest of this repo. Use the
 in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
@@ -108,13 +143,12 @@ Build within the operator-frozen leverage budget and capacity model; intended
 exposure beyond the budget fails closed upstream (see Target Book Rules).
 
 A universe change is not an ordinary loop edit: symbols are protocol-owned and
-frozen for the thesis. Do not change the universe and do not pause the loop for
-one. If a different universe looks like the cleanest move, record it in
-`rationale.md` for Season and keep researching the current universe. A truly
-unworkable universe dies on Train through the normal stop rules. Never reach a
-new universe through signal logic. Symbol-specific normalization, ranking,
-scaling, and side treatment remain valid when they express the thesis and are
-visible in `rationale.md`.
+frozen for the active lifecycle. Do not change the universe while continuing to
+count the same run. If a different universe looks like the cleanest move, record
+the reseed case in `rationale.md`; Season can approve a new lifecycle. Never
+reach a new universe through hidden signal logic. Symbol-specific normalization,
+ranking, scaling, side treatment, and causal eligibility rules remain valid when
+they express the thesis and are visible in `rationale.md`.
 
 Generated artifacts under `.autoresearch/` and `results/` are evidence, not
 source. Use the latest diagnostics to choose the next Train edit, but do not
@@ -128,15 +162,16 @@ A target book is a standing portfolio, not a stream of trade tickets.
 - A target stands until a later same-symbol decision changes it.
 - Re-emitting the same target trades nothing; same-symbol targets net.
 - Gross exposure is `sum(abs(target))`; net exposure is `abs(sum(target))`.
-- The strategy owns allocation, sizing, side logic, rebalance cadence, data/time
-  exits, and declared price-path `RiskRule`s.
-- The operator owns gross/net exposure ceilings, capacity, costs, fills, universe,
-  objective, gates, and stop rules.
+- The strategy owns relative allocation shape, side logic, rebalance cadence,
+  data/time exits, and declared price-path `RiskRule`s.
+- The operator and upstream own book scale (risk-budget sizing), gross/net exposure
+  ceilings, capacity, costs, fills, universe, objective, gates, and stop rules.
 - Gross or net exposure over the frozen budget is fail-closed and non-scoreable,
   never clamped.
-- Size is not alpha: larger targets can change total return, drawdown, costs,
-  capacity utilization, and gates, but they do not create an edge. Size only what
-  the mechanism and capacity envelope justify.
+- Optimize shape, not magnitude: upstream sizes the book, so a global magnitude
+  knob is washed out and is not a degree of freedom to search. The score rewards
+  the deployed money the *shape* earns at the upstream-sized book; improve the
+  edge's shape, breadth, and robustness, not a scale multiplier.
 - If capacity, financing, or execution cannot be priced by the engine, record the
   limitation instead of hiding it in strategy code.
 

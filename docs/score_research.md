@@ -1,7 +1,7 @@
 # Train Score Rationale
 
 Active rationale for the Train scoring contract. The executable contract lives in
-`protocol.toml`, `objective.py`, `gates.py`, `loop.py`, and the OpenSpec change
+`protocol.toml`, `objective.py`, `gates.py`, `loop.py`, and the active OpenSpec
 specs. This note explains what the score measures and how a new session should
 reason about it.
 

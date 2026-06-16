@@ -15,6 +15,8 @@ This is not a trading system, investment advice, or proof of deployability.
 | `experiment.toml` | Agent-editable bounded strategy params. |
 | `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
 | `rationale.md` | Working thesis, signal components, and variant log. |
+| `docs/harness-objective-roadmap.md` | Active roadmap for remaining harness process improvements. |
+| `docs/score_research.md` | Train money-score rationale and scoring boundaries. |
 | `loop.py` | Thin status and climb entry point. |
 | `protocol.py` | Protocol loading and public quick-run config materialization. |
 | `objective.py` | Train robustness objectives and plateau math. |

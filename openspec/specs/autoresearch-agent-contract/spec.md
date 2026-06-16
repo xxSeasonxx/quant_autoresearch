@@ -13,6 +13,42 @@ The project SHALL provide a concise `program.md` whose top-level structure follo
 - **WHEN** an agent reads the experiment loop section
 - **THEN** it is told that OOS/evaluate is outside auto-research, the loop stops on configured rules, and the editable surface is limited
 
+### Requirement: New-thesis setup has a focused guide
+The project SHALL provide `new-strategy.md` as the focused setup guide for
+plain-language thesis intake, mandate collection, protocol recommendation,
+Season approval, lifecycle reset, and first-baseline preflight. `program.md`
+SHALL link to this setup guide instead of owning mandate translation.
+
+#### Scenario: setup guide separates mandate input from derived protocol fields
+- **WHEN** `new-strategy.md` is read
+- **THEN** it asks Season for mechanism, observable, falsifier, horizon, symbols,
+  exclusions, capital/notional, target volatility, max tolerable drawdown,
+  minimum annualized return, Train window/data needs, attempt budget, and
+  baseline expectations when those are mandate choices
+- **AND** it tells the agent to derive lower-level protocol fields from the
+  current protocol, data-readiness docs, and thesis before presenting a
+  recommendation
+
+#### Scenario: setup guide defines interactive recommendation
+- **WHEN** `new-strategy.md` is read
+- **THEN** it tells the LLM agent to ask only missing high-impact questions,
+  inspect in-scope files and data-readiness docs, present current and
+  recommended protocol values with reasons and tradeoffs, and wait for Season
+  approval before editing protocol-owned values
+
+#### Scenario: setup guide uses a filled brief artifact
+- **WHEN** `new-strategy.md` describes proposal generation
+- **THEN** it tells the agent to create a filled setup brief under
+  `.autoresearch/protocol_briefs/` and run `propose-protocol` against that brief,
+  not against `new-strategy.md` itself
+
+#### Scenario: setup guide requires approval before baseline
+- **WHEN** `new-strategy.md` describes the first baseline
+- **THEN** it requires Season approval and an approved protocol hash before the
+  baseline command can run
+- **AND** it requires the edited protocol to be compared against the approved
+  recommendation table before approval is recorded
+
 ### Requirement: The agent-editable surface is narrow
 The agent contract SHALL state that the agent may edit only `strategy.py`, bounded strategy params under `experiment.toml` `[params]`, and `rationale.md` for the active thesis. Symbols, Train window, objective choice, gates, costs, fills, loop constants, and downstream OOS configuration SHALL be read-only to the agent.
 
@@ -71,4 +107,3 @@ The agent contract SHALL distinguish active-loop inputs from generated audit/han
 #### Scenario: Rest of repo is not a routine loop input
 - **WHEN** an agent reads active docs
 - **THEN** it is told not to browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks
-

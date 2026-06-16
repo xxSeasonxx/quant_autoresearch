@@ -12,11 +12,15 @@ and OOS contamination can easily create false edges.
 ## North Star
 
 Your job is to push for the strongest real, tradeable economic return this Train
-thesis can support under the fixed protocol. Think like a skeptical quant: every
-change must be causal, feasible, auditable, and explainable from the target book,
-diagnostics, and sampled trades. The score and gates are evidence filters, not
-the thing to game. Never improve a number by hiding leverage, capacity, cost,
-fill, data, or OOS problems.
+thesis can support under the fixed protocol. The run score is the deployed
+annualized return, uncertainty-haircut: the weakest-window lower bound on the
+book's annualized return at its upstream-sized book, subject to robustness and
+practicality gates. A Train survivor is a candidate for Season's downstream OOS,
+paper, and small-live review, not proof of deployability. Think like a skeptical
+quant: every change must be causal, feasible, auditable, and explainable from the
+target book, diagnostics, and sampled trades. The score and gates are evidence
+filters, not the thing to game. Never improve a number by hiding leverage,
+capacity, cost, fill, data, or OOS problems.
 
 Run one bounded Train thesis from baseline to configured stop: find or falsify the
 simplest causal candidate that survives the Train gates and is worth Season's
@@ -28,31 +32,28 @@ weak.
 
 ## Setup
 
-To start a new thesis run, work with Season to:
+If this is a new thesis or reseed, follow `new-strategy.md` before running the
+first baseline. That guide owns mandate intake, protocol recommendation, Season
+approval, lifecycle reset, and first-baseline preflight.
 
-1. Agree on a run tag and thesis: one mechanism sentence, one observable, and
-   one falsifier.
-2. Start from a clean branch or a clearly named working branch for this run.
-3. Read the in-scope files:
-   - `README.md` for the project map.
-   - `program.md` for this operating contract.
-   - `protocol.toml` for Train data, costs, fills, objective, gates, and stop rules.
-   - `experiment.toml` for bounded params.
-   - `strategy.py` for editable signal logic.
-   - `rationale.md` for thesis and variant notes.
-   - `/Users/Season_Yang/Personal/quant-data/docs/consumer/` for data readiness
-     and data-boundary context. Do not browse outside that folder unless Season asks.
-4. Write the working thesis in `rationale.md`: mechanism, observable, falsifier,
-   assumptions, and first failure mode to watch.
-5. Verify the configured Train data is available through `quant_data` /
-   `quant_strategies`.
-6. Initialize `results.tsv` with only the header row if it does not exist.
-7. Confirm setup, then begin the loop.
+After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
+Ordinary Train iteration uses only:
+
+- `program.md` for this operating contract;
+- `protocol.toml` for frozen Train data, costs, fills, objective, gates, and stop rules;
+- `experiment.toml` for bounded params;
+- `strategy.py` for editable target-book logic;
+- `rationale.md` for thesis, components, variants, and lessons;
+- recent `results.tsv`;
+- the latest run card and diagnostics.
 
 During ordinary Train iteration, do not browse the rest of this repo. Use the
 in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
 only to debug a run failure, check an explicitly in-scope contract, or follow a
 direct request from Season.
+
+If protocol-owned assumptions need to change, write the reseed case in
+`rationale.md` and stop ordinary iteration. Season can approve a new lifecycle.
 
 ## Experimentation
 
@@ -108,13 +109,12 @@ Build within the operator-frozen leverage budget and capacity model; intended
 exposure beyond the budget fails closed upstream (see Target Book Rules).
 
 A universe change is not an ordinary loop edit: symbols are protocol-owned and
-frozen for the thesis. Do not change the universe and do not pause the loop for
-one. If a different universe looks like the cleanest move, record it in
-`rationale.md` for Season and keep researching the current universe. A truly
-unworkable universe dies on Train through the normal stop rules. Never reach a
-new universe through signal logic. Symbol-specific normalization, ranking,
-scaling, and side treatment remain valid when they express the thesis and are
-visible in `rationale.md`.
+frozen for the active lifecycle. Do not change the universe while continuing to
+count the same run. If a different universe looks like the cleanest move, record
+the reseed case in `rationale.md`; Season can approve a new lifecycle. Never
+reach a new universe through hidden signal logic. Symbol-specific normalization,
+ranking, scaling, side treatment, and causal eligibility rules remain valid when
+they express the thesis and are visible in `rationale.md`.
 
 Generated artifacts under `.autoresearch/` and `results/` are evidence, not
 source. Use the latest diagnostics to choose the next Train edit, but do not
@@ -128,15 +128,16 @@ A target book is a standing portfolio, not a stream of trade tickets.
 - A target stands until a later same-symbol decision changes it.
 - Re-emitting the same target trades nothing; same-symbol targets net.
 - Gross exposure is `sum(abs(target))`; net exposure is `abs(sum(target))`.
-- The strategy owns allocation, sizing, side logic, rebalance cadence, data/time
-  exits, and declared price-path `RiskRule`s.
-- The operator owns gross/net exposure ceilings, capacity, costs, fills, universe,
-  objective, gates, and stop rules.
+- The strategy owns relative allocation shape, side logic, rebalance cadence,
+  data/time exits, and declared price-path `RiskRule`s.
+- The operator and upstream own book scale (risk-budget sizing), gross/net exposure
+  ceilings, capacity, costs, fills, universe, objective, gates, and stop rules.
 - Gross or net exposure over the frozen budget is fail-closed and non-scoreable,
   never clamped.
-- Size is not alpha: larger targets can change total return, drawdown, costs,
-  capacity utilization, and gates, but they do not create an edge. Size only what
-  the mechanism and capacity envelope justify.
+- Optimize shape, not magnitude: upstream sizes the book, so a global magnitude
+  knob is washed out and is not a degree of freedom to search. The score rewards
+  the deployed money the *shape* earns at the upstream-sized book; improve the
+  edge's shape, breadth, and robustness, not a scale multiplier.
 - If capacity, financing, or execution cannot be priced by the engine, record the
   limitation instead of hiding it in strategy code.
 
@@ -185,7 +186,7 @@ bold variants are good when they test the mechanism.
 
 ## Output Format
 
-Run one attempt with:
+Run one ordinary Train attempt with `climb`:
 
 ```bash
 conda run -n quant python -m loop climb \
@@ -193,10 +194,10 @@ conda run -n quant python -m loop climb \
   --falsifier "<what kills it>"
 ```
 
-`climb` runs exactly one candidate, writes the artifact directory and
-`run_card.json`, appends exactly one row to `results.tsv`, and prints the latest
-result fields as parseable key/value lines. Read the printed summary and the
-attempt's `run_card.json`.
+`climb` runs one candidate, writes the artifact directory and `run_card.json`,
+appends one row to `results.tsv`, and prints the latest result fields as
+parseable key/value lines. Read the printed summary and the attempt's
+`run_card.json`.
 
 ## Logging Results
 

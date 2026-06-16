@@ -6,14 +6,17 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+from math import isfinite
 import time
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from gates import GateSet, evaluate_gates, symbol_concentration
+from onboarding import protocol_sha256, write_protocol_proposal
 from objective import (
     FoundationEvidence,
     FoundationMetric,
     FoundationScenario,
+    FoundationSizing,
     ObjectiveResult,
     TradeSample,
     is_improvement,
@@ -28,6 +31,7 @@ from protocol import (
     write_quick_run_config,
 )
 from results_log import ResultRow, append_result, read_results, status_summary
+from universe_resolver import write_universe_artifact
 
 
 Runner = Callable[..., object]
@@ -275,6 +279,7 @@ def _foundation_float(
     name: str,
     *,
     required: bool = False,
+    nonfinite_as_none: bool = False,
 ) -> float | None:
     value = raw.get(name)
     if value is None:
@@ -284,7 +289,9 @@ def _foundation_float(
     parsed = _optional_float(value)
     if parsed is None:
         raise ValueError(f"missing foundation value: {name}")
-    if not parsed == parsed or parsed in {float("inf"), float("-inf")}:
+    if not isfinite(parsed):
+        if nonfinite_as_none:
+            return None
         raise ValueError(f"non-finite foundation value: {name}")
     return parsed
 
@@ -298,6 +305,8 @@ def _foundation_count(raw: Mapping[str, object], name: str) -> int:
 def _validate_foundation_metric(metric: FoundationMetric) -> None:
     if metric.effective_sample_size is not None and metric.effective_sample_size < 0.0:
         raise ValueError("foundation effective_sample_size must be >= 0")
+    if metric.return_volatility is not None and metric.return_volatility < 0.0:
+        raise ValueError("foundation return_volatility must be >= 0")
     if metric.max_drawdown is not None and metric.max_drawdown > 0.0:
         raise ValueError("foundation max_drawdown must be <= 0")
     concentration = metric.max_symbol_concentration
@@ -317,10 +326,18 @@ def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
     metric = FoundationMetric(
         window_id=str(raw["window_id"]),
         return_sample_count=_foundation_count(raw, "return_sample_count"),
-        effective_sample_size=_foundation_float(raw, "effective_sample_size"),
-        sharpe=_foundation_float(raw, "sharpe"),
-        sharpe_standard_error=_foundation_float(raw, "sharpe_standard_error"),
-        total_return=_foundation_float(raw, "total_return"),
+        effective_sample_size=_foundation_float(
+            raw, "effective_sample_size", nonfinite_as_none=True
+        ),
+        mean_return=_foundation_float(raw, "mean_return", nonfinite_as_none=True),
+        return_volatility=_foundation_float(
+            raw, "return_volatility", nonfinite_as_none=True
+        ),
+        sharpe=_foundation_float(raw, "sharpe", nonfinite_as_none=True),
+        sharpe_standard_error=_foundation_float(
+            raw, "sharpe_standard_error", nonfinite_as_none=True
+        ),
+        total_return=_foundation_float(raw, "total_return", nonfinite_as_none=True),
         max_drawdown=_foundation_float(raw, "max_drawdown"),
         closed_trade_count=_foundation_count(raw, "closed_trade_count"),
         max_symbol_concentration=_foundation_float(raw, "max_symbol_concentration"),
@@ -350,6 +367,26 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
     )
 
 
+def _foundation_sizing(raw: object) -> FoundationSizing:
+    if not isinstance(raw, Mapping):
+        raise ValueError("portfolio foundation payload missing sizing_report")
+    periods = raw.get("annualization_periods_per_year")
+    if isinstance(periods, bool) or not isinstance(periods, int) or periods <= 0:
+        raise ValueError(
+            "sizing_report annualization_periods_per_year must be a positive integer"
+        )
+    capacity_bound = raw.get("capacity_bound")
+    if capacity_bound is not None and not isinstance(capacity_bound, bool):
+        raise ValueError("sizing_report capacity_bound must be a boolean")
+    return FoundationSizing(
+        annualization_periods_per_year=periods,
+        book_scale=_foundation_float(raw, "book_scale"),
+        deployed_volatility=_foundation_float(raw, "deployed_volatility"),
+        max_feasible_volatility=_foundation_float(raw, "max_feasible_volatility"),
+        capacity_bound=capacity_bound,
+    )
+
+
 def _foundation_from_result(result: object) -> FoundationEvidence:
     foundation = getattr(result, "foundation", None)
     if foundation is None:
@@ -366,6 +403,7 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
     return FoundationEvidence(
         realistic_costs=_foundation_scenario(realistic),
         cost_stress=_foundation_scenario(cost_stress),
+        sizing=_foundation_sizing(matrix_payload.get("sizing_report")),
     )
 
 
@@ -400,10 +438,17 @@ def _make_crash_row(
         iteration=iteration,
         status="crash",
         score=None,
+        worst_window_id="",
+        deflated_money_floor=None,
+        full_train_annualized_return=None,
+        worst_window_annualized_return=None,
+        cost_stress_return_retention=None,
+        book_scale=None,
+        deployed_volatility=None,
+        max_feasible_volatility=None,
+        capacity_bound=None,
         full_train_psr=None,
         worst_subwindow_psr=None,
-        worst_subwindow_id="",
-        cost_stress_psr=None,
         gates_passed=False,
         gate_flags="run_config=fail",
         trade_count=0,
@@ -411,10 +456,6 @@ def _make_crash_row(
         total_return=None,
         max_drawdown=None,
         max_symbol_concentration=None,
-        max_gross_utilization=None,
-        max_net_utilization=None,
-        max_adv_participation=None,
-        max_bar_participation=None,
         win_rate=None,
         profit_factor=None,
         avg_trade_net=None,
@@ -430,12 +471,17 @@ def _make_crash_row(
     )
 
 
+def _gate_value(gates: GateSet, name: str) -> float | None:
+    outcome = gates.by_name.get(name)
+    return None if outcome is None else outcome.value
+
+
 def _scored_result_row(
     *,
     provenance: AttemptProvenance,
     iteration: int,
     objective: ObjectiveResult,
-    cost_stress_score: float | None,
+    sizing: FoundationSizing | None,
     gates: GateSet,
     trades: Sequence[TradeSample],
     foundation_scenario: FoundationScenario | None,
@@ -453,10 +499,19 @@ def _scored_result_row(
         iteration=iteration,
         status=status,
         score=objective.score,
+        worst_window_id=objective.worst_window_id,
+        deflated_money_floor=_gate_value(gates, "money_floor"),
+        full_train_annualized_return=objective.full_train_return,
+        worst_window_annualized_return=objective.worst_window_return,
+        cost_stress_return_retention=_gate_value(gates, "cost_stress_retention"),
+        book_scale=None if sizing is None else sizing.book_scale,
+        deployed_volatility=None if sizing is None else sizing.deployed_volatility,
+        max_feasible_volatility=(
+            None if sizing is None else sizing.max_feasible_volatility
+        ),
+        capacity_bound=None if sizing is None else sizing.capacity_bound,
         full_train_psr=objective.full_train_psr,
-        worst_subwindow_psr=_worst_subwindow_psr(objective),
-        worst_subwindow_id=objective.worst_subwindow_id,
-        cost_stress_psr=cost_stress_score,
+        worst_subwindow_psr=objective.worst_subwindow_psr,
         gates_passed=gates.passed,
         gate_flags=gates.flags(),
         trade_count=_reported_trade_count(trades, foundation_scenario),
@@ -467,14 +522,6 @@ def _scored_result_row(
             symbol_concentration(trades)
             if foundation_scenario is None and trades
             else (None if full is None else full.max_symbol_concentration)
-        ),
-        max_gross_utilization=None if full is None else full.max_gross_utilization,
-        max_net_utilization=None if full is None else full.max_net_utilization,
-        max_adv_participation=(
-            None if foundation_scenario is None else foundation_scenario.max_adv_participation
-        ),
-        max_bar_participation=(
-            None if foundation_scenario is None else foundation_scenario.max_bar_participation
         ),
         win_rate=(
             sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
@@ -533,12 +580,6 @@ def _reported_trade_count(
     return len(trades)
 
 
-def _worst_subwindow_psr(objective: ObjectiveResult) -> float | None:
-    if not objective.subwindow_psrs:
-        return None
-    return min(objective.subwindow_psrs)
-
-
 def _gate_records(gates: GateSet | None) -> list[dict[str, object]]:
     if gates is None:
         return []
@@ -559,6 +600,8 @@ def _metric_payload(metric: FoundationMetric) -> dict[str, object]:
         "window_id": metric.window_id,
         "return_sample_count": metric.return_sample_count,
         "effective_sample_size": metric.effective_sample_size,
+        "mean_return": metric.mean_return,
+        "return_volatility": metric.return_volatility,
         "sharpe": metric.sharpe,
         "sharpe_standard_error": metric.sharpe_standard_error,
         "total_return": metric.total_return,
@@ -583,6 +626,56 @@ def _scenario_payload(scenario: FoundationScenario | None) -> dict[str, object] 
     }
 
 
+def _sizing_payload(foundation: FoundationEvidence | None) -> dict[str, object] | None:
+    if foundation is None:
+        return None
+    sizing = foundation.sizing
+    return {
+        "annualization_periods_per_year": sizing.annualization_periods_per_year,
+        "book_scale": sizing.book_scale,
+        "deployed_volatility": sizing.deployed_volatility,
+        "max_feasible_volatility": sizing.max_feasible_volatility,
+        "capacity_bound": sizing.capacity_bound,
+    }
+
+
+def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, object]]:
+    if objective is None:
+        return []
+    return [
+        {
+            "window_id": window_id,
+            "annualized_return": annualized,
+            "standard_error": standard_error,
+        }
+        for window_id, annualized, standard_error in zip(
+            objective.window_ids,
+            objective.window_returns,
+            objective.window_return_ses,
+        )
+    ]
+
+
+def _causality_admissible(result: object) -> bool | None:
+    """Upstream causality admissibility verdict for Train scoring.
+
+    Modern upstream quick runs expose `evidence.causality_admissible` separately
+    from `evidence.causality.verified`: micro replay can be admissible for Train
+    scoring while still not retention-verified. Older result objects fall back to
+    the verification bit.
+    """
+
+    evidence = getattr(result, "evidence", None)
+    admissible = getattr(evidence, "causality_admissible", None)
+    if isinstance(admissible, bool):
+        return admissible
+    causality = getattr(evidence, "causality", None)
+    if causality is None:
+        return None
+    verified = getattr(causality, "verified", None)
+    return verified if isinstance(verified, bool) else None
+
+
 def _causality_payload(result: object) -> dict[str, object]:
     evidence = getattr(result, "evidence", None)
     causality = getattr(evidence, "causality", None)
@@ -590,6 +683,7 @@ def _causality_payload(result: object) -> dict[str, object]:
         return {}
     return {
         "causality_check": getattr(causality, "causality_check", None),
+        "admissible": _causality_admissible(result),
         "verified": getattr(causality, "verified", None),
         "replay_warning": getattr(causality, "replay_warning", None),
         "timed_out": getattr(causality, "timed_out", None),
@@ -664,18 +758,38 @@ def _write_run_card(
     payload = {
         "score": None if objective is None else objective.score,
         "score_parts": {
-            "full_train_psr": None if objective is None else objective.full_train_psr,
-            "subwindow_psrs": []
+            "worst_window_id": "" if objective is None else objective.worst_window_id,
+            "full_train_annualized_return": None
             if objective is None
-            else list(objective.subwindow_psrs),
-            "worst_subwindow_psr": None
+            else objective.full_train_return,
+            "worst_window_annualized_return": None
             if objective is None
-            else _worst_subwindow_psr(objective),
-            "worst_subwindow_id": ""
-            if objective is None
-            else objective.worst_subwindow_id,
-            "cost_stress_psr": None if cost_stress is None else cost_stress.score,
+            else objective.worst_window_return,
+            "deflated_money_floor": _gate_value(gates, "money_floor")
+            if gates is not None
+            else None,
+            "cost_stress_return_retention": _gate_value(gates, "cost_stress_retention")
+            if gates is not None
+            else None,
+            "windows": _window_return_payload(objective),
+            "cost_stress_full_train_annualized_return": None
+            if cost_stress is None
+            else cost_stress.full_train_return,
+            "diagnostics": {
+                "full_train_psr": None if objective is None else objective.full_train_psr,
+                "subwindow_psrs": []
+                if objective is None
+                else list(objective.subwindow_psrs),
+                "worst_subwindow_psr": None
+                if objective is None
+                else objective.worst_subwindow_psr,
+                "worst_subwindow_id": ""
+                if objective is None
+                else objective.worst_subwindow_id,
+                "cost_stress_score": None if cost_stress is None else cost_stress.score,
+            },
         },
+        "sizing_report": _sizing_payload(foundation),
         "gates": _gate_records(gates),
         "foundation": {
             "realistic_costs": None
@@ -1060,16 +1174,16 @@ def run_iteration(
             experiment_path=experiment_path,
             rationale_path=rationale_path,
         )
-    cost_stress_score = stress.score
     foundation_scenario = None if foundation is None else foundation.realistic_costs
+    sizing = None if foundation is None else foundation.sizing
     gates = evaluate_gates(
         trades,
         params=params,
         components=components,
         config=protocol.gates,
-        cost_stress_score=cost_stress_score,
-        train_score=objective.score,
-        subwindow_trade_counts=objective.subwindow_trade_counts,
+        objective=objective,
+        cost_stress_full_train_return=stress.full_train_return,
+        causality_admissible=_causality_admissible(result),
         foundation_scenario=foundation_scenario,
     )
     _write_run_card(
@@ -1090,7 +1204,7 @@ def run_iteration(
             provenance=provenance,
             iteration=iteration,
             objective=objective,
-            cost_stress_score=cost_stress_score,
+            sizing=sizing,
             gates=gates,
             trades=trades,
             foundation_scenario=foundation_scenario,
@@ -1115,7 +1229,7 @@ def run_iteration(
             provenance=provenance,
             iteration=iteration,
             objective=objective,
-            cost_stress_score=cost_stress_score,
+            sizing=sizing,
             gates=gates,
             trades=trades,
             foundation_scenario=foundation_scenario,
@@ -1222,8 +1336,59 @@ def climb_once(
     )
 
 
+def _load_approved_proposal(path: str | Path) -> Mapping[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        raise ValueError(f"approved proposal not found: {source}")
+    try:
+        payload = json.loads(source.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"approved proposal is unreadable: {source}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("approved proposal must be a JSON object")
+    approval = payload.get("approval")
+    if not isinstance(approval, Mapping):
+        raise ValueError("approved proposal missing approval block")
+    if approval.get("approved") is not True:
+        raise ValueError("proposal is not approved")
+    approved_hash = approval.get("protocol_sha256")
+    if not isinstance(approved_hash, str) or not approved_hash:
+        raise ValueError("approved proposal missing approval.protocol_sha256")
+    current_hash = protocol_sha256("protocol.toml")
+    if current_hash != approved_hash:
+        raise ValueError("protocol.toml no longer matches approved proposal hash")
+    return payload
+
+
+def _ensure_no_active_lifecycle(results_path: str | Path = "results.tsv") -> None:
+    if read_results(results_path):
+        raise ValueError("active lifecycle state already exists")
+    if _lock_path(Path(".")).exists():
+        raise ValueError("active lifecycle state already exists")
+
+
+def baseline_once(
+    *,
+    mechanism: str,
+    falsifier: str,
+    approved_proposal: str | Path,
+) -> IterationOutcome:
+    _load_approved_proposal(approved_proposal)
+    _ensure_no_active_lifecycle()
+    return climb_once(mechanism=mechanism, falsifier=falsifier)
+
+
 def _print_status(summary: Mapping[str, object]) -> None:
     for key, value in summary.items():
+        print(f"{key}: {value}")
+
+
+def _print_outcome(outcome: IterationOutcome) -> None:
+    if outcome.row is None:
+        print(f"status: {outcome.status}")
+        print(f"score: {outcome.score}")
+        return
+    for key, value in outcome.row.as_record().items():
         print(f"{key}: {value}")
 
 
@@ -1231,6 +1396,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="quant-autoresearch")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    propose = subparsers.add_parser("propose-protocol")
+    propose.add_argument("--brief", required=True)
+    propose.add_argument("--out", required=True)
+    propose.add_argument("--protocol", default="protocol.toml")
+    resolve = subparsers.add_parser("resolve-universe")
+    resolve.add_argument("--data-kind", required=True)
+    resolve.add_argument("--dataset")
+    resolve.add_argument("--start", required=True)
+    resolve.add_argument("--end", required=True)
+    resolve.add_argument("--exclude", action="append", default=[])
+    resolve.add_argument("--out", required=True)
+    resolve.add_argument("--max-lag-days", type=int)
+    resolve.add_argument("--require-research-ready", action="store_true")
+    resolve.add_argument("--allow-derived-status", action="append", default=[])
+    resolve.add_argument(
+        "--capacity-model",
+        choices=("off", "adv_impact"),
+        default="adv_impact",
+    )
+    baseline = subparsers.add_parser("baseline")
+    baseline.add_argument("--mechanism", required=True)
+    baseline.add_argument("--falsifier", required=True)
+    baseline.add_argument("--approved-proposal", required=True)
     climb = subparsers.add_parser("climb")
     climb.add_argument("--mechanism", required=True)
     climb.add_argument("--falsifier", required=True)
@@ -1239,14 +1427,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "status":
         _print_status(run_status())
         return 0
+    if args.command == "propose-protocol":
+        proposal = write_protocol_proposal(
+            args.brief,
+            args.out,
+            protocol_path=args.protocol,
+        )
+        print(f"proposal_json: {args.out}")
+        print(f"proposal_markdown: {Path(args.out).with_suffix('.md')}")
+        print(f"proposal_sha256: {proposal.proposal_sha256}")
+        return 0
+    if args.command == "resolve-universe":
+        payload = write_universe_artifact(
+            out_path=args.out,
+            data_kind=args.data_kind,
+            dataset=args.dataset,
+            start=args.start,
+            end=args.end,
+            exclusions=args.exclude,
+            max_lag_days=args.max_lag_days,
+            require_research_ready=args.require_research_ready,
+            allowed_derived_statuses=args.allow_derived_status or ("research_ready",),
+            capacity_model=args.capacity_model,
+        )
+        resolved_symbols = payload["resolved_symbols"]
+        if not isinstance(resolved_symbols, list):
+            raise ValueError("resolver returned malformed resolved_symbols")
+        print(f"universe_json: {args.out}")
+        print(f"resolved_symbol_count: {len(resolved_symbols)}")
+        print(f"resolver_sha256: {payload['resolver_sha256']}")
+        return 0
+    if args.command == "baseline":
+        outcome = baseline_once(
+            mechanism=args.mechanism,
+            falsifier=args.falsifier,
+            approved_proposal=args.approved_proposal,
+        )
+        _print_outcome(outcome)
+        return 0
     if args.command == "climb":
         outcome = climb_once(mechanism=args.mechanism, falsifier=args.falsifier)
-        if outcome.row is None:
-            print(f"status: {outcome.status}")
-            print(f"score: {outcome.score}")
-        else:
-            for key, value in outcome.row.as_record().items():
-                print(f"{key}: {value}")
+        _print_outcome(outcome)
         return 0
     raise AssertionError(args.command)
 

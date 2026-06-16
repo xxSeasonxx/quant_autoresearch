@@ -11,10 +11,17 @@ class ResultRow:
     iteration: int
     status: str
     score: float | None
+    worst_window_id: str
+    deflated_money_floor: float | None
+    full_train_annualized_return: float | None
+    worst_window_annualized_return: float | None
+    cost_stress_return_retention: float | None
+    book_scale: float | None
+    deployed_volatility: float | None
+    max_feasible_volatility: float | None
+    capacity_bound: bool | None
     full_train_psr: float | None
     worst_subwindow_psr: float | None
-    worst_subwindow_id: str
-    cost_stress_psr: float | None
     gates_passed: bool
     gate_flags: str
     trade_count: int
@@ -22,10 +29,6 @@ class ResultRow:
     total_return: float | None
     max_drawdown: float | None
     max_symbol_concentration: float | None
-    max_gross_utilization: float | None
-    max_net_utilization: float | None
-    max_adv_participation: float | None
-    max_bar_participation: float | None
     win_rate: float | None
     profit_factor: float | None
     avg_trade_net: float | None
@@ -46,10 +49,17 @@ class ResultRow:
             "iteration",
             "status",
             "score",
+            "worst_window_id",
+            "deflated_money_floor",
+            "full_train_annualized_return",
+            "worst_window_annualized_return",
+            "cost_stress_return_retention",
+            "book_scale",
+            "deployed_volatility",
+            "max_feasible_volatility",
+            "capacity_bound",
             "full_train_psr",
             "worst_subwindow_psr",
-            "worst_subwindow_id",
-            "cost_stress_psr",
             "gates_passed",
             "gate_flags",
             "trade_count",
@@ -57,10 +67,6 @@ class ResultRow:
             "total_return",
             "max_drawdown",
             "max_symbol_concentration",
-            "max_gross_utilization",
-            "max_net_utilization",
-            "max_adv_participation",
-            "max_bar_participation",
             "win_rate",
             "profit_factor",
             "avg_trade_net",
@@ -79,15 +85,27 @@ class ResultRow:
         def optional(value: float | None) -> str:
             return "" if value is None else str(value)
 
+        def optional_bool(value: bool | None) -> str:
+            return "" if value is None else ("true" if value else "false")
+
         return {
             "run_id": self.run_id,
             "iteration": str(self.iteration),
             "status": self.status,
             "score": optional(self.score),
+            "worst_window_id": self.worst_window_id,
+            "deflated_money_floor": optional(self.deflated_money_floor),
+            "full_train_annualized_return": optional(self.full_train_annualized_return),
+            "worst_window_annualized_return": optional(
+                self.worst_window_annualized_return
+            ),
+            "cost_stress_return_retention": optional(self.cost_stress_return_retention),
+            "book_scale": optional(self.book_scale),
+            "deployed_volatility": optional(self.deployed_volatility),
+            "max_feasible_volatility": optional(self.max_feasible_volatility),
+            "capacity_bound": optional_bool(self.capacity_bound),
             "full_train_psr": optional(self.full_train_psr),
             "worst_subwindow_psr": optional(self.worst_subwindow_psr),
-            "worst_subwindow_id": self.worst_subwindow_id,
-            "cost_stress_psr": optional(self.cost_stress_psr),
             "gates_passed": "true" if self.gates_passed else "false",
             "gate_flags": self.gate_flags,
             "trade_count": str(self.trade_count),
@@ -95,10 +113,6 @@ class ResultRow:
             "total_return": optional(self.total_return),
             "max_drawdown": optional(self.max_drawdown),
             "max_symbol_concentration": optional(self.max_symbol_concentration),
-            "max_gross_utilization": optional(self.max_gross_utilization),
-            "max_net_utilization": optional(self.max_net_utilization),
-            "max_adv_participation": optional(self.max_adv_participation),
-            "max_bar_participation": optional(self.max_bar_participation),
             "win_rate": optional(self.win_rate),
             "profit_factor": optional(self.profit_factor),
             "avg_trade_net": optional(self.avg_trade_net),
@@ -126,6 +140,12 @@ def _parse_bool(value: str, *, name: str) -> bool:
     raise ValueError(f"{name} must be true or false")
 
 
+def _parse_optional_bool(value: str, *, name: str) -> bool | None:
+    if value == "":
+        return None
+    return _parse_bool(value, name=name)
+
+
 def _parse_enum(value: str, *, name: str, allowed: set[str]) -> str:
     if value not in allowed:
         raise ValueError(f"{name} must be one of {sorted(allowed)}")
@@ -144,10 +164,19 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
             row["status"], name="status", allowed={"keep", "discard", "crash"}
         ),
         score=_parse_float(row["score"]),
+        worst_window_id=row["worst_window_id"],
+        deflated_money_floor=_parse_float(row["deflated_money_floor"]),
+        full_train_annualized_return=_parse_float(row["full_train_annualized_return"]),
+        worst_window_annualized_return=_parse_float(
+            row["worst_window_annualized_return"]
+        ),
+        cost_stress_return_retention=_parse_float(row["cost_stress_return_retention"]),
+        book_scale=_parse_float(row["book_scale"]),
+        deployed_volatility=_parse_float(row["deployed_volatility"]),
+        max_feasible_volatility=_parse_float(row["max_feasible_volatility"]),
+        capacity_bound=_parse_optional_bool(row["capacity_bound"], name="capacity_bound"),
         full_train_psr=_parse_float(row["full_train_psr"]),
         worst_subwindow_psr=_parse_float(row["worst_subwindow_psr"]),
-        worst_subwindow_id=row["worst_subwindow_id"],
-        cost_stress_psr=_parse_float(row["cost_stress_psr"]),
         gates_passed=_parse_bool(row["gates_passed"], name="gates_passed"),
         gate_flags=row["gate_flags"],
         trade_count=int(row["trade_count"]),
@@ -155,10 +184,6 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         total_return=_parse_float(row["total_return"]),
         max_drawdown=_parse_float(row["max_drawdown"]),
         max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
-        max_gross_utilization=_parse_float(row["max_gross_utilization"]),
-        max_net_utilization=_parse_float(row["max_net_utilization"]),
-        max_adv_participation=_parse_float(row["max_adv_participation"]),
-        max_bar_participation=_parse_float(row["max_bar_participation"]),
         win_rate=_parse_float(row["win_rate"]),
         profit_factor=_parse_float(row["profit_factor"]),
         avg_trade_net=_parse_float(row["avg_trade_net"]),

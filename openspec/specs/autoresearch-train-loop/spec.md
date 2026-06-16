@@ -20,6 +20,33 @@ The loop SHALL establish a baseline for the starting `strategy.py` and params be
 - **WHEN** no feasible candidate appears within the configured baseline grace window
 - **THEN** the loop stops and records the thesis as dead on Train
 
+### Requirement: First baseline requires an approved protocol proposal
+The baseline command SHALL validate the approved protocol proposal before the
+first Train attempt. It SHALL refuse missing proposals, unapproved proposals,
+stale proposal hashes relative to the current `protocol.toml`, and existing
+active lifecycle state. When validation passes, it SHALL delegate to the normal
+single-attempt climb path.
+
+#### Scenario: unapproved baseline is rejected
+- **WHEN** `baseline` is run with a missing or unapproved proposal
+- **THEN** the loop rejects the run before quick-run materialization
+
+#### Scenario: stale approved protocol is rejected
+- **WHEN** `baseline` is run and the current `protocol.toml` SHA-256 differs from
+  the approved proposal's protocol hash
+- **THEN** the loop rejects the run before quick-run materialization
+
+#### Scenario: existing lifecycle state blocks baseline
+- **WHEN** `baseline` is run and `results.tsv` has attempt rows or
+  `.autoresearch/thesis_lock.json` exists
+- **THEN** the loop rejects the run before quick-run materialization
+
+#### Scenario: approved baseline uses normal climb
+- **WHEN** `baseline` is run with an approved proposal matching the current
+  protocol and no active lifecycle state
+- **THEN** the loop runs one ordinary climb attempt
+- **AND** normal result-row and run-card behavior applies
+
 ### Requirement: Each iteration runs, scores, gates, logs, and keeps or reverts
 Each completed iteration SHALL run the current candidate through public quick-run, compute the configured Train objective, compute all gates, append one `results.tsv` row with attempt provenance, and update the best candidate only if the score improves by the configured plateau threshold and all gates pass. Otherwise the loop SHALL leave the best candidate unchanged while allowing the working candidate to continue when no terminal stop or invalid workspace condition exists.
 
@@ -147,4 +174,3 @@ For `portfolio_psr_subwindow`, the loop SHALL use the existing keep rule shape: 
 - **WHEN** an iteration has an improved PSR score but fails any foundation-backed gate
 - **THEN** the loop logs status `discard`
 - **AND** records `best_status=unchanged`
-

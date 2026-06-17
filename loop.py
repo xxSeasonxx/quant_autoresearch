@@ -35,6 +35,7 @@ from universe_resolver import write_universe_artifact
 
 
 Runner = Callable[..., object]
+RESET_CONFIRMATION = "RESET-LIFECYCLE"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,12 @@ class AttemptProvenance:
     artifact_dir: str
 
 
+@dataclass(frozen=True)
+class RationaleComponentParse:
+    components: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+
 def validate_thesis(mechanism: str, falsifier: str) -> str | None:
     if not mechanism.strip():
         return "thesis mechanism is required"
@@ -62,19 +69,23 @@ def validate_thesis(mechanism: str, falsifier: str) -> str | None:
     return None
 
 
-def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, ...]:
+def _parse_rationale_components(
+    path: str | Path = "rationale.md",
+) -> RationaleComponentParse:
     try:
         lines = Path(path).read_text().splitlines()
     except OSError as exc:
         raise ValueError(f"could not read rationale: {path}") from exc
 
     in_components = False
+    found_section = False
     components: list[str] = []
     seen: set[str] = set()
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("## "):
             in_components = stripped == "## Signal Components"
+            found_section = found_section or in_components
             continue
         if not in_components:
             continue
@@ -90,8 +101,23 @@ def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, .
         components.append(name)
 
     if not components:
-        raise ValueError("rationale.md must declare at least one signal component")
-    return tuple(components)
+        path_name = Path(path).name
+        if found_section:
+            warning = (
+                f"{path_name} Signal Components section has no Component headings; "
+                "assuming zero declared components"
+            )
+        else:
+            warning = (
+                f"{path_name} has no Signal Components section; "
+                "assuming zero declared components"
+            )
+        return RationaleComponentParse(components=(), warnings=(warning,))
+    return RationaleComponentParse(components=tuple(components), warnings=())
+
+
+def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, ...]:
+    return _parse_rationale_components(path).components
 
 
 def _sha256_path(path: Path) -> str:
@@ -752,6 +778,7 @@ def _write_run_card(
     gates: GateSet | None,
     foundation: FoundationEvidence | None,
     error: str = "",
+    warnings: Sequence[str] = (),
 ) -> None:
     destination = root / artifact_dir / "run_card.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -802,6 +829,7 @@ def _write_run_card(
         "causality": {} if result is None else _causality_payload(result),
         "primary_failure_mode": _primary_failure_mode(gates, objective, error=error),
         "error": error,
+        "warnings": list(warnings),
     }
     destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
@@ -975,6 +1003,7 @@ def _finalize_crash(
     cost_stress: ObjectiveResult | None,
     gates: GateSet | None,
     foundation: FoundationEvidence | None,
+    warnings: Sequence[str],
     strategy_path: str | Path,
     protocol_path: str | Path,
     experiment_path: str | Path,
@@ -989,6 +1018,7 @@ def _finalize_crash(
         gates=gates,
         foundation=foundation,
         error=note,
+        warnings=warnings,
     )
     temp_row = _make_crash_row(
         provenance=provenance,
@@ -1052,6 +1082,7 @@ def run_iteration(
     protocol_path: str | Path = "protocol.toml",
     experiment_path: str | Path = "experiment.toml",
     rationale_path: str | Path = "rationale.md",
+    component_warnings: Sequence[str] = (),
 ) -> IterationOutcome:
     start = time.monotonic()
     root = Path(workdir)
@@ -1112,6 +1143,7 @@ def run_iteration(
             cost_stress=None,
             gates=None,
             foundation=None,
+            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1137,6 +1169,7 @@ def run_iteration(
             cost_stress=None,
             gates=None,
             foundation=None,
+            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1169,6 +1202,7 @@ def run_iteration(
             cost_stress=stress,
             gates=None,
             foundation=foundation,
+            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1194,6 +1228,7 @@ def run_iteration(
         cost_stress=stress,
         gates=gates,
         foundation=foundation,
+        warnings=component_warnings,
     )
     keep = is_improvement(objective.score, best_score, gates.passed, protocol.loop)
     status = "keep" if keep else "discard"
@@ -1301,11 +1336,13 @@ def climb_once(
     )
     _ensure_can_attempt(rows, snapshot, root=Path("."))
     experiment = load_experiment(params_path)
-    declared_components = (
-        tuple(components)
-        if components is not None
-        else components_from_rationale("rationale.md")
-    )
+    component_warnings: tuple[str, ...] = ()
+    if components is not None:
+        declared_components = tuple(components)
+    else:
+        parsed_components = _parse_rationale_components("rationale.md")
+        declared_components = parsed_components.components
+        component_warnings = parsed_components.warnings
     _ensure_active_thesis_lock(
         Path("."),
         rows=rows,
@@ -1333,6 +1370,7 @@ def climb_once(
         protocol_path=protocol_path,
         experiment_path=params_path,
         rationale_path="rationale.md",
+        component_warnings=component_warnings,
     )
 
 
@@ -1365,6 +1403,55 @@ def _ensure_no_active_lifecycle(results_path: str | Path = "results.tsv") -> Non
         raise ValueError("active lifecycle state already exists")
     if _lock_path(Path(".")).exists():
         raise ValueError("active lifecycle state already exists")
+
+
+def _lifecycle_archive_dir(root: Path) -> Path:
+    base = root / ".autoresearch" / "lifecycle_archive"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    candidate = base / stamp
+    suffix = 1
+    while candidate.exists():
+        candidate = base / f"{stamp}-{suffix}"
+        suffix += 1
+    candidate.mkdir(parents=True)
+    return candidate
+
+
+def _archive_if_present(source: Path, destination: Path) -> bool:
+    if not source.exists():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(destination)
+    return True
+
+
+def reset_lifecycle(
+    *,
+    confirm: str,
+    root: str | Path = ".",
+    results_path: str | Path = "results.tsv",
+) -> Path:
+    if confirm != RESET_CONFIRMATION:
+        raise ValueError(f"reset requires --confirm {RESET_CONFIRMATION}")
+    root_path = Path(root)
+    result_source = Path(results_path)
+    if not result_source.is_absolute():
+        result_source = root_path / result_source
+    sources = (
+        result_source,
+        _lock_path(root_path),
+        root_path / ".autoresearch" / "quick",
+    )
+    if not any(source.exists() for source in sources):
+        raise ValueError("no lifecycle state to reset")
+    archive_dir = _lifecycle_archive_dir(root_path)
+    _archive_if_present(result_source, archive_dir / "results.tsv")
+    _archive_if_present(_lock_path(root_path), archive_dir / "thesis_lock.json")
+    _archive_if_present(
+        root_path / ".autoresearch" / "quick",
+        archive_dir / "quick",
+    )
+    return archive_dir
 
 
 def baseline_once(
@@ -1419,6 +1506,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline.add_argument("--mechanism", required=True)
     baseline.add_argument("--falsifier", required=True)
     baseline.add_argument("--approved-proposal", required=True)
+    reset = subparsers.add_parser("reset")
+    reset.add_argument("--confirm", required=True)
     climb = subparsers.add_parser("climb")
     climb.add_argument("--mechanism", required=True)
     climb.add_argument("--falsifier", required=True)
@@ -1464,6 +1553,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             approved_proposal=args.approved_proposal,
         )
         _print_outcome(outcome)
+        return 0
+    if args.command == "reset":
+        archive_dir = reset_lifecycle(confirm=args.confirm)
+        print(f"archive_dir: {archive_dir}")
         return 0
     if args.command == "climb":
         outcome = climb_once(mechanism=args.mechanism, falsifier=args.falsifier)

@@ -8,7 +8,10 @@ from pathlib import Path
 from statistics import NormalDist
 from typing import Mapping
 
+import pytest
+
 from gates import GateConfig, evaluate_gates
+import loop
 from loop import run_iteration
 from objective import (
     FoundationEvidence,
@@ -749,6 +752,60 @@ def _write_workspace(tmp_path: Path) -> None:
     (tmp_path / "rationale.md").write_text("## Signal Components\n\n### Component: signal\n")
 
 
+def test_climb_once_warns_and_runs_when_rationale_components_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write_workspace(tmp_path)
+    (tmp_path / "rationale.md").write_text("# Rationale\n\n## Thesis\nNo components yet.\n")
+    result = FakeRunResult(
+        succeeded=True,
+        economics=None,
+        foundation=FakeFoundation(),
+        evidence=FakeEvidence(causality=FakeCausality()),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    outcome = loop.climb_once(
+        mechanism="Funding pressure mean reverts.",
+        falsifier="No post-cost robustness.",
+        runner=lambda *args, **kwargs: result,
+    )
+
+    row = read_results(tmp_path / "results.tsv")[0]
+    run_card = json.loads(
+        (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
+    )
+    assert outcome.status == "keep"
+    assert row.complexity_count == 0
+    assert run_card["warnings"] == [
+        "rationale.md has no Signal Components section; assuming zero declared components"
+    ]
+
+
+def test_rationale_components_empty_section_is_empty_metadata(tmp_path: Path):
+    rationale = tmp_path / "rationale.md"
+    rationale.write_text("# Rationale\n\n## Signal Components\n\n## Variant Log\n")
+
+    assert loop.components_from_rationale(rationale) == ()
+
+
+def test_rationale_components_reject_blank_or_duplicate_headings(tmp_path: Path):
+    blank = tmp_path / "blank.md"
+    blank.write_text("## Signal Components\n\n### Component:\n")
+    duplicate = tmp_path / "duplicate.md"
+    duplicate.write_text(
+        "## Signal Components\n\n"
+        "### Component: signal\n\n"
+        "### Component:  Signal \n"
+    )
+
+    with pytest.raises(ValueError, match="must include a name"):
+        loop.components_from_rationale(blank)
+    with pytest.raises(ValueError, match="duplicate signal component"):
+        loop.components_from_rationale(duplicate)
+
+
 def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     _write_workspace(tmp_path)
     protocol = load_protocol(tmp_path / "protocol.toml")
@@ -984,6 +1041,36 @@ def test_run_iteration_crashes_on_malformed_foundation_payload(tmp_path: Path):
     row = read_results(tmp_path / "results.tsv")[0]
     assert outcome.status == "crash"
     assert "non-finite foundation value: max_drawdown" in row.note
+
+
+def test_run_iteration_truncates_crash_ledger_note_and_preserves_run_card_error(
+    tmp_path: Path,
+):
+    _write_workspace(tmp_path)
+    protocol = load_protocol(tmp_path / "protocol.toml")
+    long_error = "portfolio_foundation_failed: " + "missing_mark:DOGE-PERP;" * 180
+
+    outcome = run_iteration(
+        protocol,
+        params={},
+        components=("signal",),
+        results_path=tmp_path / "results.tsv",
+        iteration=1,
+        best_score=None,
+        runner=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError(long_error)),
+        workdir=tmp_path,
+    )
+
+    row = read_results(tmp_path / "results.tsv")[0]
+    run_card = json.loads(
+        (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
+    )
+    assert outcome.status == "crash"
+    assert outcome.message == long_error
+    assert len(row.note) <= 2000
+    assert row.note != long_error
+    assert "truncated" in row.note
+    assert run_card["error"] == long_error
 
 
 def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):

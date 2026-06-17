@@ -10,6 +10,10 @@ For a new plain-language strategy idea, start with `new-strategy.md`. It owns
 mandate collection, protocol proposal, approval, lifecycle reset, and first
 baseline preflight.
 
+Root files may hold either the neutral scaffold or an active local thesis. Use
+`python -m loop status` as the lifecycle-state source; do not infer state from
+checkout comments or strategy names alone.
+
 ## Repository Map
 
 | Path | Role |
@@ -116,6 +120,7 @@ conda run -n quant python -m loop propose-protocol --brief .autoresearch/protoco
 conda run -n quant python -m loop baseline --mechanism "<why it should work>" --falsifier "<what kills it>" --approved-proposal .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop status
 conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
+conda run -n quant python -m loop reset --confirm RESET-LIFECYCLE
 ```
 
 The `resolve-universe` command writes a return-blind eligibility artifact from
@@ -123,7 +128,10 @@ catalog/readiness metadata only. The `propose-protocol` command writes proposal
 artifacts only; it does not edit `protocol.toml`. The `baseline` command
 validates an approved proposal before the first attempt, then uses the normal
 climb path. The `climb` command runs the current candidate once and logs the
-attempt. The autonomous editing loop is driven by the agent contract in
+attempt. The `reset` command archives generated lifecycle state only:
+`results.tsv`, `.autoresearch/thesis_lock.json`, and `.autoresearch/quick/`.
+It does not edit `strategy.py`, `protocol.toml`, `experiment.toml`, or
+`rationale.md`. The autonomous editing loop is driven by the agent contract in
 `program.md`.
 
 The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.

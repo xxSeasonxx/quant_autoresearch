@@ -1,16 +1,8 @@
 # Operator-owned Train-loop protocol.
 #
-# This file is the source of truth for HOW a thesis is run and judged on Train.
-# The agent reads these values but does not change them during a thesis run.
-#
-# Operator-frozen here: universe, window, data kind, costs, fills, capacity model,
-# leverage budget, objective, gates, and loop constants. Season chooses them from
-# quant_data readiness and the active thesis before the run starts. The agent
-# optimizes only strategy.py and bounded params against this frozen setup, and
-# must build within the leverage budget; intended exposure beyond it is a
-# fail-closed, non-scoreable feasibility verdict upstream, not a low score.
-#
-# Configured for the crypto-perp funding-anchor carry thesis.
+# This root file may contain either a scaffold or an active local thesis. Use
+# `python -m loop status` for lifecycle state. During an active thesis, these
+# protocol-owned values are frozen unless Season starts a new lifecycle.
 
 # The pure strategy file and strategy id passed through to quant_strategies. The
 # strategy's emitted decisions must carry this strategy_id.

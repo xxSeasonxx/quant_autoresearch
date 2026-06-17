@@ -538,3 +538,72 @@ def test_approved_baseline_delegates_to_climb_once(
             "falsifier": "No post-cost robustness",
         }
     ]
+
+
+def test_reset_cli_requires_exact_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "results.tsv").write_text("active\n")
+    (tmp_path / ".autoresearch" / "quick").mkdir(parents=True)
+    (tmp_path / ".autoresearch" / "quick" / "attempt-0001.toml").write_text("quick\n")
+    (tmp_path / ".autoresearch" / "thesis_lock.json").write_text("{}\n")
+
+    with pytest.raises(SystemExit):
+        loop.main(["reset"])
+    assert "--confirm" in capsys.readouterr().err
+    assert (tmp_path / "results.tsv").exists()
+    assert (tmp_path / ".autoresearch" / "thesis_lock.json").exists()
+
+    with pytest.raises(ValueError, match="RESET-LIFECYCLE"):
+        loop.main(["reset", "--confirm", "wrong"])
+    assert (tmp_path / "results.tsv").exists()
+    assert (tmp_path / ".autoresearch" / "thesis_lock.json").exists()
+
+
+def test_reset_cli_archives_generated_lifecycle_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "results.tsv").write_text("results\n")
+    quick_dir = tmp_path / ".autoresearch" / "quick"
+    quick_dir.mkdir(parents=True)
+    (quick_dir / "attempt-0001.toml").write_text("quick\n")
+    (tmp_path / ".autoresearch" / "thesis_lock.json").write_text('{"active": true}\n')
+    source_files = {
+        "strategy.py": "strategy\n",
+        "protocol.toml": "protocol\n",
+        "experiment.toml": "experiment\n",
+        "rationale.md": "rationale\n",
+    }
+    for name, content in source_files.items():
+        (tmp_path / name).write_text(content)
+
+    assert loop.main(["reset", "--confirm", "RESET-LIFECYCLE"]) == 0
+
+    archives = sorted((tmp_path / ".autoresearch" / "lifecycle_archive").iterdir())
+    assert len(archives) == 1
+    archive = archives[0]
+    assert (archive / "results.tsv").read_text() == "results\n"
+    assert (archive / "thesis_lock.json").read_text() == '{"active": true}\n'
+    assert (archive / "quick" / "attempt-0001.toml").read_text() == "quick\n"
+    assert not (tmp_path / "results.tsv").exists()
+    assert not (tmp_path / ".autoresearch" / "thesis_lock.json").exists()
+    assert not quick_dir.exists()
+    for name, content in source_files.items():
+        assert (tmp_path / name).read_text() == content
+
+
+def test_reset_cli_refuses_when_no_lifecycle_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="no lifecycle state"):
+        loop.main(["reset", "--confirm", "RESET-LIFECYCLE"])
+
+    assert not (tmp_path / ".autoresearch" / "lifecycle_archive").exists()

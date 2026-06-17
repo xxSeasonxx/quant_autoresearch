@@ -4,6 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 import csv
 
+_LEDGER_NOTE_MAX_CHARS = 2000
+_LEDGER_NOTE_TRUNCATION = "\n...[truncated]"
+
+
+def _compact_ledger_note(note: str) -> str:
+    if len(note) <= _LEDGER_NOTE_MAX_CHARS:
+        return note
+    keep = _LEDGER_NOTE_MAX_CHARS - len(_LEDGER_NOTE_TRUNCATION)
+    return note[:keep].rstrip() + _LEDGER_NOTE_TRUNCATION
+
 
 @dataclass(frozen=True)
 class ResultRow:
@@ -124,7 +134,7 @@ class ResultRow:
             "stop_reason": self.stop_reason,
             "elapsed_seconds": str(self.elapsed_seconds),
             "artifact_dir": self.artifact_dir,
-            "note": self.note,
+            "note": _compact_ledger_note(self.note),
         }
 
 
@@ -275,6 +285,10 @@ def read_results(path: str | Path) -> list[ResultRow]:
     source = Path(path)
     if not source.exists():
         return []
+    # Crash rows can carry verbose multi-line notes (e.g. an observation-audit
+    # failure listing every missing row) that exceed Python's default 128 KB CSV
+    # field cap; raise it so a large note never wedges the reader.
+    csv.field_size_limit(10 * 1024 * 1024)
     with source.open(newline="") as handle:
         reader = csv.DictReader(handle, dialect="excel-tab")
         raw_rows = list(reader)

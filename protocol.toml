@@ -4,44 +4,27 @@
 # `python -m loop status` for lifecycle state. During an active thesis, these
 # protocol-owned values are frozen unless Season starts a new lifecycle.
 
-# The pure strategy file and strategy id passed through to quant_strategies. The
-# strategy's emitted decisions must carry this strategy_id.
 strategy_path = "strategy.py"
-strategy_id = "crypto_perp_funding_crowding_reversal_stateful_rebalance"
+strategy_id = "crypto_perp_funding_crowding_reversal"
 
 [data]
-# Public quant_strategies data loader kind. Data source choice changes what
-# information the strategy can see, so it is protocol-owned.
 kind = "crypto_perp_funding"
-# Fixed Train universe. The agent must not cherry-pick symbols in params; a
-# universe change is an explicit protocol edit recorded in rationale.md.
-symbols = ["BTC-PERP", "ETH-PERP", "ADA-PERP"]
-# Train-only window. A date-only end is read as the half-open [start, end + 1 day)
-# objective window. OOS windows are deliberately absent from this loop.
+dataset = "crypto_perp_1min_with_funding"
+symbols = ["BTC-PERP", "ETH-PERP", "DOGE-PERP", "ADA-PERP", "LINK-PERP"]
 start = "2025-03-01"
 end = "2025-12-31"
-# Execution-only buffer the runner uses to resolve exits for late Train decisions.
-# Strategy generation and Train scoring still use start/end above.
+load_start = "2025-03-01"
 load_end = "2026-01-07"
 
 [fill_model]
-# Fill price used by quant_strategies. For bar data, close is the simple public
-# choice; quote-based fills belong to quote datasets.
 price = "close"
-# Entry lag of 1 means a target that becomes actionable after a bar fills on the
-# next bar, never the signal bar. This protects close-derived signals from lookahead.
 entry_lag_bars = 1
 
 [cost_model]
-# Per-side fee in basis points.
 fee_bps_per_side = 5.0
-# Per-side slippage in basis points. The cost-stress gate applies an additional
-# round-trip bump derived from fee + slippage.
 slippage_bps_per_side = 1.0
 
 [capacity_model]
-# Operator-frozen capacity envelope. adv_impact prices market impact into the NAV
-# path and enforces ADV / per-bar participation limits; it requires volume history.
 mode = "adv_impact"
 portfolio_notional = 1000000.0
 adv_lookback_bars = 1440
@@ -52,112 +35,46 @@ impact_coefficient_bps = 10.0
 impact_exponent = 0.5
 
 [leverage_budget]
-# Operator-frozen gross/net exposure ceiling. Intended standing exposure beyond
-# the ceiling fails closed upstream and is never clamped. At the capacity-fitted
-# weight this book's gross/net sit far inside fully invested; 1.0/1.0 is the
-# default ceiling.
 max_gross_exposure = 1.0
 max_net_exposure = 1.0
 
 [risk_budget]
-# Operator-frozen sizing mandate: upstream converts the strategy's normalized
-# target-book shape into an executable book size. The agent emits only shape; this
-# block owns scale, replacing the retired strategy weight knob.
-# calibrate_vol sizes the book to target_volatility (annualized); capacity caps can
-# bind below the target, in which case upstream reports capacity_bound and sizes to
-# the max-feasible volatility.
 mode = "calibrate_vol"
-# Must match the bar cadence: 24/7 crypto-perp minute bars = 365 * 24 * 60. This is
-# the run-level P the money score reads back from the sizing report; upstream emits
-# an annualization-cadence advisory if it does not match the data.
 annualization_periods_per_year = 525600
-# Target annualized volatility for the deployed book.
 target_volatility = 0.15
 
 [output]
-# Must stay under results/ because quant_strategies rejects non-generated output
-# directories.
 results_dir = "results"
-# diagnostic gives diagnostics.json with economic slices and sampled trades, more
-# useful for the next edit than summary-only output.
 artifact_profile = "diagnostic"
-# Let quant_strategies run its lightweight quick checks.
 quick_checks = true
-# Train iteration uses micro replay as a bounded score-admissibility check.
-# Micro causality is not retention, paper-trade, or deployability proof.
 causality_check = "micro"
 micro_probe_limit = 40
 micro_timeout_seconds = 600.0
-# Number of sample trades emitted in diagnostics. Must be >= 1 by runner schema.
 diagnostic_sample_trades = 5
-# Portfolio-foundation subwindows must equal objective.subwindows.
 foundation_subwindows = 6
-# Cost-stress scenario multiplier applied to fee + slippage upstream.
 foundation_cost_stress_multiplier = 2.0
 
 [loop]
-# M: stop after this many consecutive completed non-improving attempts once a
-# feasible baseline exists.
 plateau_patience = 50
-# N: hard cap on completed attempts for this thesis.
 max_iterations = 50
-# eps: absolute score improvement required to reset plateau patience.
 min_abs_improvement = 0.001
-# rho: relative score improvement required. 0 disables the relative component; the
-# effective threshold is max(eps, rho * max(1, abs(best_score))).
 min_rel_improvement = 0.0
-# Initial attempts allowed to find any feasible baseline before the thesis dies on
-# Train.
 baseline_grace_iterations = 50
 
 [objective]
-# Robustness target selected before the thesis starts. The agent cannot pick a
-# friendlier objective after seeing results.
-# - return_lcb_subwindow: the weakest-window lower bound on deployed annualized
-#   return. For full Train and each subwindow, R_w = mean_return_w * P and
-#   SE_w = return_volatility_w * P / sqrt(effective_sample_size_w), with P read
-#   from the upstream sizing report; the run score is min_w (R_w - k_rank * SE_w),
-#   k_rank = 1. Money-denominated: scaling deployed return moves the score.
 kind = "return_lcb_subwindow"
-# K: number of contiguous Train time slices. Six slices over the window gives
-# roughly bi-monthly robustness checks while keeping per-slice trade floors
-# attainable for simple short-horizon ideas.
 subwindows = 6
-# Hurdle Sharpe for the DIAGNOSTIC PSR only. PSR is neither the score nor a gate.
-# Keep at 0.0 unless Season wants a stricter diagnostic hurdle.
 psr_hurdle_sharpe = 0.0
 
 [gates]
-# Minimum netted-book closed trades before the score can be considered alive.
 min_trades = 120
-# Minimum closed trades required in every configured objective subwindow. This
-# prevents idle Train slices from counting as robustness evidence.
 min_trades_per_subwindow = 12
-# Minimum fixed-frequency portfolio-return observations required for full Train and
-# every scoring subwindow.
 min_return_sample_count = 100
-# Minimum effective portfolio-return sample size required for full Train and every
-# scoring subwindow after upstream autocorrelation adjustment.
 min_effective_sample_size = 50.0
-# Maximum share of net activity carried by one symbol. Lower is stricter
-# diversification.
 max_symbol_concentration = 0.70
-# Minimum cost-stress return retention: cost-stress full-Train annualized return
-# as a fraction of the realistic full-Train annualized return. Evaluated only when
-# the realistic full-Train return is positive.
 min_cost_stress_return_retention = 0.50
-# Maximum absolute full-Train drawdown allowed by the development filter.
 max_abs_drawdown = 0.25
-# Deflated money floor: the weakest-window deployed annualized return, haircut by
-# k_accept standard errors, must clear this hurdle. A survivor means the book makes
-# at least this much, robustly, after the best-of-N correction.
 min_annualized_return = 0.10
-# Acceptance haircut k_accept (in standard errors) for the money floor. Set it to
-# the multiple-testing correction for the best-of-N search, ~sqrt(2 * ln N_attempts)
-# (~2.8 at N=50). Explicit, not derived from loop.max_iterations, so changing the
-# loop budget never silently moves the acceptance bar.
 score_haircut_se = 2.8
-# Simplicity cap: maximum declared signal components in rationale.md.
 max_components = 3
-# Simplicity cap: maximum strategy params in experiment.toml [params].
 max_params = 50

@@ -6,33 +6,24 @@ The shape is intentionally close to Karpathy's `autoresearch`: a short `program.
 
 This is not a trading system, investment advice, or proof of deployability.
 
-For a new plain-language strategy idea, start with `new-strategy.md`. It owns
-mandate collection, protocol proposal, approval, lifecycle reset, and first
-baseline preflight.
+For a new plain-language strategy idea, invoke the `new-thesis-setup` skill
+(`/new-thesis-setup`). It owns mandate collection, protocol proposal, approval,
+lifecycle reset, and first baseline preflight.
 
 Root files may hold either the neutral scaffold or an active local thesis. Use
 `python -m loop status` as the lifecycle-state source; do not infer state from
 checkout comments or strategy names alone.
 
-## Repository Map
+## Active Documents
 
 | Path | Role |
 | --- | --- |
-| `new-strategy.md` | New-thesis setup guide; the filled brief lives under `.autoresearch/protocol_briefs/`. |
-| `program.md` | One-page agent operating contract. |
-| `strategy.py` | Agent-editable target book: standing weight-of-NAV `TargetDecision`s. |
-| `experiment.toml` | Agent-editable bounded strategy params. |
-| `protocol.toml` | Operator-owned Train data, objective, gates, costs, fills, and loop constants. |
-| `rationale.md` | Working thesis, signal components, and variant log. |
-| `universe_resolver.py` | Return-blind catalog/readiness universe resolver for new-thesis setup. |
-| `docs/harness-objective-roadmap.md` | Active roadmap for remaining harness process improvements. |
+| `new-thesis-setup` skill | New-thesis setup workflow (`/new-thesis-setup`); the filled brief lives under `.autoresearch/protocol_briefs/`. |
+| `program.md` | Agent operating contract for one active Train loop. |
 | `docs/score_research.md` | Train money-score rationale and scoring boundaries. |
-| `loop.py` | Thin status and climb entry point. |
-| `protocol.py` | Protocol loading and public quick-run config materialization. |
-| `objective.py` | Train robustness objectives and plateau math. |
-| `gates.py` | Binary Train gates. |
-| `results_log.py` | Append-only `results.tsv` helpers. |
-| `tests/` | Focused tests for the thin loop contract. |
+| `docs/adr/0001-curated-few-research-regime.md` | Research-regime decision. |
+| `docs/templates/oos-drift-review.md` | Downstream one-look OOS drift review template. |
+| `HISTORY.md` | Development chronology and migration rationale. |
 
 ## Editable Surface
 
@@ -55,8 +46,8 @@ The agent does not edit during an active thesis loop:
 - gate thresholds
 - `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
 
-Those live in `protocol.toml` and are chosen through `new-strategy.md` before a
-thesis starts. A new-thesis setup can use explicit `symbols` or a
+Those live in `protocol.toml` and are chosen through the `new-thesis-setup` skill
+before a thesis starts. A new-thesis setup can use explicit `symbols` or a
 `.autoresearch/universe/` resolver artifact; `propose-protocol` maps the approved
 symbol list into the recommendation table but does not edit `protocol.toml`.
 

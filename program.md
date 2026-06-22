@@ -22,6 +22,10 @@ target book, diagnostics, and sampled trades. The score and gates are evidence
 filters, not the thing to game. Never improve a number by hiding leverage,
 capacity, cost, fill, data, or OOS problems.
 
+When a feasibility constraint caps deployed scale, relieving it is itself an alpha
+move: idle notional earns nothing, so reshaping the book to deploy more of the
+edge feasibly can lift return more than sharpening the raw signal.
+
 Run one bounded Train thesis from baseline to configured stop: find or falsify the
 simplest causal candidate that survives the Train gates and is worth Season's
 downstream OOS, paper, and small-live review.
@@ -32,9 +36,10 @@ weak.
 
 ## Setup
 
-If this is a new thesis or reseed, follow `new-strategy.md` before running the
-first baseline. That guide owns mandate intake, protocol recommendation, Season
-approval, lifecycle reset, and first-baseline preflight.
+If this is a new thesis or reseed, invoke the `new-thesis-setup` skill
+(`/new-thesis-setup`) before running the first baseline. That skill owns mandate
+intake, protocol recommendation, Season approval, lifecycle reset, and
+first-baseline preflight.
 
 After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
 Ordinary Train iteration uses only:
@@ -95,7 +100,10 @@ Ordinary loop edits are:
   `timestamp` is bar/event time, not proof that the row was tradable knowledge.
   Keep `as_of_time <= decision_time` and declare observations for data the
   decision depends on.
-- `experiment.toml`: bounded `[params]` within existing bounds.
+- `experiment.toml`: the bounded `[params]` and their `[bounds.*]` search ranges.
+  You own this search space: set each bound to the range the thesis needs tested,
+  and widen or tighten it as the mechanism demands. The bounds are a research
+  tool, not a frozen wall.
 - `rationale.md`: thesis, components, diagnostics, failure modes, and lessons.
 
 `protocol.toml` owns the current Train window, data kind, costs, fills, capacity
@@ -137,9 +145,27 @@ A target book is a standing portfolio, not a stream of trade tickets.
 - Optimize shape, not magnitude: upstream sizes the book, so a global magnitude
   knob is washed out and is not a degree of freedom to search. The score rewards
   the deployed money the *shape* earns at the upstream-sized book; improve the
-  edge's shape, breadth, and robustness, not a scale multiplier.
+  edge's shape, breadth, and robustness, not a scale multiplier. Leverage is
+  magnitude too: it scales return and risk together without changing the edge, so
+  levering up flatters the money score without improving the alpha — it is not a
+  knob you turn. If a different leverage budget is genuinely right, that is a
+  reseed case for Season, not a mid-run change.
 - If capacity, financing, or execution cannot be priced by the engine, record the
   limitation instead of hiding it in strategy code.
+
+When feasibility is the binding constraint — capacity, participation, or
+deployable scale — treat it as part of the alpha problem, not a wall to route
+around. The strategy-owned moves that relieve it are real research: spread
+turnover across bars so no single decision minute pins participation, hold longer
+and rebalance less so the same edge deploys more notional per unit of impact,
+concentrate where the signal is strongest rather than diluting breadth, and
+reshape allocation to fit the capacity profile. This reshaping is the work of the
+loop, not a reason to pause it: keep iterating until a configured stop rule fires,
+and never stop on your own to declare the envelope binding. Exhaust these moves
+honestly; only a wall that survives genuine reshaping — shown by decomposing the
+failure into edge quality (net bps/trade, profit factor), which capacity cap
+binds, and realized-versus-target scale — is evidence about the envelope, written
+into the reseed case only at stop.
 
 ### Quant Research Standard
 
@@ -173,10 +199,12 @@ trusting the next result: check timestamp ordering, available fields, fill
 assumptions, state updates, and hidden reads from artifacts, results, or
 diagnostics.
 
-Do not default to parameter sweeps. A parameter change is valid only when it
-better expresses the mechanism, aligns the signal with a plausible market
-horizon, or fixes a diagnosed failure. More attempts should mean more distinct
-research, not more boundary polishing.
+A parameter sweep that tests a real edge hypothesis is legitimate research: sweep
+a bound when it better expresses the mechanism, aligns the signal with a plausible
+market horizon, fixes a diagnosed failure, or relieves a feasibility constraint.
+What is not research is aimless boundary-polishing — nudging a bound only to
+flatter the in-sample score with no mechanism behind the move. More attempts
+should mean more distinct research, not more polishing.
 
 Simplicity wins ties. A small score improvement with ugly symbol/time exceptions
 is probably overfit. Removing code, params, or conditions while keeping equal or
@@ -270,3 +298,10 @@ baseline grace window.
 At stop, report the frozen Train survivor or say the thesis died on Train.
 A Train survivor is not a promotion signal; it is only a candidate for downstream
 OOS, paper, and small-live review.
+
+A reseed recommendation is a third honest outcome, reached through the stop rules,
+never instead of them. When the loop stops and the attempts show the binding
+constraint is the protocol envelope itself — universe, notional, leverage budget,
+capacity, or a gate — not the edge, say so and write a concrete, evidence-backed
+reseed case in `rationale.md`. It does not change the protocol or the run; Season
+decides whether to reseed.

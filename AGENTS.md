@@ -13,6 +13,25 @@ thesis — sharpen it, test it, learn why it fails, or kill it fast.
 For Train experiments, follow `program.md`; it is the authoritative runbook for
 setup, editable surface, evidence boundaries, loop behavior, and stop behavior.
 
+## Upstream Consumer Docs
+
+When a task depends on upstream contracts, read the relevant consumer docs before
+changing code, configs, or active docs here.
+
+- For `quant_strategies` runner, validation, evaluation, target-book, risk-budget,
+  artifact, or result semantics, start with
+  `/Users/Season_Yang/Personal/quant_strategies/docs/consumer/README.md`, then read
+  `integration.md`, `reference.md`, or `usage-guide.md` as needed.
+- For `quant_data` data availability, readiness windows, symbol lists, row fields,
+  `available_at`, loader behavior, caveats, or generated readiness artifacts, start
+  with `/Users/Season_Yang/Personal/quant-data/docs/consumer/README.md`, then read
+  `usage-guide.md`, `readiness.md`, `data-inventory.md`, `reference.md`, or
+  `readiness-snapshot.md` as needed.
+
+Use those docs as the upstream consumer contract. Do not infer upstream behavior
+from this repo, generated Train artifacts, or private upstream implementation
+details.
+
 ## Research Rules
 
 - Be bold about strategy research and conservative about evidence.

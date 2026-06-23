@@ -41,6 +41,10 @@ If this is a new thesis or reseed, invoke the `new-thesis-setup` skill
 intake, protocol recommendation, Season approval, lifecycle reset, and
 first-baseline preflight.
 
+Setup also declares the bounded search space: set `experiment.toml` `[bounds.*]`
+to the ranges the thesis needs tested, not pinned to the baseline point. Bounds
+pinned at `min == max` leave the loop nothing to search.
+
 After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
 Ordinary Train iteration uses only:
 
@@ -112,6 +116,15 @@ costs, fills, capacity, leverage budget, objective, gate thresholds, plateau
 patience, max iterations, subwindows, or improvement thresholds from strategy
 code. If those assumptions need to change, Season changes the protocol before the
 thesis starts or explicitly approves the change.
+
+The thesis identity frozen for the lifecycle is the mechanism, the falsifier, and
+the `protocol.toml` evaluation (data, costs, fills, capacity, leverage budget,
+objective, gates, stop rules). That identity is what makes attempts comparable.
+The `experiment.toml` search space is not part of it: bounds and params are yours
+to set and revise mid-run. Multiple-testing honesty comes from the hard attempt
+cap and the per-attempt score deflation, which price best-of-N regardless of how
+wide the search space is — so widening or tightening a bound is an ordinary loop
+edit, not a reseed.
 
 Build within the operator-frozen leverage budget and capacity model; intended
 exposure beyond the budget fails closed upstream (see Target Book Rules).
@@ -226,6 +239,12 @@ conda run -n quant python -m loop climb \
 appends one row to `results.tsv`, and prints the latest result fields as
 parseable key/value lines. Read the printed summary and the attempt's
 `run_card.json`.
+
+`--mechanism` and `--falsifier` carry the frozen thesis identity, not the
+per-attempt idea: pass the same text verbatim on every attempt. The harness
+matches them against the thesis lock and refuses a changed identity. Put the
+per-attempt hypothesis — why this specific edit should make money and what would
+kill it — in `rationale.md`.
 
 ## Logging Results
 

@@ -45,6 +45,8 @@ class GateConfig:
     min_cost_stress_return_retention: float
     max_abs_drawdown: float
     min_annualized_return: float
+    min_subwindow_return: float
+    max_subwindows_below_floor: int
     score_haircut_se: float
     max_components: int
     max_params: int
@@ -188,6 +190,19 @@ def evaluate_gates(
             and isfinite(money_floor_value)
             and money_floor_value >= config.min_annualized_return
         )
+        subwindow_returns = objective.window_returns[1:]
+        # A non-finite or below-floor subwindow counts as a miss; tolerate up to
+        # max_subwindows_below_floor of them so one unlucky short window does not
+        # kill an otherwise-consistent edge (short-window returns are noisy).
+        subwindows_below_floor = sum(
+            1
+            for value in subwindow_returns
+            if not (isfinite(value) and value >= config.min_subwindow_return)
+        )
+        subwindow_consistency_passed = (
+            len(subwindow_returns) == config.subwindows
+            and subwindows_below_floor <= config.max_subwindows_below_floor
+        )
         realistic_full_return = objective.full_train_return
         retention_binding = (
             realistic_full_return is not None
@@ -235,7 +250,18 @@ def evaluate_gates(
                     passed=money_floor_passed,
                     value=money_floor_value,
                     threshold=config.min_annualized_return,
-                    detail=f"k_accept={config.score_haircut_se}",
+                    detail=f"k_accept={config.score_haircut_se}, full_train",
+                ),
+                GateOutcome(
+                    name="subwindow_consistency",
+                    passed=subwindow_consistency_passed,
+                    value=float(subwindows_below_floor),
+                    threshold=float(config.max_subwindows_below_floor),
+                    detail=(
+                        f"below_floor={subwindows_below_floor}/"
+                        f"{len(subwindow_returns)} at "
+                        f"min_subwindow_return={config.min_subwindow_return}"
+                    ),
                 ),
                 GateOutcome(
                     name="cost_stress_retention",

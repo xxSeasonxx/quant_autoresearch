@@ -541,11 +541,24 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "min_annualized_return"),
                 name="gates.min_annualized_return",
             ),
-            # Acceptance haircut k_accept for the deflated money floor. Set it to
-            # the multiple-testing correction for the best-of-N search,
-            # ~sqrt(2 * ln N_attempts) (~2.8 at N=50). It is explicit, not derived
-            # from loop.max_iterations, so changing the loop budget never silently
-            # moves the acceptance bar.
+            # Per-subwindow deployed-return floor (un-haircut); a subwindow below it
+            # is a losing regime slice. Defaults to 0.0 when a protocol omits it.
+            min_subwindow_return=_floating(
+                raw_gates.get("min_subwindow_return", 0.0),
+                name="gates.min_subwindow_return",
+            ),
+            # How many subwindows may fall below min_subwindow_return before
+            # subwindow_consistency fails. Tolerates short-window noise (one unlucky
+            # slice) while still rejecting systematic regime fragility. Default 1.
+            max_subwindows_below_floor=_nonnegative_int(
+                raw_gates.get("max_subwindows_below_floor", 1),
+                name="gates.max_subwindows_below_floor",
+            ),
+            # Acceptance haircut k_accept for the deflated full-Train money floor.
+            # A deliberate value credited to the separate subwindow_consistency
+            # gate, which carries part of the multiple-testing load; it sits below
+            # the best-of-N bound ~sqrt(2 * ln N) (~2.8 at N=50) but above the noise
+            # floor. Explicit, not derived from loop.max_iterations.
             score_haircut_se=_positive_float(
                 _required(raw_gates, "score_haircut_se"),
                 name="gates.score_haircut_se",

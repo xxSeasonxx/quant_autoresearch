@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from math import isfinite, log, sqrt
+from math import isfinite, sqrt
 from pathlib import Path
 from typing import Any, Mapping, cast
 import hashlib
@@ -392,6 +392,81 @@ def _approval_checklist() -> list[str]:
     ]
 
 
+def _train_years(start: object, end: object) -> float | None:
+    if not (isinstance(start, str) and isinstance(end, str)):
+        return None
+    try:
+        d0 = datetime.fromisoformat(start)
+        d1 = datetime.fromisoformat(end)
+    except ValueError:
+        return None
+    days = (d1 - d0).days
+    return days / 365.25 if days > 0 else None
+
+
+def _feasibility_rows(recommended: Mapping[str, Any]) -> list[dict[str, object]]:
+    """Annualized Sharpe needed to clear the deflated money floor.
+
+    From `R - k*SE >= T` with best-case dense sampling (effective years ~= calendar
+    years): `S_ann >= k/sqrt(Y) + T/sigma`. The full-Train row is the active gate;
+    the per-subwindow row is informational (per-window deflation is not used).
+    """
+
+    gates = recommended.get("gates", {})
+    objective = recommended.get("objective", {})
+    risk = recommended.get("risk_budget", {})
+    data = recommended.get("data", {})
+    k = gates.get("score_haircut_se")
+    floor = gates.get("min_annualized_return")
+    subwindows = objective.get("subwindows")
+    target_vol = risk.get("target_volatility")
+    years = _train_years(data.get("start"), data.get("end"))
+    if not (
+        isinstance(k, (int, float))
+        and isinstance(floor, (int, float))
+        and isinstance(subwindows, int)
+        and isinstance(target_vol, (int, float))
+        and years is not None
+        and target_vol > 0.0
+        and subwindows > 0
+    ):
+        return []
+    rows: list[dict[str, object]] = []
+    full = k / sqrt(years) + floor / target_vol
+    rows.append(
+        {
+            "window": "money_floor (full_train, active)",
+            "years": round(years, 3),
+            "required_sharpe": round(full, 2),
+        }
+    )
+    sub_years = years / subwindows
+    per_sub = k / sqrt(sub_years) + floor / target_vol
+    rows.append(
+        {
+            "window": "per-subwindow deflation (reference, not used)",
+            "years": round(sub_years, 3),
+            "required_sharpe": round(per_sub, 2),
+        }
+    )
+    return rows
+
+
+def _feasibility_warning(rows: list[dict[str, object]]) -> str | None:
+    active = next((row for row in rows if "active" in str(row["window"])), None)
+    if active is None:
+        return None
+    required = active["required_sharpe"]
+    if isinstance(required, (int, float)) and required > 4.0:
+        return (
+            f"Feasibility: clearing the money floor needs annualized Sharpe ~{required} "
+            "(best-case, dense sampling; a held book needs more). That is implausibly "
+            "high — lower gates.min_annualized_return or gates.score_haircut_se, "
+            "lengthen the Train window, or expect no survivor."
+        )
+    return None
+
+
 def _proposal_payload_without_hash(
     *,
     created_at: str,
@@ -400,7 +475,10 @@ def _proposal_payload_without_hash(
     brief: StrategyBrief,
     current: ProtocolConfig,
 ) -> dict[str, object]:
-    score_haircut = round(sqrt(2.0 * log(brief.max_iterations)), 2)
+    # Deliberate acceptance haircut for the deflated full-Train money floor,
+    # credited to the separate subwindow_consistency gate. Below the best-of-N
+    # bound ~sqrt(2*ln(max_iterations)) but above the noise floor.
+    score_haircut = 2.0
     current_protocol: dict[str, dict[str, object]] = {
         "data": {
             "kind": current.data.kind,
@@ -450,6 +528,8 @@ def _proposal_payload_without_hash(
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
             "min_annualized_return": current.gates.min_annualized_return,
+            "min_subwindow_return": current.gates.min_subwindow_return,
+            "max_subwindows_below_floor": current.gates.max_subwindows_below_floor,
             "score_haircut_se": current.gates.score_haircut_se,
             "max_components": current.gates.max_components,
             "max_params": current.gates.max_params,
@@ -504,6 +584,8 @@ def _proposal_payload_without_hash(
             "min_cost_stress_return_retention": brief.min_cost_stress_return_retention,
             "max_abs_drawdown": brief.max_abs_drawdown,
             "min_annualized_return": brief.min_annualized_return,
+            "min_subwindow_return": 0.0,
+            "max_subwindows_below_floor": 1,
             "score_haircut_se": score_haircut,
             "max_components": brief.max_components,
             "max_params": brief.max_params,
@@ -520,6 +602,9 @@ def _proposal_payload_without_hash(
         )
     if current.output.causality_check != "micro":
         warnings.append("Current protocol causality is not micro; the proposal keeps Train causality bounded on micro.")
+    feasibility_warning = _feasibility_warning(_feasibility_rows(recommended_protocol))
+    if feasibility_warning is not None:
+        warnings.append(feasibility_warning)
     return {
         "schema_version": 1,
         "created_at": created_at,
@@ -581,8 +666,10 @@ def _proposal_payload_without_hash(
             "gates.max_symbol_concentration": "Set the maximum allowed one-symbol dependence for the claim.",
             "gates.min_cost_stress_return_retention": "Set the minimum cost-stress robustness requirement.",
             "gates.max_abs_drawdown": "Map the maximum tolerable drawdown directly into the path-risk gate.",
-            "gates.min_annualized_return": "Map the minimum annualized return directly into the deflated money floor.",
-            "gates.score_haircut_se": "Derive as round(sqrt(2 * ln(max_iterations)), 2) for the approved attempt budget.",
+            "gates.min_annualized_return": "Map the minimum annualized return directly into the deflated full-Train money floor.",
+            "gates.min_subwindow_return": "Per-subwindow deployed-return floor for the subwindow_consistency gate; a subwindow below it counts as a losing regime slice.",
+            "gates.max_subwindows_below_floor": "How many subwindows may fall below the floor before subwindow_consistency fails; tolerates short-window noise while rejecting systematic regime fragility.",
+            "gates.score_haircut_se": "Deliberate acceptance haircut credited to the subwindow_consistency gate; below sqrt(2 * ln(max_iterations)) but above the noise floor.",
             "gates.max_components": "Set the maximum signal-component complexity allowed in rationale.md.",
             "gates.max_params": "Set the maximum bounded-parameter complexity allowed in experiment.toml.",
         },
@@ -649,6 +736,22 @@ def _proposal_markdown(proposal: ProtocolProposal) -> str:
     checklist_items = cast(list[str], proposal.approval["checklist"])
     checklist = "\n".join(f"- [ ] {item}" for item in checklist_items)
     warnings = "\n".join(f"- {item}" for item in proposal.warnings)
+    feasibility_rows = _feasibility_rows(recommended)
+    feasibility_section = ""
+    if feasibility_rows:
+        feasibility_lines = "\n".join(
+            f"| {row['window']} | {row['years']} | {row['required_sharpe']} |"
+            for row in feasibility_rows
+        )
+        feasibility_section = (
+            "\n## Feasibility\n\n"
+            "Annualized Sharpe needed to clear the money floor (best-case dense "
+            "sampling; a held book needs more). The full_train row is the active "
+            "gate; the per-subwindow row shows why per-window deflation is not used.\n\n"
+            "| Window | Years | Required Sharpe |\n"
+            "| --- | --- | --- |\n"
+            f"{feasibility_lines}\n"
+        )
     thesis = proposal.thesis
     universe_hash = thesis.get("universe_resolver_sha256")
     universe_section = ""
@@ -675,7 +778,7 @@ def _proposal_markdown(proposal: ProtocolProposal) -> str:
 | Protocol field | Current value | Recommended value | Reason |
 | --- | --- | --- | --- |
 {chr(10).join(rows)}
-
+{feasibility_section}
 ## Warnings
 
 {warnings}

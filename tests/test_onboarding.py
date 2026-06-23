@@ -224,7 +224,9 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert recommended["loop"]["plateau_patience"] == 30
     assert recommended["loop"]["min_abs_improvement"] == 0.002
     assert recommended["loop"]["min_rel_improvement"] == 0.01
-    assert recommended["gates"]["score_haircut_se"] == 2.8
+    assert recommended["gates"]["score_haircut_se"] == 2.0
+    assert recommended["gates"]["min_subwindow_return"] == 0.0
+    assert recommended["gates"]["max_subwindows_below_floor"] == 1
     assert recommended["risk_budget"]["target_volatility"] == 0.18
     assert recommended["leverage_budget"]["max_gross_exposure"] == 1.5
     assert recommended["gates"]["max_abs_drawdown"] == 0.22
@@ -421,9 +423,10 @@ def test_propose_protocol_writes_artifacts_without_mutating_protocol(tmp_path: P
     payload = json.loads(out.read_text())
     assert payload["proposal_sha256"] == proposal.proposal_sha256
     assert payload["current_protocol"]["risk_budget"]["target_volatility"] == 0.15
-    assert payload["recommended_protocol"]["gates"]["score_haircut_se"] == 2.8
+    assert payload["recommended_protocol"]["gates"]["score_haircut_se"] == 2.0
     markdown = out.with_suffix(".md").read_text()
     assert "| Protocol field | Current value | Recommended value | Reason |" in markdown
+    assert "## Feasibility" in markdown
     assert "Approval Checklist" in markdown
 
 

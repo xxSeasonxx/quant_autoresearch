@@ -257,6 +257,8 @@ def _gate_config() -> GateConfig:
         min_cost_stress_return_retention=0.5,
         max_abs_drawdown=0.2,
         min_annualized_return=0.10,
+        min_subwindow_return=0.0,
+        max_subwindows_below_floor=1,
         score_haircut_se=2.8,
         max_components=3,
         max_params=10,
@@ -427,18 +429,18 @@ def test_acceptance_haircut_is_independent_of_max_iterations(tmp_path: Path):
 # --- money score -----------------------------------------------------------
 
 
-def test_score_is_weakest_window_lcb_at_k_rank_one():
+def test_score_is_full_train_lcb_at_k_rank_one():
     result = score_objective((), _config(), foundation=_foundation())
 
-    expected = _lcb(0.0009, 0.0010, 120.0, k=1.0)  # train_2 binds
+    expected = _lcb(0.0012, 0.0010, 120.0, k=1.0)  # full_train binds the score
     assert result.score == expected
-    assert result.worst_window_id == "train_2"
+    assert result.worst_window_id == "full_train"
     assert result.full_train_return == 0.0012 * _P
-    assert result.worst_window_return == 0.0009 * _P
+    assert result.worst_window_return == 0.0012 * _P
     assert result.subwindow_trade_counts == (20, 12, 20)
 
 
-def test_worst_window_return_matches_lcb_binding_window_not_lowest_point_return():
+def test_score_binds_on_full_train_not_a_subwindow():
     high_variance_window = _metric(
         "train_2",
         mean_return=0.0020,
@@ -466,8 +468,9 @@ def test_worst_window_return_matches_lcb_binding_window_not_lowest_point_return(
 
     result = score_objective((), _config(), foundation=foundation)
 
-    assert result.worst_window_id == "train_2"
-    assert result.worst_window_return == 0.0020 * _P
+    assert result.worst_window_id == "full_train"
+    assert result.worst_window_return == 0.0030 * _P
+    assert result.score == _lcb(0.0030, 0.0010, 120.0, k=1.0)
     assert min(result.window_returns) == 0.0010 * _P
 
 
@@ -653,7 +656,60 @@ def test_failed_gate_does_not_change_score():
     foundation = _foundation()
     objective, _, gates = _evaluate(foundation, causality_admissible=False)
     assert not gates.passed
-    assert objective.score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
+    assert objective.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
+
+
+def test_subwindow_consistency_gate_tolerates_one_losing_subwindow():
+    # One subwindow below the floor is within tolerance (default 1) and passes;
+    # the full-Train money floor is unaffected by a single losing slice.
+    foundation = _foundation(full_train_mean=0.0012, worst_subwindow_mean=-0.0005)
+    _, _, gates = _evaluate(foundation)
+    assert gates.by_name["money_floor"].passed
+    assert gates.by_name["subwindow_consistency"].passed
+
+
+def test_subwindow_consistency_gate_fails_on_two_losing_subwindows():
+    # Two subwindows below the floor exceed the tolerance — systematic regime
+    # fragility — so consistency fails even though the full-Train floor clears.
+    base = _foundation(full_train_mean=0.0012, worst_subwindow_mean=-0.0005)
+    two_negative = replace(
+        base,
+        realistic_costs=replace(
+            base.realistic_costs,
+            subwindows=(
+                replace(base.realistic_costs.subwindows[0], mean_return=-0.0005),
+                base.realistic_costs.subwindows[1],
+                base.realistic_costs.subwindows[2],
+            ),
+        ),
+    )
+    _, _, gates = _evaluate(two_negative)
+    assert gates.by_name["money_floor"].passed
+    assert not gates.by_name["subwindow_consistency"].passed
+    assert not gates.passed
+
+
+def test_subwindow_consistency_gate_passes_when_all_subwindows_positive():
+    _, _, gates = _evaluate(_foundation())
+    assert gates.by_name["subwindow_consistency"].passed
+
+
+def test_subwindow_consistency_gate_fails_when_non_scoreable():
+    # A non-scoreable objective (no window returns) must fail consistency, not pass
+    # vacuously.
+    base = _foundation()
+    non_scoreable = replace(
+        base,
+        realistic_costs=replace(
+            base.realistic_costs,
+            full_train=replace(
+                base.realistic_costs.full_train, effective_sample_size=0.0
+            ),
+        ),
+    )
+    objective, _, gates = _evaluate(non_scoreable)
+    assert objective.window_returns == ()
+    assert not gates.by_name["subwindow_consistency"].passed
 
 
 def test_breadth_gate_fails_when_foundation_concentration_missing():
@@ -848,11 +904,11 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     run_card = tmp_path / "results/autoresearch/attempt-0001/run_card.json"
 
     assert outcome.status == "keep"
-    assert rows[0].score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
-    assert rows[0].worst_window_id == "train_2"
-    assert rows[0].deflated_money_floor == _lcb(0.0009, 0.0010, 120.0, k=2.8)
+    assert rows[0].score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
+    assert rows[0].worst_window_id == "full_train"
+    assert rows[0].deflated_money_floor == _lcb(0.0012, 0.0010, 120.0, k=2.8)
     assert rows[0].full_train_annualized_return == 0.0012 * _P
-    assert rows[0].worst_window_annualized_return == 0.0009 * _P
+    assert rows[0].worst_window_annualized_return == 0.0012 * _P
     assert rows[0].book_scale == 1.5
     assert rows[0].capacity_bound is False
     assert rows[0].full_train_psr is not None
@@ -861,8 +917,10 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert rows[0].cost_return_sum == 0.004
 
     payload = json.loads(run_card.read_text())
-    assert payload["score_parts"]["worst_window_id"] == "train_2"
+    assert payload["score_parts"]["worst_window_id"] == "full_train"
     assert len(payload["score_parts"]["windows"]) == 4
+    assert payload["score_parts"]["windows"][0]["t_stat"] is not None
+    assert "money_floor_gap" not in payload["score_parts"]["windows"][0]
     assert payload["sizing_report"]["annualization_periods_per_year"] == _P
     realistic = payload["foundation"]["realistic_costs"]
     assert realistic["full_train"]["mean_return"] == 0.0012
@@ -896,7 +954,7 @@ def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_p
 
     row = read_results(tmp_path / "results.tsv")[0]
     assert outcome.status == "keep"
-    assert row.score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
+    assert row.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
     assert row.trade_count == 20
     assert row.win_rate is None
 
@@ -931,7 +989,7 @@ def test_run_iteration_discards_when_causality_not_admissible(tmp_path: Path):
     )
     assert outcome.status == "discard"
     assert "causality=fail" in row.gate_flags
-    assert row.score == _lcb(0.0009, 0.0010, 120.0, k=1.0)
+    assert row.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
     assert run_card["causality"]["admissible"] is False
     assert run_card["causality"]["verified"] is False
     assert run_card["primary_failure_mode"] == "causality"

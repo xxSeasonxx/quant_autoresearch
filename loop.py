@@ -24,7 +24,6 @@ from objective import (
     score_objective,
 )
 from protocol import (
-    ExperimentConfig,
     ProtocolConfig,
     load_experiment,
     load_protocol,
@@ -167,15 +166,6 @@ def _normalize_thesis_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _bounds_sha256(experiment: ExperimentConfig) -> str:
-    payload = {
-        name: {"min": bound.min, "max": bound.max}
-        for name, bound in sorted(experiment.bounds.items())
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _lock_path(root: Path) -> Path:
     return root / ".autoresearch" / "thesis_lock.json"
 
@@ -197,7 +187,6 @@ def _ensure_active_thesis_lock(
     mechanism: str,
     falsifier: str,
     protocol_sha256: str,
-    bounds_sha256: str,
     results_path: str | Path,
 ) -> None:
     lock_path = _lock_path(root)
@@ -215,7 +204,6 @@ def _ensure_active_thesis_lock(
             "mechanism": normalized_mechanism,
             "falsifier": normalized_falsifier,
             "protocol_sha256": protocol_sha256,
-            "bounds_sha256": bounds_sha256,
             "results_path": result_path_text,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -231,8 +219,6 @@ def _ensure_active_thesis_lock(
         raise ValueError("active thesis identity changed; start a new thesis lifecycle")
     if payload.get("protocol_sha256") != protocol_sha256:
         raise ValueError("active thesis protocol changed; start a new thesis lifecycle")
-    if payload.get("bounds_sha256") != bounds_sha256:
-        raise ValueError("active thesis bounds changed; start a new thesis lifecycle")
     if payload.get("results_path") != result_path_text:
         raise ValueError("active thesis results path changed; start a new thesis lifecycle")
 
@@ -668,18 +654,22 @@ def _sizing_payload(foundation: FoundationEvidence | None) -> dict[str, object] 
 def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, object]]:
     if objective is None:
         return []
-    return [
-        {
-            "window_id": window_id,
-            "annualized_return": annualized,
-            "standard_error": standard_error,
-        }
-        for window_id, annualized, standard_error in zip(
-            objective.window_ids,
-            objective.window_returns,
-            objective.window_return_ses,
+    payload: list[dict[str, object]] = []
+    for window_id, annualized, standard_error in zip(
+        objective.window_ids,
+        objective.window_returns,
+        objective.window_return_ses,
+    ):
+        t_stat = annualized / standard_error if standard_error else None
+        payload.append(
+            {
+                "window_id": window_id,
+                "annualized_return": annualized,
+                "standard_error": standard_error,
+                "t_stat": t_stat,
+            }
         )
-    ]
+    return payload
 
 
 def _causality_admissible(result: object) -> bool | None:
@@ -1349,7 +1339,6 @@ def climb_once(
         mechanism=mechanism,
         falsifier=falsifier,
         protocol_sha256=snapshot["protocol_sha256"],
-        bounds_sha256=_bounds_sha256(experiment),
         results_path=results_path,
     )
     params = experiment.params

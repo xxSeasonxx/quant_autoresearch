@@ -153,7 +153,7 @@ class TradeSample:
 class ObjectiveResult:
     """Result of objective scoring.
 
-    `score` is the weakest-window deployed-return lower bound at `k_rank`, `None`
+    `score` is the full-Train deployed-return lower bound at `k_rank`, `None`
     when any window cannot yield a lower bound (the run is non-scoreable).
     `feasible` only means the objective math produced a score; it does not mean
     all strategy gates passed. `worst_window_return` is the point return for the
@@ -170,6 +170,7 @@ class ObjectiveResult:
     window_returns: tuple[float, ...] = ()
     window_return_ses: tuple[float, ...] = ()
     full_train_return: float | None = None
+    full_train_return_se: float | None = None
     worst_window_return: float | None = None
     detail: str = ""
     full_train_psr: float | None = None
@@ -260,6 +261,7 @@ def _score_foundation_scenario(
 
     full_parts = _window_return_se(scenario.full_train, periods_per_year=periods_per_year)
     full_train_return = None if full_parts is None else full_parts[0]
+    full_train_return_se = None if full_parts is None else full_parts[1]
 
     window_ids: list[str] = []
     window_returns: list[float] = []
@@ -282,21 +284,22 @@ def _score_foundation_scenario(
         window_returns.append(parts[0])
         window_return_ses.append(parts[1])
 
-    lcbs = [
-        annualized - _K_RANK * standard_error
-        for annualized, standard_error in zip(window_returns, window_return_ses)
-    ]
-    worst_index = min(range(len(lcbs)), key=lambda index: lcbs[index])
+    # Full-Train deployed-return lower bound is the run score and the money-floor
+    # input (full_train is index 0). Subwindow robustness is enforced separately by
+    # the subwindow_consistency gate, so neither the score nor the floor binds on
+    # the noisiest short subwindow.
+    score = window_returns[0] - _K_RANK * window_return_ses[0]
     return ObjectiveResult(
-        score=lcbs[worst_index],
+        score=score,
         feasible=True,
         subwindow_trade_counts=counts,
-        worst_window_id=window_ids[worst_index],
+        worst_window_id=window_ids[0],
         window_ids=tuple(window_ids),
         window_returns=tuple(window_returns),
         window_return_ses=tuple(window_return_ses),
         full_train_return=full_train_return,
-        worst_window_return=window_returns[worst_index],
+        full_train_return_se=full_train_return_se,
+        worst_window_return=window_returns[0],
         full_train_psr=full_psr,
         subwindow_psrs=subwindow_psrs,
         worst_subwindow_psr=worst_subwindow_psr,
@@ -307,20 +310,21 @@ def _score_foundation_scenario(
 def deflated_window_floor(
     objective: ObjectiveResult, *, k_accept: float
 ) -> float | None:
-    """Weakest-window deployed-return lower bound at the acceptance haircut.
+    """Full-Train deployed-return lower bound at the acceptance haircut.
 
-    Reuses the objective's per-window `R_w`/`SE_w`; only the haircut multiple
-    differs from the run score. `None` when the run is non-scoreable.
+    Reuses the objective's full-Train `R`/`SE`; only the haircut multiple differs
+    from the run score. `None` when the run is non-scoreable. Subwindow robustness
+    is enforced separately by the `subwindow_consistency` gate.
     """
 
-    if not objective.window_returns:
+    if objective.full_train_return is None or objective.full_train_return_se is None:
         return None
-    return min(
-        annualized - k_accept * standard_error
-        for annualized, standard_error in zip(
-            objective.window_returns, objective.window_return_ses
-        )
-    )
+    if not (
+        isfinite(objective.full_train_return)
+        and isfinite(objective.full_train_return_se)
+    ):
+        return None
+    return objective.full_train_return - k_accept * objective.full_train_return_se
 
 
 def score_foundation_cost_stress(

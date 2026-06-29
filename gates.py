@@ -17,8 +17,16 @@ gates are:
   micro replay can be admissible for Train scoring without being retention-
   verified for downstream deployment review.
 
-The remaining gates (trade floor, subwindow coverage, minimum evidence, path
-risk, breadth, complexity cap) constrain the evidence behind the score.
+The remaining gates (trade floor, minimum evidence, path risk, breadth,
+complexity cap) constrain the evidence behind the score.
+
+Per-subwindow trade counts and per-slice returns are reported diagnostics, not
+gates: per-window sample sufficiency is owned by ``minimum_evidence`` (return
+samples and effective sample size, the latter autocorrelation-adjusted), and the
+binding in-sample robustness gate is the full-Train deflated ``money_floor``.
+Per-slice return sign on contiguous, autocorrelated calendar slices is not gated
+— it cannot test regime independence (the firewalled OOS stage does that) and
+double-counts the full-Train deflation.
 """
 
 from __future__ import annotations
@@ -38,19 +46,15 @@ from objective import (
 @dataclass(frozen=True)
 class GateConfig:
     min_trades: int
-    min_trades_per_subwindow: int
     min_return_sample_count: int
     min_effective_sample_size: float
     max_symbol_concentration: float
     min_cost_stress_return_retention: float
     max_abs_drawdown: float
     min_annualized_return: float
-    min_subwindow_return: float
-    max_subwindows_below_floor: int
     score_haircut_se: float
     max_components: int
     max_params: int
-    subwindows: int
 
 
 @dataclass(frozen=True)
@@ -127,31 +131,12 @@ def evaluate_gates(
     component_count = len(tuple(components))
     param_count = len(dict(params))
     complexity_value = max(component_count, param_count)
-    subwindow_trade_counts = objective.subwindow_trade_counts
-    min_subwindow_count = min(subwindow_trade_counts, default=0)
     outcomes: list[GateOutcome] = [
         GateOutcome(
             name="trade_floor",
             passed=trade_count >= 0 and trade_count >= config.min_trades,
             value=float(trade_count),
             threshold=float(config.min_trades),
-        ),
-        GateOutcome(
-            name="subwindow_coverage",
-            passed=bool(subwindow_trade_counts)
-            and len(subwindow_trade_counts) == config.subwindows
-            and all(count >= 0 for count in subwindow_trade_counts)
-            and all(
-                count >= config.min_trades_per_subwindow
-                for count in subwindow_trade_counts
-            ),
-            value=float(min_subwindow_count),
-            threshold=float(config.min_trades_per_subwindow),
-            detail=(
-                "counts="
-                + ",".join(str(count) for count in subwindow_trade_counts)
-                + f", expected={config.subwindows}"
-            ),
         ),
     ]
     if foundation_scenario is not None:
@@ -189,19 +174,6 @@ def evaluate_gates(
             money_floor_value is not None
             and isfinite(money_floor_value)
             and money_floor_value >= config.min_annualized_return
-        )
-        subwindow_returns = objective.window_returns[1:]
-        # A non-finite or below-floor subwindow counts as a miss; tolerate up to
-        # max_subwindows_below_floor of them so one unlucky short window does not
-        # kill an otherwise-consistent edge (short-window returns are noisy).
-        subwindows_below_floor = sum(
-            1
-            for value in subwindow_returns
-            if not (isfinite(value) and value >= config.min_subwindow_return)
-        )
-        subwindow_consistency_passed = (
-            len(subwindow_returns) == config.subwindows
-            and subwindows_below_floor <= config.max_subwindows_below_floor
         )
         realistic_full_return = objective.full_train_return
         retention_binding = (
@@ -251,17 +223,6 @@ def evaluate_gates(
                     value=money_floor_value,
                     threshold=config.min_annualized_return,
                     detail=f"k_accept={config.score_haircut_se}, full_train",
-                ),
-                GateOutcome(
-                    name="subwindow_consistency",
-                    passed=subwindow_consistency_passed,
-                    value=float(subwindows_below_floor),
-                    threshold=float(config.max_subwindows_below_floor),
-                    detail=(
-                        f"below_floor={subwindows_below_floor}/"
-                        f"{len(subwindow_returns)} at "
-                        f"min_subwindow_return={config.min_subwindow_return}"
-                    ),
                 ),
                 GateOutcome(
                     name="cost_stress_retention",

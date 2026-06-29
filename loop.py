@@ -473,6 +473,7 @@ def _make_crash_row(
         avg_trade_net=None,
         cost_return_sum=None,
         complexity_count=max(len(params), len(tuple(components))),
+        failure_class="run_error",
         failure_reason=failure_reason,
         best_status="unchanged",
         continuation="terminal" if stop_reason else "repair_required",
@@ -548,6 +549,7 @@ def _scored_result_row(
         ),
         cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
         complexity_count=max(len(params), len(tuple(components))),
+        failure_class=_failure_class(gates, objective, sizing),
         failure_reason="",
         best_status=best_status,
         continuation=continuation,
@@ -740,12 +742,22 @@ def _feasibility_note(result: object) -> str:
     return f"{message} :: {'; '.join(parts)}"
 
 
-def _primary_failure_mode(
+def _failure_class(
     gates: GateSet | None,
     objective: ObjectiveResult | None,
+    sizing: FoundationSizing | None,
     *,
     error: str = "",
 ) -> str:
+    """Derived, human-legible reason an attempt is not a keeper (``edge`` if it is).
+
+    A pure post-hoc classifier over already-computed gate outcomes, the deflated
+    money-floor value, and the capacity verdict — it forks no gate logic. The
+    money-floor split is the key signal: a real, significant edge throttled by
+    capacity (``capacity_bound``) reads differently from no deployable edge
+    (``no_edge``). Precedence is most-fundamental first: measurement validity, then
+    the economic verdict, then breadth, then evidence, then any other failed gate.
+    """
     if "portfolio foundation" in error:
         return "foundation_unavailable"
     if error and objective is None and gates is None:
@@ -754,8 +766,31 @@ def _primary_failure_mode(
         return "score_unavailable"
     if gates is None:
         return ""
-    failed = [outcome.name for outcome in gates.outcomes if not outcome.passed]
-    return failed[0] if failed else ""
+    if gates.passed:
+        return "edge"
+    by_name = gates.by_name
+
+    def failed(name: str) -> bool:
+        outcome = by_name.get(name)
+        return outcome is not None and not outcome.passed
+
+    if failed("causality"):
+        return "causality"
+    if failed("money_floor"):
+        # The deflated full-Train floor already bakes in the k_accept haircut, so a
+        # value >= 0 is a statistically significant positive edge: the money floor
+        # then failed on deployable scale, not edge quality. Attribute that to
+        # capacity only when the book is actually capacity-throttled.
+        floor = by_name["money_floor"].value
+        significant = floor is not None and isfinite(floor) and floor >= 0.0
+        throttled = sizing is not None and sizing.capacity_bound is True
+        return "capacity_bound" if (significant and throttled) else "no_edge"
+    if failed("breadth"):
+        return "breadth_bound"
+    if failed("minimum_evidence"):
+        return "evidence_thin"
+    failed_names = [outcome.name for outcome in gates.outcomes if not outcome.passed]
+    return failed_names[0] if failed_names else "edge"
 
 
 def _write_run_card(
@@ -804,6 +839,16 @@ def _write_run_card(
                 if objective is None
                 else objective.worst_subwindow_id,
                 "cost_stress_score": None if cost_stress is None else cost_stress.score,
+                "subwindow_trade_counts": []
+                if objective is None
+                else list(objective.subwindow_trade_counts),
+                "subwindows_below_zero": None
+                if objective is None
+                else sum(
+                    1
+                    for value in objective.window_returns[1:]
+                    if not (isfinite(value) and value >= 0.0)
+                ),
             },
         },
         "sizing_report": _sizing_payload(foundation),
@@ -817,7 +862,12 @@ def _write_run_card(
             else _scenario_payload(foundation.cost_stress),
         },
         "causality": {} if result is None else _causality_payload(result),
-        "primary_failure_mode": _primary_failure_mode(gates, objective, error=error),
+        "failure_class": _failure_class(
+            gates,
+            objective,
+            None if foundation is None else foundation.sizing,
+            error=error,
+        ),
         "error": error,
         "warnings": list(warnings),
     }

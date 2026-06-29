@@ -269,7 +269,6 @@ class StrategyBrief:
     min_annualized_return: float
     objective_subwindows: int
     min_trades: int
-    min_trades_per_subwindow: int
     min_return_sample_count: int
     min_effective_sample_size: float
     max_symbol_concentration: float
@@ -329,7 +328,6 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         min_annualized_return=_finite_float(data, "min_annualized_return"),
         objective_subwindows=_positive_int(data, "objective_subwindows"),
         min_trades=_nonnegative_int(data, "min_trades"),
-        min_trades_per_subwindow=_nonnegative_int(data, "min_trades_per_subwindow"),
         min_return_sample_count=_nonnegative_int(data, "min_return_sample_count"),
         min_effective_sample_size=_nonnegative_float(
             data, "min_effective_sample_size"
@@ -475,8 +473,8 @@ def _proposal_payload_without_hash(
     brief: StrategyBrief,
     current: ProtocolConfig,
 ) -> dict[str, object]:
-    # Deliberate acceptance haircut for the deflated full-Train money floor,
-    # credited to the separate subwindow_consistency gate. Below the best-of-N
+    # Deliberate acceptance haircut for the deflated full-Train money floor — the
+    # multiple-testing correction for the best-of-N search. Below the best-of-N
     # bound ~sqrt(2*ln(max_iterations)) but above the noise floor.
     score_haircut = 2.0
     current_protocol: dict[str, dict[str, object]] = {
@@ -521,15 +519,12 @@ def _proposal_payload_without_hash(
         },
         "gates": {
             "min_trades": current.gates.min_trades,
-            "min_trades_per_subwindow": current.gates.min_trades_per_subwindow,
             "min_return_sample_count": current.gates.min_return_sample_count,
             "min_effective_sample_size": current.gates.min_effective_sample_size,
             "max_symbol_concentration": current.gates.max_symbol_concentration,
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
             "min_annualized_return": current.gates.min_annualized_return,
-            "min_subwindow_return": current.gates.min_subwindow_return,
-            "max_subwindows_below_floor": current.gates.max_subwindows_below_floor,
             "score_haircut_se": current.gates.score_haircut_se,
             "max_components": current.gates.max_components,
             "max_params": current.gates.max_params,
@@ -577,15 +572,12 @@ def _proposal_payload_without_hash(
         },
         "gates": {
             "min_trades": brief.min_trades,
-            "min_trades_per_subwindow": brief.min_trades_per_subwindow,
             "min_return_sample_count": brief.min_return_sample_count,
             "min_effective_sample_size": brief.min_effective_sample_size,
             "max_symbol_concentration": brief.max_symbol_concentration,
             "min_cost_stress_return_retention": brief.min_cost_stress_return_retention,
             "max_abs_drawdown": brief.max_abs_drawdown,
             "min_annualized_return": brief.min_annualized_return,
-            "min_subwindow_return": 0.0,
-            "max_subwindows_below_floor": 1,
             "score_haircut_se": score_haircut,
             "max_components": brief.max_components,
             "max_params": brief.max_params,
@@ -660,16 +652,13 @@ def _proposal_payload_without_hash(
             "loop.min_abs_improvement": "Set the minimum meaningful absolute score improvement before results exist.",
             "loop.min_rel_improvement": "Set the minimum meaningful relative score improvement before results exist.",
             "gates.min_trades": "Set the aggregate closed-trade evidence floor for the claim.",
-            "gates.min_trades_per_subwindow": "Set the per-slice closed-trade evidence floor for robustness.",
             "gates.min_return_sample_count": "Require enough portfolio-return observations in each scored window.",
             "gates.min_effective_sample_size": "Require enough autocorrelation-adjusted evidence in each scored window.",
             "gates.max_symbol_concentration": "Set the maximum allowed one-symbol dependence for the claim.",
             "gates.min_cost_stress_return_retention": "Set the minimum cost-stress robustness requirement.",
             "gates.max_abs_drawdown": "Map the maximum tolerable drawdown directly into the path-risk gate.",
             "gates.min_annualized_return": "Map the minimum annualized return directly into the deflated full-Train money floor.",
-            "gates.min_subwindow_return": "Per-subwindow deployed-return floor for the subwindow_consistency gate; a subwindow below it counts as a losing regime slice.",
-            "gates.max_subwindows_below_floor": "How many subwindows may fall below the floor before subwindow_consistency fails; tolerates short-window noise while rejecting systematic regime fragility.",
-            "gates.score_haircut_se": "Deliberate acceptance haircut credited to the subwindow_consistency gate; below sqrt(2 * ln(max_iterations)) but above the noise floor.",
+            "gates.score_haircut_se": "Deliberate acceptance haircut (best-of-N multiple-testing correction); below sqrt(2 * ln(max_iterations)) but above the noise floor.",
             "gates.max_components": "Set the maximum signal-component complexity allowed in rationale.md.",
             "gates.max_params": "Set the maximum bounded-parameter complexity allowed in experiment.toml.",
         },

@@ -10,7 +10,7 @@ from typing import Mapping
 
 import pytest
 
-from gates import GateConfig, evaluate_gates
+from gates import GateConfig, GateOutcome, GateSet, evaluate_gates
 import loop
 from loop import run_iteration
 from objective import (
@@ -19,6 +19,7 @@ from objective import (
     FoundationScenario,
     FoundationSizing,
     ObjectiveConfig,
+    ObjectiveResult,
     TradeSample,
     deflated_window_floor,
     score_foundation_cost_stress,
@@ -250,19 +251,15 @@ class FakeRunResult:
 def _gate_config() -> GateConfig:
     return GateConfig(
         min_trades=10,
-        min_trades_per_subwindow=3,
         min_return_sample_count=100,
         min_effective_sample_size=50.0,
         max_symbol_concentration=0.75,
         min_cost_stress_return_retention=0.5,
         max_abs_drawdown=0.2,
         min_annualized_return=0.10,
-        min_subwindow_return=0.0,
-        max_subwindows_below_floor=1,
         score_haircut_se=2.8,
         max_components=3,
         max_params=10,
-        subwindows=3,
     )
 
 
@@ -345,7 +342,6 @@ psr_hurdle_sharpe = 0.0
 
 [gates]
 min_trades = 10
-min_trades_per_subwindow = 3
 min_return_sample_count = 100
 min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
@@ -659,59 +655,6 @@ def test_failed_gate_does_not_change_score():
     assert objective.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
 
 
-def test_subwindow_consistency_gate_tolerates_one_losing_subwindow():
-    # One subwindow below the floor is within tolerance (default 1) and passes;
-    # the full-Train money floor is unaffected by a single losing slice.
-    foundation = _foundation(full_train_mean=0.0012, worst_subwindow_mean=-0.0005)
-    _, _, gates = _evaluate(foundation)
-    assert gates.by_name["money_floor"].passed
-    assert gates.by_name["subwindow_consistency"].passed
-
-
-def test_subwindow_consistency_gate_fails_on_two_losing_subwindows():
-    # Two subwindows below the floor exceed the tolerance — systematic regime
-    # fragility — so consistency fails even though the full-Train floor clears.
-    base = _foundation(full_train_mean=0.0012, worst_subwindow_mean=-0.0005)
-    two_negative = replace(
-        base,
-        realistic_costs=replace(
-            base.realistic_costs,
-            subwindows=(
-                replace(base.realistic_costs.subwindows[0], mean_return=-0.0005),
-                base.realistic_costs.subwindows[1],
-                base.realistic_costs.subwindows[2],
-            ),
-        ),
-    )
-    _, _, gates = _evaluate(two_negative)
-    assert gates.by_name["money_floor"].passed
-    assert not gates.by_name["subwindow_consistency"].passed
-    assert not gates.passed
-
-
-def test_subwindow_consistency_gate_passes_when_all_subwindows_positive():
-    _, _, gates = _evaluate(_foundation())
-    assert gates.by_name["subwindow_consistency"].passed
-
-
-def test_subwindow_consistency_gate_fails_when_non_scoreable():
-    # A non-scoreable objective (no window returns) must fail consistency, not pass
-    # vacuously.
-    base = _foundation()
-    non_scoreable = replace(
-        base,
-        realistic_costs=replace(
-            base.realistic_costs,
-            full_train=replace(
-                base.realistic_costs.full_train, effective_sample_size=0.0
-            ),
-        ),
-    )
-    objective, _, gates = _evaluate(non_scoreable)
-    assert objective.window_returns == ()
-    assert not gates.by_name["subwindow_consistency"].passed
-
-
 def test_breadth_gate_fails_when_foundation_concentration_missing():
     base = _foundation()
     foundation = replace(
@@ -761,6 +704,7 @@ def _row() -> ResultRow:
         avg_trade_net=0.001,
         cost_return_sum=0.02,
         complexity_count=1,
+        failure_class="edge",
         failure_reason="",
         best_status="updated",
         continuation="allowed",
@@ -928,7 +872,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert payload["causality"]["causality_check"] == "micro"
     assert payload["causality"]["admissible"] is True
     assert payload["causality"]["verified"] is False
-    assert payload["primary_failure_mode"] == ""
+    assert payload["failure_class"] == "edge"
 
 
 def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_path: Path):
@@ -992,7 +936,7 @@ def test_run_iteration_discards_when_causality_not_admissible(tmp_path: Path):
     assert row.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
     assert run_card["causality"]["admissible"] is False
     assert run_card["causality"]["verified"] is False
-    assert run_card["primary_failure_mode"] == "causality"
+    assert run_card["failure_class"] == "causality"
 
 
 def test_run_iteration_discards_when_money_floor_fails(tmp_path: Path):
@@ -1024,7 +968,7 @@ def test_run_iteration_discards_when_money_floor_fails(tmp_path: Path):
     )
     assert outcome.status == "discard"
     assert "money_floor=fail" in row.gate_flags
-    assert run_card["primary_failure_mode"] == "money_floor"
+    assert run_card["failure_class"] == "no_edge"
 
 
 def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Path):
@@ -1064,7 +1008,7 @@ def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Pa
     assert row.status == "discard"
     assert row.score is None
     assert "non-scoreable window" in row.note
-    assert run_card["primary_failure_mode"] == "score_unavailable"
+    assert run_card["failure_class"] == "score_unavailable"
 
 
 def test_run_iteration_crashes_on_malformed_foundation_payload(tmp_path: Path):
@@ -1159,4 +1103,87 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
     assert outcome.status == "crash"
     assert row.continuation == "repair_required"
     assert "missing portfolio foundation" in row.note
-    assert run_card["primary_failure_mode"] == "foundation_unavailable"
+    assert run_card["failure_class"] == "foundation_unavailable"
+
+
+def _gates_with(
+    *,
+    failed: frozenset[str] = frozenset(),
+    money_floor_value: float | None = 0.2,
+) -> GateSet:
+    names = (
+        "trade_floor",
+        "minimum_evidence",
+        "path_risk",
+        "money_floor",
+        "cost_stress_retention",
+        "breadth",
+        "causality",
+        "complexity_cap",
+    )
+    return GateSet(
+        outcomes=tuple(
+            GateOutcome(
+                name=name,
+                passed=name not in failed,
+                value=money_floor_value if name == "money_floor" else None,
+                threshold=None,
+            )
+            for name in names
+        )
+    )
+
+
+def test_failure_class_edge_when_all_gates_pass():
+    assert loop._failure_class(_gates_with(), None, _sizing()) == "edge"
+
+
+def test_failure_class_capacity_bound_when_money_floor_throttled_with_real_edge():
+    # money_floor fails but the deflated floor is >= 0 (a significant edge after the
+    # k_accept haircut) and the book is capacity-bound: real edge, throttled scale.
+    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=0.05)
+    sizing = _sizing(capacity_bound=True, deployed_volatility=0.02, max_feasible_volatility=0.02)
+    assert loop._failure_class(gates, None, sizing) == "capacity_bound"
+
+
+def test_failure_class_no_edge_when_deflated_floor_negative():
+    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=-0.5)
+    assert loop._failure_class(gates, None, _sizing(capacity_bound=True)) == "no_edge"
+
+
+def test_failure_class_no_edge_when_money_floor_fails_without_capacity_bound():
+    # Significant edge (floor >= 0) but not capacity-throttled: scaling won't help.
+    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=0.05)
+    assert loop._failure_class(gates, None, _sizing(capacity_bound=False)) == "no_edge"
+
+
+def test_failure_class_breadth_evidence_and_gate_fallback():
+    assert (
+        loop._failure_class(_gates_with(failed=frozenset({"breadth"})), None, _sizing())
+        == "breadth_bound"
+    )
+    assert (
+        loop._failure_class(_gates_with(failed=frozenset({"minimum_evidence"})), None, _sizing())
+        == "evidence_thin"
+    )
+    assert (
+        loop._failure_class(_gates_with(failed=frozenset({"path_risk"})), None, _sizing())
+        == "path_risk"
+    )
+
+
+def test_failure_class_causality_takes_precedence_over_money_floor():
+    gates = _gates_with(failed=frozenset({"causality", "money_floor"}), money_floor_value=-0.5)
+    assert loop._failure_class(gates, None, _sizing()) == "causality"
+
+
+def test_failure_class_error_states():
+    assert (
+        loop._failure_class(None, None, None, error="portfolio foundation unavailable")
+        == "foundation_unavailable"
+    )
+    assert loop._failure_class(None, None, None, error="boom") == "run_error"
+    assert (
+        loop._failure_class(None, ObjectiveResult(score=None, feasible=False), None)
+        == "score_unavailable"
+    )

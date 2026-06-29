@@ -44,6 +44,7 @@ class ResultRow:
     avg_trade_net: float | None
     cost_return_sum: float | None
     complexity_count: int
+    failure_class: str
     failure_reason: str
     best_status: str
     continuation: str
@@ -82,6 +83,7 @@ class ResultRow:
             "avg_trade_net",
             "cost_return_sum",
             "complexity_count",
+            "failure_class",
             "failure_reason",
             "best_status",
             "continuation",
@@ -128,6 +130,7 @@ class ResultRow:
             "avg_trade_net": optional(self.avg_trade_net),
             "cost_return_sum": optional(self.cost_return_sum),
             "complexity_count": str(self.complexity_count),
+            "failure_class": self.failure_class,
             "failure_reason": self.failure_reason,
             "best_status": self.best_status,
             "continuation": self.continuation,
@@ -199,6 +202,7 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         avg_trade_net=_parse_float(row["avg_trade_net"]),
         cost_return_sum=_parse_float(row["cost_return_sum"]),
         complexity_count=int(row["complexity_count"]),
+        failure_class=row["failure_class"],
         failure_reason=row["failure_reason"],
         best_status=_parse_enum(
             row["best_status"],

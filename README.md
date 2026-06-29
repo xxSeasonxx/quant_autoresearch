@@ -75,7 +75,7 @@ For one thesis:
 4. Run a Train quick run through public `quant_strategies.runner.run_config`.
 5. Review diagnostic output and update `rationale.md`.
 6. Score the configured Train portfolio-foundation robustness objective.
-7. Apply binary gates, including evidence coverage, cost stress, path risk, breadth, economic magnitude, aggregate trade floor, and subwindow coverage.
+7. Apply binary gates, including evidence coverage, cost stress, path risk, breadth, economic magnitude, and aggregate trade floor.
 8. Let the loop decide keep/discard with the implemented keep rule:
 
    ```text
@@ -91,10 +91,10 @@ A Train survivor is only a handoff for Season. OOS, paper, and small-live review
 `results.tsv` records a compact, human-scannable metric set per attempt:
 deployed-return LCB score, worst-window id and annualized return, deflated money
 floor, full-Train annualized return, cost-stress return retention, sizing,
-diagnostic PSR fields, gate flags, foundation closed-trade count, minimum
-subwindow trades, total return, max drawdown, max symbol concentration, win rate,
-profit factor, average trade net, cost return sum, complexity count, typed failure
-reason, artifact directory, and lifecycle state. Source provenance is preserved
+diagnostic PSR fields, gate flags, derived failure class, foundation closed-trade
+count, minimum subwindow trades, total return, max drawdown, max symbol
+concentration, win rate, profit factor, average trade net, cost return sum,
+complexity count, typed failure reason, artifact directory, and lifecycle state. Source provenance is preserved
 in the per-attempt snapshot; richer vectors, gate details, foundation warnings,
 and causality evidence live in the per-attempt `run_card.json` under the generated
 artifact directory. Only `keep` updates the best Train survivor; ordinary

@@ -513,10 +513,6 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "min_trades"),
                 name="gates.min_trades",
             ),
-            min_trades_per_subwindow=_nonnegative_int(
-                _required(raw_gates, "min_trades_per_subwindow"),
-                name="gates.min_trades_per_subwindow",
-            ),
             min_return_sample_count=_nonnegative_int(
                 _required(raw_gates, "min_return_sample_count"),
                 name="gates.min_return_sample_count",
@@ -541,22 +537,8 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "min_annualized_return"),
                 name="gates.min_annualized_return",
             ),
-            # Per-subwindow deployed-return floor (un-haircut); a subwindow below it
-            # is a losing regime slice. Defaults to 0.0 when a protocol omits it.
-            min_subwindow_return=_floating(
-                raw_gates.get("min_subwindow_return", 0.0),
-                name="gates.min_subwindow_return",
-            ),
-            # How many subwindows may fall below min_subwindow_return before
-            # subwindow_consistency fails. Tolerates short-window noise (one unlucky
-            # slice) while still rejecting systematic regime fragility. Default 1.
-            max_subwindows_below_floor=_nonnegative_int(
-                raw_gates.get("max_subwindows_below_floor", 1),
-                name="gates.max_subwindows_below_floor",
-            ),
-            # Acceptance haircut k_accept for the deflated full-Train money floor.
-            # A deliberate value credited to the separate subwindow_consistency
-            # gate, which carries part of the multiple-testing load; it sits below
+            # Acceptance haircut k_accept for the deflated full-Train money floor —
+            # the multiple-testing correction for the best-of-N search. It sits below
             # the best-of-N bound ~sqrt(2 * ln N) (~2.8 at N=50) but above the noise
             # floor. Explicit, not derived from loop.max_iterations.
             score_haircut_se=_positive_float(
@@ -570,7 +552,6 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             max_params=_nonnegative_int(
                 _required(raw_gates, "max_params"), name="gates.max_params"
             ),
-            subwindows=subwindows,
         ),
     )
 

@@ -73,16 +73,24 @@ checks and do not alter the score.
 The active gate set covers:
 
 - **trade floor:** full-Train upstream `closed_trade_count`;
-- **subwindow coverage:** each subwindow's upstream `closed_trade_count`;
-- **minimum evidence:** return samples and effective sample size;
+- **minimum evidence:** return samples and effective sample size, on the full
+  Train window and each subwindow (the sound per-window sufficiency knob);
 - **path risk:** full-Train max drawdown;
-- **breadth:** upstream max symbol concentration;
-- **money floor:** `min_w(R_w - k_accept * SE_w) >= min_annualized_return`;
+- **breadth:** upstream economic concentration (largest single symbol's share of
+  realized PnL);
+- **money floor:** `R_full - k_accept * SE_full >= min_annualized_return`;
 - **cost stress retention:** cost-stress full-Train annualized return retains the
   configured fraction of realistic full-Train annualized return when realistic
   return is positive;
 - **causality:** upstream evidence must be score-admissible;
 - **complexity:** declared signal components and bounded params.
+
+Per-subwindow trade counts and per-slice returns (with a below-zero count) are
+reported diagnostics, not gates: per-window sample sufficiency is owned by
+**minimum evidence**, and the binding in-sample robustness gate is the full-Train
+deflated **money floor**. Per-slice return sign on contiguous, autocorrelated
+calendar slices is not gated — regime independence is the firewalled OOS stage's
+job.
 
 `k_accept` is `gates.score_haircut_se`, the operator-owned acceptance haircut for
 the best-of-N Train search. It is separate from `k_rank`.
@@ -103,8 +111,10 @@ scoring while still not being retention, paper-trade, or deployability proof.
   `min_subwindow_trades`, `total_return`, `max_drawdown`,
   `max_symbol_concentration`, `win_rate`, `profit_factor`, `avg_trade_net`,
   `cost_return_sum`;
-- loop state: gate flags, complexity count, failure reason, best status,
-  continuation, stop reason, elapsed seconds, artifact directory, and note.
+- loop state: gate flags, derived `failure_class` (one of `edge | no_edge |
+  capacity_bound | breadth_bound | evidence_thin | causality | <other gate> |
+  error states`), complexity count, failure reason, best status, continuation,
+  stop reason, elapsed seconds, artifact directory, and note.
 
 Source provenance is owned by the per-attempt snapshot under `artifact_dir`, not
 by inline TSV columns. The per-attempt `run_card.json` owns detailed gate

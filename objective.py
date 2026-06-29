@@ -285,9 +285,9 @@ def _score_foundation_scenario(
         window_return_ses.append(parts[1])
 
     # Full-Train deployed-return lower bound is the run score and the money-floor
-    # input (full_train is index 0). Subwindow robustness is enforced separately by
-    # the subwindow_consistency gate, so neither the score nor the floor binds on
-    # the noisiest short subwindow.
+    # input (full_train is index 0). It is the binding in-sample robustness
+    # instrument; per-subwindow returns are reported diagnostics, not gated, so
+    # neither the score nor the floor binds on the noisiest short subwindow.
     score = window_returns[0] - _K_RANK * window_return_ses[0]
     return ObjectiveResult(
         score=score,
@@ -313,8 +313,9 @@ def deflated_window_floor(
     """Full-Train deployed-return lower bound at the acceptance haircut.
 
     Reuses the objective's full-Train `R`/`SE`; only the haircut multiple differs
-    from the run score. `None` when the run is non-scoreable. Subwindow robustness
-    is enforced separately by the `subwindow_consistency` gate.
+    from the run score. `None` when the run is non-scoreable. This deflated
+    full-Train floor is the binding in-sample robustness gate; per-subwindow
+    returns are reported diagnostics, not gated.
     """
 
     if objective.full_train_return is None or objective.full_train_return_se is None:

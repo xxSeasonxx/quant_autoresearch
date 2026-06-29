@@ -75,7 +75,6 @@ psr_hurdle_sharpe = 0.0
 
 [gates]
 min_trades = 10
-min_trades_per_subwindow = 3
 min_return_sample_count = 100
 min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
@@ -140,7 +139,6 @@ max_abs_drawdown = {max_abs_drawdown}
 min_annualized_return = {min_annualized_return}
 objective_subwindows = 6
 min_trades = 180
-min_trades_per_subwindow = 18
 min_return_sample_count = 200
 min_effective_sample_size = 80.0
 max_symbol_concentration = 0.60
@@ -225,14 +223,11 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert recommended["loop"]["min_abs_improvement"] == 0.002
     assert recommended["loop"]["min_rel_improvement"] == 0.01
     assert recommended["gates"]["score_haircut_se"] == 2.0
-    assert recommended["gates"]["min_subwindow_return"] == 0.0
-    assert recommended["gates"]["max_subwindows_below_floor"] == 1
     assert recommended["risk_budget"]["target_volatility"] == 0.18
     assert recommended["leverage_budget"]["max_gross_exposure"] == 1.5
     assert recommended["gates"]["max_abs_drawdown"] == 0.22
     assert recommended["gates"]["min_annualized_return"] == 0.12
     assert recommended["gates"]["min_trades"] == 180
-    assert recommended["gates"]["min_trades_per_subwindow"] == 18
     assert recommended["gates"]["min_return_sample_count"] == 200
     assert recommended["gates"]["min_effective_sample_size"] == 80.0
     assert recommended["gates"]["max_symbol_concentration"] == 0.60

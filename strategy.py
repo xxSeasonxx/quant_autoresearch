@@ -17,6 +17,7 @@ from typing import Any, cast
 from quant_strategies.decisions import (
     InstrumentRef,
     ObservationRef,
+    RiskRule,
     TargetDecision,
 )
 
@@ -53,6 +54,7 @@ _DEFAULT_PARAMS: dict[str, object] = {
     "selection_score": "combined",
     "long_hold_minutes": 720,
     "short_hold_minutes": 480,
+    "take_profit_frac": 0.0,
 }
 
 
@@ -91,6 +93,7 @@ class _Candidate:
     same_sign_funding_events: int
     return_extension_bps: float
     recent_return_bps: float
+    recent_row: _BarRow | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,9 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         "short_hold_minutes": _positive_int(
             merged["short_hold_minutes"], "short_hold_minutes"
         ),
+        "take_profit_frac": _non_negative_float(
+            merged["take_profit_frac"], "take_profit_frac"
+        ),
     }
     if _param_int(validated, "session_start_hour") >= _param_int(
         validated, "session_end_hour"
@@ -193,6 +199,10 @@ def generate_decisions(
 
     signal_times = _cadence_signal_times(rows_by_symbol, validated)
     target_per_symbol = 1.0 / len(rows_by_symbol)
+    take_profit_frac = _param_float(validated, "take_profit_frac")
+    risk_rule = (
+        RiskRule(take_profit=take_profit_frac) if take_profit_frac > 0.0 else None
+    )
     active_until: dict[str, datetime] = {}
     decisions: list[TargetDecision] = []
 
@@ -259,6 +269,7 @@ def generate_decisions(
                     decision_time=decision_time,
                     as_of_time=candidate.signal_row.timestamp,
                     target=target,
+                    risk_rule=risk_rule,
                     observations=_observations(candidate),
                     metadata={
                         "signal_family": _STRATEGY_ID,
@@ -408,6 +419,7 @@ def _candidate_at_signal_time(
     return_extension_bps = (signal_row.close / lookback_row.close - 1.0) * 10_000.0
 
     recent_return_bps = 0.0
+    recent_row: _BarRow | None = None
     if recent_return_lookback_minutes > 0:
         recent_time = signal_time - timedelta(minutes=recent_return_lookback_minutes)
         recent_index = bisect_right(rows.timestamps, recent_time) - 1
@@ -425,6 +437,7 @@ def _candidate_at_signal_time(
         same_sign_funding_events=same_sign_funding_events,
         return_extension_bps=return_extension_bps,
         recent_return_bps=recent_return_bps,
+        recent_row=recent_row,
     )
 
 
@@ -520,6 +533,18 @@ def _observations(candidate: _Candidate) -> tuple[ObservationRef, ...]:
             timestamp=candidate.signal_row.timestamp,
             field="close",
             source="crypto_perp_1min_with_funding",
+        ),
+        *(
+            (
+                ObservationRef(
+                    symbol=candidate.symbol,
+                    timestamp=candidate.recent_row.timestamp,
+                    field="close",
+                    source="crypto_perp_1min_with_funding",
+                ),
+            )
+            if candidate.recent_row is not None
+            else ()
         ),
         *(
             ObservationRef(

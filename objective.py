@@ -93,6 +93,7 @@ class FoundationMetric:
     warnings: tuple[str, ...] = ()
     max_gross_utilization: float | None = None
     max_net_utilization: float | None = None
+    effective_symbol_count: float | None = None
 
 
 @dataclass(frozen=True)

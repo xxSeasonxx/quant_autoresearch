@@ -324,6 +324,8 @@ def _validate_foundation_metric(metric: FoundationMetric) -> None:
     concentration = metric.max_symbol_concentration
     if concentration is not None and not 0.0 <= concentration <= 1.0:
         raise ValueError("foundation max_symbol_concentration must be in [0, 1]")
+    if metric.effective_symbol_count is not None and metric.effective_symbol_count < 0.0:
+        raise ValueError("foundation effective_symbol_count must be >= 0")
 
 
 def _warnings(value: object) -> tuple[str, ...]:
@@ -356,6 +358,7 @@ def _foundation_metric(raw: Mapping[str, object]) -> FoundationMetric:
         warnings=_warnings(raw.get("warnings")),
         max_gross_utilization=_foundation_float(raw, "max_gross_utilization"),
         max_net_utilization=_foundation_float(raw, "max_net_utilization"),
+        effective_symbol_count=_foundation_float(raw, "effective_symbol_count"),
     )
     _validate_foundation_metric(metric)
     return metric
@@ -622,6 +625,7 @@ def _metric_payload(metric: FoundationMetric) -> dict[str, object]:
         "max_drawdown": metric.max_drawdown,
         "closed_trade_count": metric.closed_trade_count,
         "max_symbol_concentration": metric.max_symbol_concentration,
+        "effective_symbol_count": metric.effective_symbol_count,
         "max_gross_utilization": metric.max_gross_utilization,
         "max_net_utilization": metric.max_net_utilization,
         "warnings": list(metric.warnings),

@@ -54,6 +54,7 @@ def _metric(
     warnings: tuple[str, ...] = (),
     max_gross_utilization: float = 0.02,
     max_net_utilization: float = 0.02,
+    effective_symbol_count: float = 3.0,
 ) -> FoundationMetric:
     # Default the diagnostic Sharpe inputs to be consistent with the money moments
     # so the PSR cross-check identity holds: sharpe = mean/vol (per period),
@@ -87,6 +88,7 @@ def _metric(
         warnings=warnings,
         max_gross_utilization=max_gross_utilization,
         max_net_utilization=max_net_utilization,
+        effective_symbol_count=effective_symbol_count,
     )
 
 
@@ -163,6 +165,7 @@ def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[st
             "max_drawdown": metric.max_drawdown,
             "closed_trade_count": metric.closed_trade_count,
             "max_symbol_concentration": metric.max_symbol_concentration,
+            "effective_symbol_count": metric.effective_symbol_count,
             "max_gross_utilization": metric.max_gross_utilization,
             "max_net_utilization": metric.max_net_utilization,
             "warnings": list(metric.warnings),
@@ -869,6 +872,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     realistic = payload["foundation"]["realistic_costs"]
     assert realistic["full_train"]["mean_return"] == 0.0012
     assert realistic["full_train"]["return_volatility"] == 0.0010
+    assert realistic["full_train"]["effective_symbol_count"] == 3.0
     assert payload["causality"]["causality_check"] == "micro"
     assert payload["causality"]["admissible"] is True
     assert payload["causality"]["verified"] is False

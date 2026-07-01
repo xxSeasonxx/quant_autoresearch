@@ -61,8 +61,11 @@ in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
 only to debug a run failure, check an explicitly in-scope contract, or follow a
 direct request from Season.
 
-If protocol-owned assumptions need to change, write the reseed case in
-`rationale.md` and stop ordinary iteration. Season can approve a new lifecycle.
+If protocol-owned assumptions need to change, record the reseed case in
+`rationale.md` and keep iterating the current lifecycle — do not halt mid-run to
+wait for approval. The reseed is Season's call at a stop-rule boundary, not a
+mid-run pause; the loop stays productive until a stop rule fires or Season
+interrupts.
 
 ## Experimentation
 
@@ -129,13 +132,27 @@ edit, not a reseed.
 Build within the operator-frozen leverage budget and capacity model; intended
 exposure beyond the budget fails closed upstream (see Target Book Rules).
 
+The universe is two things, owned by two parties. The frozen **universe** is the
+eligible population the mechanism may trade — protocol-owned, selected
+return-blind, and fixed for the lifecycle. The **active book** is how many of
+those names the signal actually holds — strategy-owned, varying every attempt
+through ranking, `top_n`, and selection thresholds. Converging on the right
+breadth means reducing the *book*, never the *universe*: start from the full
+frozen universe and let the signal hold fewer names where the edge is strongest.
+That reduction is honest because the signal drives it — return-blind and causal —
+not which names earned. The breadth you land on is an output of the mechanism and
+regime; read it as evidence, not a count to optimize toward.
+
 A universe change is not an ordinary loop edit: symbols are protocol-owned and
 frozen for the active lifecycle. Do not change the universe while continuing to
 count the same run. If a different universe looks like the cleanest move, record
-the reseed case in `rationale.md`; Season can approve a new lifecycle. Never
-reach a new universe through hidden signal logic. Symbol-specific normalization,
-ranking, scaling, side treatment, and causal eligibility rules remain valid when
-they express the thesis and are visible in `rationale.md`.
+the reseed case in `rationale.md`; Season can approve a new lifecycle, and the new
+universe must itself be chosen return-blind on eligibility — never by dropping the
+names that lost money. Never reach a new universe through hidden signal logic:
+thresholds tuned until only the historically winning names ever trade is exactly
+that. Symbol-specific normalization, ranking, scaling, side treatment, and causal
+eligibility rules remain valid when they express the thesis and are visible in
+`rationale.md`.
 
 Generated artifacts under `.autoresearch/` and `results/` are evidence, not
 source. Use the latest diagnostics to choose the next Train edit, but do not

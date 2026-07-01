@@ -13,3 +13,5 @@ Each note should include:
 
 ## Open Items
 
+_None._
+

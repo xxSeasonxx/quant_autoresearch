@@ -384,7 +384,7 @@ def _approval_checklist() -> list[str]:
         "Season approved the recommendation table before any baseline run.",
         "protocol.toml was reviewed and edited intentionally; the helper did not auto-apply it.",
         "Edited protocol-owned values were compared against the approved recommendation table; any deltas were shown to Season.",
-        "rationale.md records the mechanism, observable, falsifier, assumptions, and first failure mode.",
+        "rationale.md records the mechanism, observable, falsifier, assumptions, first failure mode, and the universe population with its mechanism-driven, return-blind sizing rationale.",
         "results.tsv is header-only or absent, and .autoresearch/thesis_lock.json is absent.",
         "approval.protocol_sha256 equals the SHA-256 of the approved protocol.toml.",
     ]

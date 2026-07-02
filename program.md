@@ -236,6 +236,19 @@ What is not research is aimless boundary-polishing — nudging a bound only to
 flatter the in-sample score with no mechanism behind the move. More attempts
 should mean more distinct research, not more polishing.
 
+Each attempt after the baseline must test a mechanistically distinct lever — new
+signal construction, allocation shape, side logic, exit structure, or causal
+eligibility rule — with its own mechanism and falsifier; re-parameterizing a lever
+already run is not distinct. Maintain a **Lever Enumeration** in `rationale.md`:
+every distinct lever the thesis affords, each marked run/not-run with its result.
+Exhaustion is a property of this enumeration, not of the iteration counter: the run
+may not conclude while a plausible distinct lever is un-run and no stop rule has
+fired, and it ends at whichever comes first — the enumeration genuinely closed
+(every distinct lever has a result and no new distinct hypothesis can be articulated
+with a real mechanism) or the `max_iterations` cap. Running out of distinct
+hypotheses before the cap is the honest signal of near-exhaustion; manufacturing
+threshold-nudges to fill the cap is the dishonesty this forbids.
+
 Simplicity wins ties. A small score improvement with ugly symbol/time exceptions
 is probably overfit. Removing code, params, or conditions while keeping equal or
 better evidence is a strong result. Prefer killing a weak thesis over adding
@@ -324,10 +337,12 @@ Pause ordinary edit/run iteration and inspect the evidence more carefully when:
 - more than 30 attempts have run on one Train window without a new structural
   lesson.
 
-This is not a stop rule. It is a research sanity check. Inspect trades and choose
-one path: simplify, make a larger structural move inside the current thesis,
-freeze the survivor, write a new-thesis recommendation in `rationale.md`, or
-continue with a written trade-tape justification. Do not change thesis or
+This is a research sanity check, not a stop. Inspect trades and choose one path
+that **continues the loop**: simplify, make a larger structural move inside the
+current thesis, or continue with a written trade-tape justification. Recording an
+updated reseed hypothesis in the Reseed Log is expected here — but it is a note,
+never a reason to stop iterating. Freezing the survivor and concluding the run
+happen only when a configured stop rule fires (see Stop). Do not change thesis or
 protocol mid-run unless Season explicitly reseeds the run.
 
 A 50 or 100 attempt run should still have shape: baseline and sanity repairs
@@ -341,13 +356,25 @@ Stop when one configured rule fires: plateau after a feasible baseline,
 max iterations, complexity cap exhaustion, or no feasible baseline within the
 baseline grace window.
 
+Do not conclude — freeze a survivor, declare thesis death, or finalize a reseed
+case — before a configured stop rule fires. While the harness reports
+`continuation: allowed` with an empty `stop_reason`, the run is not done: a judgment
+that "research has converged" or "the envelope binds" is not a stop rule, and is
+exactly the premature-closure the loop must resist. A reseed story often looks
+complete long before the search is; keep generating mechanistically distinct
+falsifications until a stop rule fires, then read the accumulated Reseed Log.
+
 At stop, report the frozen Train survivor or say the thesis died on Train.
 A Train survivor is not a promotion signal; it is only a candidate for downstream
 OOS, paper, and small-live review.
 
 A reseed recommendation is a third honest outcome, reached through the stop rules,
-never instead of them. When the loop stops and the attempts show the binding
+never instead of them. Maintain a **Reseed Log** in `rationale.md`: a living,
+append-only section with one dated line per attempt recording whether that result
+strengthens or weakens the reseed case, and why. It accretes the reseed argument as
+evidence builds and is **never itself a reason to stop** — it is read only after a
+stop rule has fired. When the loop stops and the accumulated log shows the binding
 constraint is the protocol envelope itself — universe, notional, leverage budget,
-capacity, or a gate — not the edge, say so and write a concrete, evidence-backed
-reseed case in `rationale.md`. It does not change the protocol or the run; Season
-decides whether to reseed.
+capacity, or a gate — not the edge, consolidate it into a concrete, evidence-backed
+reseed case. It does not change the protocol or the run; Season decides whether to
+reseed.

@@ -2,6 +2,21 @@
 
 Durable local instructions for this repo.
 
+## Inspiration
+
+Inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch):
+an autonomous agent edits one training file, runs a fixed-budget experiment, keeps
+or discards the result, and iterates — steered by a human-authored `program.md`
+rather than human-written code. Its strength is its simplicity: one editable file,
+one comparable metric, one loop.
+
+This repo keeps that skeleton — a `program.md` runbook, a bounded editable surface,
+a keep-or-kill loop — but is deliberately more comprehensive and complex: upstream
+consumer contracts, honest-evidence gates, money-denominated scoring, causality and
+capacity constraints, and configured stop rules. It trades autoresearch's minimalism
+for the rigor a skeptical quant researcher requires, using it as inspiration rather
+than template.
+
 ## Role
 
 Think like a skeptical quant researcher. This is the default posture for this

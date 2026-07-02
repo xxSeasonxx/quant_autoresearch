@@ -49,7 +49,7 @@ After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
 Ordinary Train iteration uses only:
 
 - `program.md` for this operating contract;
-- `protocol.toml` for frozen Train data, costs, fills, objective, gates, and stop rules;
+- `protocol.toml` for frozen Train data, costs, fills, capacity, leverage budget, objective, gates, and stop rules;
 - `experiment.toml` for bounded params;
 - `strategy.py` for editable target-book logic;
 - `rationale.md` for thesis, components, variants, and lessons;
@@ -61,9 +61,9 @@ in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
 only to debug a run failure, check an explicitly in-scope contract, or follow a
 direct request from Season.
 
-If protocol-owned assumptions need to change, record the reseed case in
-`rationale.md` and keep iterating the current lifecycle — do not halt mid-run to
-wait for approval. The reseed is Season's call at a stop-rule boundary, not a
+If protocol-owned assumptions need to change, record the reseed rationale in the
+Reseed Log (`rationale.md`) and keep iterating the current lifecycle — do not halt
+mid-run to wait for approval. The reseed is Season's call at a stop-rule boundary, not a
 mid-run pause; the loop stays productive until a stop rule fires or Season
 interrupts.
 
@@ -145,8 +145,9 @@ regime; read it as evidence, not a count to optimize toward.
 
 A universe change is not an ordinary loop edit: symbols are protocol-owned and
 frozen for the active lifecycle. Do not change the universe while continuing to
-count the same run. If a different universe looks like the cleanest move, record
-the reseed case in `rationale.md`; Season can approve a new lifecycle, and the new
+count the same run. If a different universe looks like the cleanest move, record the
+reseed rationale in the Reseed Log (`rationale.md`); Season can approve a new
+lifecycle, and the new
 universe must itself be chosen return-blind on eligibility — never by dropping the
 names that lost money. Never reach a new universe through hidden signal logic:
 thresholds tuned until only the historically winning names ever trade is exactly
@@ -238,8 +239,11 @@ should mean more distinct research, not more polishing.
 
 Each attempt after the baseline must test a mechanistically distinct lever — new
 signal construction, allocation shape, side logic, exit structure, or causal
-eligibility rule — with its own mechanism and falsifier; re-parameterizing a lever
-already run is not distinct. Maintain a **Lever Enumeration** in `rationale.md`:
+eligibility rule — with its own mechanism and falsifier. What makes an attempt
+distinct is a new mechanism, not the kind of edit: a bound sweep is distinct when it
+carries one (per the sweep rule above), and re-parameterizing an already-run lever
+with no new mechanism is the polishing that does not count. Maintain a **Lever
+Enumeration** in `rationale.md`:
 every distinct lever the thesis affords, each marked run/not-run with its result.
 Exhaustion is a property of this enumeration, not of the iteration counter: the run
 may not conclude while a plausible distinct lever is un-run and no stop rule has
@@ -278,8 +282,8 @@ kill it — in `rationale.md`.
 
 ## Logging Results
 
-Do not append `results.tsv` yourself during ordinary iteration. Confirm that
-`climb` appended one tab-separated row, then read that row. Use `results.tsv` for
+Do not append `results.tsv` yourself or start a second ledger during ordinary
+iteration. Confirm that `climb` appended one tab-separated row, then read that row. Use `results.tsv` for
 scan state and the per-attempt `run_card.json` for score parts, gate outcomes,
 foundation warnings, causality evidence, primary failure mode, and sampled
 trades.
@@ -299,8 +303,7 @@ interrupts:
 6. Parse score, gate flags, portfolio-foundation metrics, basic economics, exits,
    failure reasons, and trade samples.
 7. Confirm `climb` appended exactly one tab-separated row to `results.tsv` and read
-   it; do not append a row yourself or start a second ledger during ordinary
-   iteration.
+   it; do not write it yourself (see Logging Results).
 8. Refresh `rationale.md` with what changed, why, the failure mode targeted, the
    diagnostic result, and the next falsifier.
 9. Let the loop decide keep/discard/crash. Only all-gates-pass attempts that
@@ -327,7 +330,7 @@ and connected to the thesis.
 
 ## When The Loop Looks Overfit
 
-Pause ordinary edit/run iteration and inspect the evidence more carefully when:
+Slow down and inspect the evidence more carefully when:
 
 - three consecutive edits target the same gate;
 - a fix depends on one symbol, one subwindow, or one time boundary;

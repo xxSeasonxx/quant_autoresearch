@@ -298,6 +298,16 @@ whether to continue, whether this is a good stopping point, or whether to try on
 more edit. Continue until a protocol stop rule fires or Season interrupts. This
 workflow is meant to run while Season is away from the keyboard.
 
+The only decisions reserved for Season are protocol- and harness-level: changing
+`protocol.toml` (data, costs, fills, capacity, leverage/notional budget, objective,
+gates, stop rules) or the universe — i.e. a reseed. Present those as a reseed case
+in `rationale.md` reached at a stop-rule boundary, not by pausing mid-run.
+Everything else inside the loop and its in-scope files — reshaping the book,
+widening or tightening bounds, simplifying, killing a weak variant, and choosing
+the next edit — is yours to run without asking. Do not offer decision menus for
+work that is already inside this contract; take the obvious next step and surface
+only a genuine fork.
+
 `discard` and `crash` never become final candidates, but a discarded working
 variant may remain the base for the next edit when it is still simple, causal,
 and connected to the thesis.

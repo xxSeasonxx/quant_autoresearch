@@ -5,8 +5,9 @@ and not a per-trade return bag. Aggregate PnL can look strong when one symbol, o
 regime, one large position, or one lucky slice carries the run; the NAV path makes
 the evidence about capital over time.
 
-`return_lcb_subwindow` is the objective: the weakest-window lower bound on deployed
-annualized return.
+`return_lcb_subwindow` is the objective: the full-Train deployed-return lower
+confidence bound. Subwindows are computed and reported as diagnostics (regime
+stability), not scored — the score and gate bind on the full-Train window.
 
 1. Read the upstream `realistic_costs` portfolio-foundation metrics and the
    run-level `annualization_periods_per_year` (`P`) from the sizing report.
@@ -157,22 +158,20 @@ class ObjectiveResult:
     `score` is the full-Train deployed-return lower bound at `k_rank`, `None`
     when any window cannot yield a lower bound (the run is non-scoreable).
     `feasible` only means the objective math produced a score; it does not mean
-    all strategy gates passed. `worst_window_return` is the point return for the
-    LCB-binding `worst_window_id`, not the minimum point return. `window_returns`/
-    `window_return_ses` are the per-window `R_w`/`SE_w` (full Train first, then
-    each subwindow) the money-floor gate reuses. PSR fields are diagnostics only.
+    all strategy gates passed. `window_returns`/`window_return_ses` are the
+    per-window `R_w`/`SE_w` (full Train first, then each subwindow); the score and
+    the significance gate bind on the full-Train window (index 0), and the subwindow
+    entries are reported as diagnostics. PSR fields are diagnostics only.
     """
 
     score: float | None
     feasible: bool
     subwindow_trade_counts: tuple[int, ...] = ()
-    worst_window_id: str = ""
     window_ids: tuple[str, ...] = ()
     window_returns: tuple[float, ...] = ()
     window_return_ses: tuple[float, ...] = ()
     full_train_return: float | None = None
     full_train_return_se: float | None = None
-    worst_window_return: float | None = None
     detail: str = ""
     full_train_psr: float | None = None
     subwindow_psrs: tuple[float, ...] = ()
@@ -294,13 +293,11 @@ def _score_foundation_scenario(
         score=score,
         feasible=True,
         subwindow_trade_counts=counts,
-        worst_window_id=window_ids[0],
         window_ids=tuple(window_ids),
         window_returns=tuple(window_returns),
         window_return_ses=tuple(window_return_ses),
         full_train_return=full_train_return,
         full_train_return_se=full_train_return_se,
-        worst_window_return=window_returns[0],
         full_train_psr=full_psr,
         subwindow_psrs=subwindow_psrs,
         worst_subwindow_psr=worst_subwindow_psr,

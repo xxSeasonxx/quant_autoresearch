@@ -430,9 +430,7 @@ def test_score_is_full_train_lcb_at_k_rank_one():
 
     expected = _lcb(0.0012, 0.0010, 120.0, k=1.0)  # full_train binds the score
     assert result.score == expected
-    assert result.worst_window_id == "full_train"
     assert result.full_train_return == 0.0012 * _P
-    assert result.worst_window_return == 0.0012 * _P
     assert result.subwindow_trade_counts == (20, 12, 20)
 
 
@@ -464,8 +462,7 @@ def test_score_binds_on_full_train_not_a_subwindow():
 
     result = score_objective((), _config(), foundation=foundation)
 
-    assert result.worst_window_id == "full_train"
-    assert result.worst_window_return == 0.0030 * _P
+    assert result.full_train_return == 0.0030 * _P
     assert result.score == _lcb(0.0030, 0.0010, 120.0, k=1.0)
     assert min(result.window_returns) == 0.0010 * _P
 
@@ -694,10 +691,8 @@ def _row() -> ResultRow:
         iteration=1,
         status="keep",
         score=0.2037,
-        worst_window_id="train_2",
         deflated_return_lcb=0.162,
         full_train_annualized_return=0.3024,
-        worst_window_annualized_return=0.2268,
         cost_stress_return_retention=0.667,
         book_scale=1.5,
         deployed_volatility=0.18,
@@ -862,10 +857,8 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
 
     assert outcome.status == "keep"
     assert rows[0].score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
-    assert rows[0].worst_window_id == "full_train"
     assert rows[0].deflated_return_lcb == _lcb(0.0012, 0.0010, 120.0, k=2.8)
     assert rows[0].full_train_annualized_return == 0.0012 * _P
-    assert rows[0].worst_window_annualized_return == 0.0012 * _P
     assert rows[0].book_scale == 1.5
     assert rows[0].capacity_bound is False
     assert rows[0].full_train_psr is not None
@@ -874,7 +867,6 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert rows[0].cost_return_sum == 0.004
 
     payload = json.loads(run_card.read_text())
-    assert payload["score_parts"]["worst_window_id"] == "full_train"
     assert len(payload["score_parts"]["windows"]) == 4
     assert payload["score_parts"]["windows"][0]["t_stat"] is not None
     assert "money_floor_gap" not in payload["score_parts"]["windows"][0]

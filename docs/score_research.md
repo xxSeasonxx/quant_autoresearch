@@ -6,19 +6,22 @@ what the score measures and how a new session should reason about it.
 
 ## Core Decision
 
-The Train keep-rule score is the weakest-window lower confidence bound on
+The Train keep-rule score is the full-Train deflated lower confidence bound on
 deployed annualized return:
 
 ```text
-score = min_w(R_w - k_rank * SE_w)
-R_w = mean_return_w * P
-SE_w = return_volatility_w * P / sqrt(n_eff_w)
+score = R_full - k_rank * SE_full
+R_full = mean_return_full * P
+SE_full = return_volatility_full * P / sqrt(n_eff_full)
 k_rank = 1
 ```
 
 `P` is the run-level `annualization_periods_per_year` emitted by the upstream
 sizing report. The score uses the upstream `realistic_costs` portfolio-foundation
-metrics for the full Train window and each configured subwindow.
+metrics for the full Train window. Each configured subwindow is measured the same
+way and reported as a regime-stability diagnostic, but the score and the
+significance gate bind on the full-Train window — the most-sampled, tightest-SE
+instrument — not on the noisiest short subwindow.
 
 The scored unit is the single netted-book NAV path. The per-trade tape is a
 derived attribution view of that same book; inspect it for diagnostics, but do
@@ -32,8 +35,9 @@ review.
 
 - **Money magnitude:** annualized return moves when the deployed book scale moves;
   scale-invariant ratios do not.
-- **Weakest window:** a candidate must work across the Train path, not only in one
-  favorable slice.
+- **Full-Train window:** the score binds on the full Train window (most samples,
+  tightest SE); per-subwindow returns are reported as a regime-stability diagnostic,
+  not scored, so the noisiest short slice cannot dominate the score.
 - **Uncertainty haircut:** each window pays for its own return uncertainty through
   upstream `return_volatility` and `effective_sample_size`.
 - **Upstream accounting:** costs, fills, capacity, sizing, compounding, idle time,
@@ -104,8 +108,7 @@ scoring while still not being retention, paper-trade, or deployability proof.
 
 `results.tsv` is the compact loop ledger. It records:
 
-- score parts: `score`, `worst_window_id`, `deflated_return_lcb`,
-  `full_train_annualized_return`, `worst_window_annualized_return`,
+- score parts: `score`, `deflated_return_lcb`, `full_train_annualized_return`,
   `cost_stress_return_retention`;
 - sizing: `book_scale`, `deployed_volatility`, `max_feasible_volatility`,
   `capacity_bound`;

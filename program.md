@@ -13,7 +13,7 @@ and OOS contamination can easily create false edges.
 
 Your job is to push for the strongest real, tradeable economic return this Train
 thesis can support under the fixed protocol. The run score is the deployed
-annualized return, uncertainty-haircut: the weakest-window lower bound on the
+annualized return, uncertainty-haircut: the full-Train deflated lower bound on the
 book's annualized return at its upstream-sized book, subject to robustness and
 practicality gates. A Train survivor is a candidate for Season's downstream OOS,
 paper, and small-live review, not proof of deployability. Think like a skeptical

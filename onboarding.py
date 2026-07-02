@@ -635,7 +635,7 @@ def _proposal_payload_without_hash(
             "risk_budget.annualization_periods_per_year": "Derive from bar cadence and market calendar; do not tune from returns.",
             "risk_budget.target_volatility": "Map target volatility directly into upstream risk-budget sizing.",
             "output.causality_check": "Keep Train causality on bounded micro replay.",
-            "objective.kind": "Keep the money-first weakest-window deployed-return objective.",
+            "objective.kind": "Keep the money-first full-Train deflated deployed-return objective.",
             "objective.subwindows": "Set robustness slices from Train window length and thesis horizon.",
             "loop.max_iterations": "Use the approved attempt budget as the hard Train iteration cap.",
             "loop.baseline_grace_iterations": "Use the approved first-baseline grace before declaring Train death.",

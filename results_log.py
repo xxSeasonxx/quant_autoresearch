@@ -21,10 +21,8 @@ class ResultRow:
     iteration: int
     status: str
     score: float | None
-    worst_window_id: str
     deflated_return_lcb: float | None
     full_train_annualized_return: float | None
-    worst_window_annualized_return: float | None
     cost_stress_return_retention: float | None
     book_scale: float | None
     deployed_volatility: float | None
@@ -60,10 +58,8 @@ class ResultRow:
             "iteration",
             "status",
             "score",
-            "worst_window_id",
             "deflated_return_lcb",
             "full_train_annualized_return",
-            "worst_window_annualized_return",
             "cost_stress_return_retention",
             "book_scale",
             "deployed_volatility",
@@ -105,12 +101,8 @@ class ResultRow:
             "iteration": str(self.iteration),
             "status": self.status,
             "score": optional(self.score),
-            "worst_window_id": self.worst_window_id,
             "deflated_return_lcb": optional(self.deflated_return_lcb),
             "full_train_annualized_return": optional(self.full_train_annualized_return),
-            "worst_window_annualized_return": optional(
-                self.worst_window_annualized_return
-            ),
             "cost_stress_return_retention": optional(self.cost_stress_return_retention),
             "book_scale": optional(self.book_scale),
             "deployed_volatility": optional(self.deployed_volatility),
@@ -177,12 +169,8 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
             row["status"], name="status", allowed={"keep", "discard", "crash"}
         ),
         score=_parse_float(row["score"]),
-        worst_window_id=row["worst_window_id"],
         deflated_return_lcb=_parse_float(row["deflated_return_lcb"]),
         full_train_annualized_return=_parse_float(row["full_train_annualized_return"]),
-        worst_window_annualized_return=_parse_float(
-            row["worst_window_annualized_return"]
-        ),
         cost_stress_return_retention=_parse_float(row["cost_stress_return_retention"]),
         book_scale=_parse_float(row["book_scale"]),
         deployed_volatility=_parse_float(row["deployed_volatility"]),

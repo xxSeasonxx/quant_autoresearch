@@ -97,10 +97,6 @@ def symbol_concentration(trades: Sequence[TradeSample]) -> float:
     return max(totals.values()) / total_abs
 
 
-def _finite(value: float | None) -> bool:
-    return value is not None and isfinite(value)
-
-
 def _finite_nonnegative(value: float | None) -> bool:
     return value is not None and isfinite(value) and value >= 0.0
 

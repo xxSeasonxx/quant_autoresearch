@@ -453,10 +453,8 @@ def _make_crash_row(
         iteration=iteration,
         status="crash",
         score=None,
-        worst_window_id="",
         deflated_return_lcb=None,
         full_train_annualized_return=None,
-        worst_window_annualized_return=None,
         cost_stress_return_retention=None,
         book_scale=None,
         deployed_volatility=None,
@@ -515,10 +513,8 @@ def _scored_result_row(
         iteration=iteration,
         status=status,
         score=objective.score,
-        worst_window_id=objective.worst_window_id,
         deflated_return_lcb=_gate_value(gates, "significance"),
         full_train_annualized_return=objective.full_train_return,
-        worst_window_annualized_return=objective.worst_window_return,
         cost_stress_return_retention=_gate_value(gates, "cost_stress_retention"),
         book_scale=None if sizing is None else sizing.book_scale,
         deployed_volatility=None if sizing is None else sizing.deployed_volatility,
@@ -808,13 +804,9 @@ def _write_run_card(
     payload = {
         "score": None if objective is None else objective.score,
         "score_parts": {
-            "worst_window_id": "" if objective is None else objective.worst_window_id,
             "full_train_annualized_return": None
             if objective is None
             else objective.full_train_return,
-            "worst_window_annualized_return": None
-            if objective is None
-            else objective.worst_window_return,
             "deflated_return_lcb": _gate_value(gates, "significance")
             if gates is not None
             else None,

@@ -2,6 +2,7 @@
 funding_lookback_events = 5
 return_lookback_minutes = 120
 decision_interval_minutes = 240
+entry_twap_bars = 18
 decision_lag_minutes = 1
 session_start_hour = 0
 session_end_hour = 24
@@ -17,6 +18,8 @@ recent_return_lookback_minutes = 60
 max_recent_same_direction_return_bps = 1000.0
 min_idiosyncratic_return_bps = 2.5
 selection_score = "combined"
+weighting = "equal"
+vol_lookback_minutes = 1440
 long_hold_minutes = 720
 short_hold_minutes = 720
 take_profit_frac = 0.0
@@ -35,6 +38,10 @@ max = 480
 [bounds.decision_interval_minutes]
 min = 30
 max = 720
+
+[bounds.entry_twap_bars]
+min = 1
+max = 60
 
 [bounds.decision_lag_minutes]
 min = 1
@@ -75,6 +82,10 @@ max = 10.0
 [bounds.recent_return_lookback_minutes]
 min = 0
 max = 240
+
+[bounds.vol_lookback_minutes]
+min = 240
+max = 2880
 
 [bounds.max_recent_same_direction_return_bps]
 min = 0.0

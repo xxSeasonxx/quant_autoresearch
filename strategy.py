@@ -7,7 +7,7 @@ the other side of the crowded move and exits through an explicit fixed-horizon
 flat target.
 """
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -37,6 +37,7 @@ _DEFAULT_PARAMS: dict[str, object] = {
     "funding_lookback_events": 5,
     "return_lookback_minutes": 120,
     "decision_interval_minutes": 240,
+    "entry_twap_bars": 1,
     "decision_lag_minutes": 1,
     "session_start_hour": 0,
     "session_end_hour": 24,
@@ -52,6 +53,8 @@ _DEFAULT_PARAMS: dict[str, object] = {
     "max_recent_same_direction_return_bps": 250.0,
     "min_idiosyncratic_return_bps": 2.5,
     "selection_score": "combined",
+    "weighting": "equal",
+    "vol_lookback_minutes": 1440,
     "long_hold_minutes": 720,
     "short_hold_minutes": 480,
     "take_profit_frac": 0.0,
@@ -93,6 +96,7 @@ class _Candidate:
     same_sign_funding_events: int
     return_extension_bps: float
     recent_return_bps: float
+    volatility: float | None = None
     recent_row: _BarRow | None = None
 
 
@@ -120,6 +124,9 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         ),
         "decision_interval_minutes": _positive_int(
             merged["decision_interval_minutes"], "decision_interval_minutes"
+        ),
+        "entry_twap_bars": _positive_int(
+            merged["entry_twap_bars"], "entry_twap_bars"
         ),
         "decision_lag_minutes": _non_negative_int(
             merged["decision_lag_minutes"], "decision_lag_minutes"
@@ -163,6 +170,10 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
             "min_idiosyncratic_return_bps",
         ),
         "selection_score": _selection_score(merged["selection_score"]),
+        "weighting": _weighting(merged["weighting"]),
+        "vol_lookback_minutes": _positive_int(
+            merged["vol_lookback_minutes"], "vol_lookback_minutes"
+        ),
         "long_hold_minutes": _positive_int(
             merged["long_hold_minutes"], "long_hold_minutes"
         ),
@@ -198,7 +209,9 @@ def generate_decisions(
         return []
 
     signal_times = _cadence_signal_times(rows_by_symbol, validated)
-    target_per_symbol = 1.0 / len(rows_by_symbol)
+    n_universe = len(rows_by_symbol)
+    weighting = _param_str(validated, "weighting")
+    twap_bars = _param_int(validated, "entry_twap_bars")
     take_profit_frac = _param_float(validated, "take_profit_frac")
     risk_rule = (
         RiskRule(take_profit=take_profit_frac) if take_profit_frac > 0.0 else None
@@ -223,6 +236,9 @@ def generate_decisions(
                     recent_return_lookback_minutes=_param_int(
                         validated, "recent_return_lookback_minutes"
                     ),
+                    vol_lookback_minutes=_param_int(
+                        validated, "vol_lookback_minutes"
+                    ),
                 )
             )
             is not None
@@ -236,6 +252,7 @@ def generate_decisions(
         selections = _select_candidates(candidates, market_return_bps, validated)
         if not selections:
             continue
+        magnitudes = _selection_targets(selections, n_universe, weighting)
 
         cross_section_available_at = max(
             candidate.signal_row.available_at for candidate in candidates
@@ -245,7 +262,7 @@ def generate_decisions(
         )
 
         decision_time = earliest_decision_time
-        for selection in selections:
+        for selection, magnitude in zip(selections, magnitudes):
             candidate = selection.candidate
             symbol = candidate.symbol
             if (
@@ -261,14 +278,15 @@ def generate_decisions(
             )
             exit_time = decision_time + timedelta(minutes=hold_minutes)
 
-            target = selection.side * target_per_symbol
-            decisions.append(
-                TargetDecision(
-                    strategy_id=_STRATEGY_ID,
-                    instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
-                    decision_time=decision_time,
-                    as_of_time=candidate.signal_row.timestamp,
+            target = selection.side * magnitude
+            decisions.extend(
+                _ramped_decisions(
+                    symbol=symbol,
+                    entry_time=decision_time,
+                    exit_time=exit_time,
                     target=target,
+                    twap_bars=twap_bars,
+                    entry_as_of=candidate.signal_row.timestamp,
                     risk_rule=risk_rule,
                     observations=_observations(candidate),
                     metadata={
@@ -283,17 +301,7 @@ def generate_decisions(
                     },
                 )
             )
-            decisions.append(
-                TargetDecision(
-                    strategy_id=_STRATEGY_ID,
-                    instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
-                    decision_time=exit_time,
-                    as_of_time=decision_time,
-                    target=0.0,
-                    metadata={"exit_reason": "fixed_horizon"},
-                )
-            )
-            active_until[symbol] = exit_time
+            active_until[symbol] = exit_time + timedelta(minutes=twap_bars - 1)
 
     return sorted(
         decisions,
@@ -303,6 +311,56 @@ def generate_decisions(
             decision.target,
         ),
     )
+
+
+def _ramped_decisions(
+    *,
+    symbol: str,
+    entry_time: datetime,
+    exit_time: datetime,
+    target: float,
+    twap_bars: int,
+    entry_as_of: datetime,
+    risk_rule: RiskRule | None,
+    observations: tuple[ObservationRef, ...],
+    metadata: Mapping[str, object],
+) -> list[TargetDecision]:
+    """Ramp a position in and out over ``twap_bars`` consecutive 1-minute bars.
+
+    Each standing target steps the cumulative NAV weight so the engine trades an
+    equal delta per bar, spreading entry and exit participation instead of pinning
+    one bar against the capacity cap. ``twap_bars == 1`` reproduces a single-bar
+    entry and single-bar exit. Entry steps carry the signal-bar ``as_of``; the exit
+    is the fixed-horizon unwind scheduled at entry, so its steps carry the entry
+    time as ``as_of``.
+    """
+
+    decisions: list[TargetDecision] = []
+    for step in range(twap_bars):
+        decisions.append(
+            TargetDecision(
+                strategy_id=_STRATEGY_ID,
+                instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
+                decision_time=entry_time + timedelta(minutes=step),
+                as_of_time=entry_as_of,
+                target=target * (step + 1) / twap_bars,
+                risk_rule=risk_rule,
+                observations=observations,
+                metadata=metadata,
+            )
+        )
+    for step in range(twap_bars):
+        decisions.append(
+            TargetDecision(
+                strategy_id=_STRATEGY_ID,
+                instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
+                decision_time=exit_time + timedelta(minutes=step),
+                as_of_time=entry_time,
+                target=target * (twap_bars - 1 - step) / twap_bars,
+                metadata={"exit_reason": "fixed_horizon"},
+            )
+        )
+    return decisions
 
 
 def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
@@ -389,6 +447,7 @@ def _candidate_at_signal_time(
     funding_lookback_events: int,
     return_lookback_minutes: int,
     recent_return_lookback_minutes: int,
+    vol_lookback_minutes: int,
 ) -> _Candidate | None:
     signal_index = bisect_right(rows.timestamps, signal_time) - 1
     if signal_index < 0:
@@ -437,8 +496,32 @@ def _candidate_at_signal_time(
         same_sign_funding_events=same_sign_funding_events,
         return_extension_bps=return_extension_bps,
         recent_return_bps=recent_return_bps,
+        volatility=_realized_volatility(rows, signal_index, vol_lookback_minutes),
         recent_row=recent_row,
     )
+
+
+def _realized_volatility(
+    rows: _SymbolRows, signal_index: int, lookback_minutes: int
+) -> float | None:
+    """Std of 1-minute close-to-close returns over the lookback ending at the signal bar.
+
+    Causal: uses only bars at or before the signal bar. Returns ``None`` when the
+    window is too short or degenerate so weighting can fall back to equal.
+    """
+
+    lookback_time = rows.bars[signal_index].timestamp - timedelta(minutes=lookback_minutes)
+    start = bisect_left(rows.timestamps, lookback_time)
+    window = rows.bars[start : signal_index + 1]
+    if len(window) < 3:
+        return None
+    returns = [
+        window[i].close / window[i - 1].close - 1.0 for i in range(1, len(window))
+    ]
+    mean = sum(returns) / len(returns)
+    variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
+    vol = math.sqrt(variance)
+    return vol if vol > 0.0 else None
 
 
 def _select_candidates(
@@ -498,6 +581,39 @@ def _select_candidates(
         reverse=True,
     )
     return selections[: _param_int(params, "top_n")]
+
+
+def _selection_targets(
+    selections: Sequence[_Selection], n_universe: int, weighting: str
+) -> list[float]:
+    """Per-selection target magnitudes (before the signed side is applied).
+
+    ``equal`` gives each name ``1/n_universe`` (gross scales with the number of
+    active names, unchanged from the equal-weight book). ``inverse_vol`` keeps the
+    same average per-name budget but reshapes it across the selected set in
+    proportion to ``1/realized_vol`` (risk parity), so gross per decision is
+    preserved while high-vol names carry proportionally less. Candidates with no
+    volatility estimate take the selected-set mean; a fully degenerate set falls
+    back to equal weight.
+    """
+
+    base = 1.0 / n_universe
+    if weighting == "equal":
+        return [base] * len(selections)
+
+    inverse = [
+        1.0 / selection.candidate.volatility
+        if selection.candidate.volatility
+        else None
+        for selection in selections
+    ]
+    known = [value for value in inverse if value is not None]
+    if not known:
+        return [base] * len(selections)
+    fill = sum(known) / len(known)
+    inverse = [value if value is not None else fill for value in inverse]
+    mean_inverse = sum(inverse) / len(inverse)
+    return [base * value / mean_inverse for value in inverse]
 
 
 def _score(
@@ -661,4 +777,11 @@ def _selection_score(value: object) -> str:
     parsed = str(value)
     if parsed not in {"combined", "funding", "extension"}:
         raise ValueError("selection_score must be one of: combined, funding, extension")
+    return parsed
+
+
+def _weighting(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"equal", "inverse_vol"}:
+        raise ValueError("weighting must be one of: equal, inverse_vol")
     return parsed

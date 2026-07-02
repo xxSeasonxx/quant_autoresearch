@@ -285,7 +285,7 @@ def _score_foundation_scenario(
         window_returns.append(parts[0])
         window_return_ses.append(parts[1])
 
-    # Full-Train deployed-return lower bound is the run score and the money-floor
+    # Full-Train deployed-return lower bound is the run score and the significance-gate
     # input (full_train is index 0). It is the binding in-sample robustness
     # instrument; per-subwindow returns are reported diagnostics, not gated, so
     # neither the score nor the floor binds on the noisiest short subwindow.

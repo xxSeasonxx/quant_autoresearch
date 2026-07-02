@@ -22,7 +22,7 @@ class ResultRow:
     status: str
     score: float | None
     worst_window_id: str
-    deflated_money_floor: float | None
+    deflated_return_lcb: float | None
     full_train_annualized_return: float | None
     worst_window_annualized_return: float | None
     cost_stress_return_retention: float | None
@@ -61,7 +61,7 @@ class ResultRow:
             "status",
             "score",
             "worst_window_id",
-            "deflated_money_floor",
+            "deflated_return_lcb",
             "full_train_annualized_return",
             "worst_window_annualized_return",
             "cost_stress_return_retention",
@@ -106,7 +106,7 @@ class ResultRow:
             "status": self.status,
             "score": optional(self.score),
             "worst_window_id": self.worst_window_id,
-            "deflated_money_floor": optional(self.deflated_money_floor),
+            "deflated_return_lcb": optional(self.deflated_return_lcb),
             "full_train_annualized_return": optional(self.full_train_annualized_return),
             "worst_window_annualized_return": optional(
                 self.worst_window_annualized_return
@@ -178,7 +178,7 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         ),
         score=_parse_float(row["score"]),
         worst_window_id=row["worst_window_id"],
-        deflated_money_floor=_parse_float(row["deflated_money_floor"]),
+        deflated_return_lcb=_parse_float(row["deflated_return_lcb"]),
         full_train_annualized_return=_parse_float(row["full_train_annualized_return"]),
         worst_window_annualized_return=_parse_float(
             row["worst_window_annualized_return"]

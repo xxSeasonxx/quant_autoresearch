@@ -154,6 +154,15 @@ value at trivial cost and forks no gate logic.
 
 ### `money_floor` is a deliberate choice, not a defect — keep it
 
+> **SUPERSEDED 2026-07-02.** Reversed by an operator decision: `money_floor` was
+> repurposed into a validity-only `significance` gate (deflated full-Train return ≥ 0),
+> `min_annualized_return` (0.10) was removed, and money materiality moved entirely to
+> the run score. The reasoning below held when the binding failure was capacity/scale;
+> once capacity relief shipped, the binding failure became statistical significance, and
+> the fused validity+materiality floor false-killed a real edge for reasons orthogonal to
+> edge quality. See `HISTORY.md`. The rest of this section is retained as a point-in-time
+> record.
+
 `money_floor` requires the deflated full-Train annualized return ≥
 `min_annualized_return = 0.10` (`gates.py:185-192`, `protocol.toml`). A real,
 significant edge whose deployable vol is capacity-throttled (e.g. ~1.6% vs a 15%

@@ -454,7 +454,7 @@ def _make_crash_row(
         status="crash",
         score=None,
         worst_window_id="",
-        deflated_money_floor=None,
+        deflated_return_lcb=None,
         full_train_annualized_return=None,
         worst_window_annualized_return=None,
         cost_stress_return_retention=None,
@@ -516,7 +516,7 @@ def _scored_result_row(
         status=status,
         score=objective.score,
         worst_window_id=objective.worst_window_id,
-        deflated_money_floor=_gate_value(gates, "money_floor"),
+        deflated_return_lcb=_gate_value(gates, "significance"),
         full_train_annualized_return=objective.full_train_return,
         worst_window_annualized_return=objective.worst_window_return,
         cost_stress_return_retention=_gate_value(gates, "cost_stress_retention"),
@@ -552,7 +552,7 @@ def _scored_result_row(
         ),
         cost_return_sum=_sum_optional(tuple(trade.cost_return for trade in trades)),
         complexity_count=max(len(params), len(tuple(components))),
-        failure_class=_failure_class(gates, objective, sizing),
+        failure_class=_failure_class(gates, objective),
         failure_reason="",
         best_status=best_status,
         continuation=continuation,
@@ -749,18 +749,19 @@ def _feasibility_note(result: object) -> str:
 def _failure_class(
     gates: GateSet | None,
     objective: ObjectiveResult | None,
-    sizing: FoundationSizing | None,
     *,
     error: str = "",
 ) -> str:
     """Derived, human-legible reason an attempt is not a keeper (``edge`` if it is).
 
-    A pure post-hoc classifier over already-computed gate outcomes, the deflated
-    money-floor value, and the capacity verdict — it forks no gate logic. The
-    money-floor split is the key signal: a real, significant edge throttled by
-    capacity (``capacity_bound``) reads differently from no deployable edge
-    (``no_edge``). Precedence is most-fundamental first: measurement validity, then
-    the economic verdict, then breadth, then evidence, then any other failed gate.
+    A pure post-hoc classifier over already-computed gate outcomes — it forks no gate
+    logic. The ``significance`` gate is the key economic signal: a failure means the
+    deflated full-Train return is below zero — the edge is not distinguishable from
+    best-of-N noise (``no_edge``). Capacity throttling is not a failure: a significant
+    but capacity-limited edge passes, and its low deployed scale shows in the run score
+    and the ``capacity_bound`` diagnostic. Precedence is most-fundamental first:
+    measurement validity, then the economic verdict, then breadth, then evidence, then
+    any other failed gate.
     """
     if "portfolio foundation" in error:
         return "foundation_unavailable"
@@ -780,15 +781,8 @@ def _failure_class(
 
     if failed("causality"):
         return "causality"
-    if failed("money_floor"):
-        # The deflated full-Train floor already bakes in the k_accept haircut, so a
-        # value >= 0 is a statistically significant positive edge: the money floor
-        # then failed on deployable scale, not edge quality. Attribute that to
-        # capacity only when the book is actually capacity-throttled.
-        floor = by_name["money_floor"].value
-        significant = floor is not None and isfinite(floor) and floor >= 0.0
-        throttled = sizing is not None and sizing.capacity_bound is True
-        return "capacity_bound" if (significant and throttled) else "no_edge"
+    if failed("significance"):
+        return "no_edge"
     if failed("breadth"):
         return "breadth_bound"
     if failed("minimum_evidence"):
@@ -821,7 +815,7 @@ def _write_run_card(
             "worst_window_annualized_return": None
             if objective is None
             else objective.worst_window_return,
-            "deflated_money_floor": _gate_value(gates, "money_floor")
+            "deflated_return_lcb": _gate_value(gates, "significance")
             if gates is not None
             else None,
             "cost_stress_return_retention": _gate_value(gates, "cost_stress_retention")
@@ -869,7 +863,6 @@ def _write_run_card(
         "failure_class": _failure_class(
             gates,
             objective,
-            None if foundation is None else foundation.sizing,
             error=error,
         ),
         "error": error,

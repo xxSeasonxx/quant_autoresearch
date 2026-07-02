@@ -1,13 +1,16 @@
 """Binary viability gates for a scored Train attempt.
 
 Gates are separate from the run score: a high score with a failed gate is not a
-keepable candidate, and a failed gate never changes the score. The money-first
-gates are:
+keepable candidate, and a failed gate never changes the score. The validity gates
+are:
 
-- ``money_floor``: the weakest-window deployed-return lower bound at the
-  acceptance haircut ``k_accept`` (``gates.score_haircut_se``) must clear
-  ``min_annualized_return``. ``k_accept`` is the multiple-testing correction for
-  the best-of-N search and is stricter than the score's ranking haircut.
+- ``significance``: the full-Train deployed-return lower bound, deflated at the
+  acceptance haircut ``k_accept`` (``gates.score_haircut_se``), must be positive —
+  i.e. the edge is statistically real after the best-of-N multiple-testing
+  correction (equivalently, the full-Train t-stat clears ``k_accept``). Materiality
+  (how much money the edge deploys) is not gated; it lives in the run score, which
+  the operator judges. A failed ``significance`` gate means the edge is not
+  distinguishable from best-of-N noise, not that it is merely small.
 - ``cost_stress_retention``: the cost-stress full-Train annualized return must
   retain at least ``min_cost_stress_return_retention`` of the realistic
   full-Train return, evaluated only when the realistic return is positive (a
@@ -23,7 +26,7 @@ complexity cap) constrain the evidence behind the score.
 Per-subwindow trade counts and per-slice returns are reported diagnostics, not
 gates: per-window sample sufficiency is owned by ``minimum_evidence`` (return
 samples and effective sample size, the latter autocorrelation-adjusted), and the
-binding in-sample robustness gate is the full-Train deflated ``money_floor``.
+binding in-sample robustness gate is the full-Train deflated ``significance`` gate.
 Per-slice return sign on contiguous, autocorrelated calendar slices is not gated
 — it cannot test regime independence (the firewalled OOS stage does that) and
 double-counts the full-Train deflation.
@@ -51,7 +54,6 @@ class GateConfig:
     max_symbol_concentration: float
     min_cost_stress_return_retention: float
     max_abs_drawdown: float
-    min_annualized_return: float
     score_haircut_se: float
     max_components: int
     max_params: int
@@ -167,13 +169,13 @@ def evaluate_gates(
             and max_drawdown <= 0.0
             and max_drawdown >= -config.max_abs_drawdown
         )
-        money_floor_value = deflated_window_floor(
+        significance_value = deflated_window_floor(
             objective, k_accept=config.score_haircut_se
         )
-        money_floor_passed = (
-            money_floor_value is not None
-            and isfinite(money_floor_value)
-            and money_floor_value >= config.min_annualized_return
+        significance_passed = (
+            significance_value is not None
+            and isfinite(significance_value)
+            and significance_value >= 0.0
         )
         realistic_full_return = objective.full_train_return
         retention_binding = (
@@ -218,11 +220,14 @@ def evaluate_gates(
                     threshold=-config.max_abs_drawdown,
                 ),
                 GateOutcome(
-                    name="money_floor",
-                    passed=money_floor_passed,
-                    value=money_floor_value,
-                    threshold=config.min_annualized_return,
-                    detail=f"k_accept={config.score_haircut_se}, full_train",
+                    name="significance",
+                    passed=significance_passed,
+                    value=significance_value,
+                    threshold=0.0,
+                    detail=(
+                        f"k_accept={config.score_haircut_se}, full_train, "
+                        "deflated return > 0"
+                    ),
                 ),
                 GateOutcome(
                     name="cost_stress_retention",

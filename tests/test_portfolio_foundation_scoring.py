@@ -259,7 +259,6 @@ def _gate_config() -> GateConfig:
         max_symbol_concentration=0.75,
         min_cost_stress_return_retention=0.5,
         max_abs_drawdown=0.2,
-        min_annualized_return=0.10,
         score_haircut_se=2.8,
         max_components=3,
         max_params=10,
@@ -350,7 +349,6 @@ min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
 min_cost_stress_return_retention = 0.5
 max_abs_drawdown = 0.2
-min_annualized_return = 0.10
 score_haircut_se = 2.8
 max_components = 3
 max_params = 10
@@ -371,7 +369,6 @@ def test_protocol_materializes_money_objective_and_micro(tmp_path: Path):
 
     assert protocol.output.causality_check == "micro"
     assert protocol.objective.kind == "return_lcb_subwindow"
-    assert protocol.gates.min_annualized_return == 0.10
     assert protocol.gates.score_haircut_se == 2.8
     assert protocol.gates.min_cost_stress_return_retention == 0.5
     assert output["causality_check"] == "micro"
@@ -590,22 +587,35 @@ def test_unknown_objective_kind_is_rejected():
 def test_default_foundation_passes_all_gates():
     _, _, gates = _evaluate(_foundation())
     assert gates.passed
-    assert gates.by_name["money_floor"].passed
+    assert gates.by_name["significance"].passed
     assert gates.by_name["cost_stress_retention"].passed
     assert gates.by_name["causality"].passed
 
 
-def test_money_floor_fails_when_deflated_lcb_below_hurdle():
-    # Positive point estimate, but the deflated lower bound falls under the hurdle.
+def test_significance_fails_when_deflated_lcb_negative():
+    # Positive point estimate, but the deflated lower bound is negative: not
+    # distinguishable from best-of-N noise, so the significance gate fails.
+    foundation = _foundation(full_train_mean=0.0002, worst_subwindow_mean=0.0002)
+    objective, _, gates = _evaluate(foundation)
+
+    lcb = deflated_window_floor(objective, k_accept=2.8)
+    assert objective.full_train_return is not None and objective.full_train_return > 0.0
+    assert lcb is not None and lcb < 0.0
+    assert not gates.by_name["significance"].passed
+    # The failed gate does not change the base score.
+    assert objective.score == _lcb(0.0002, 0.0010, 120.0, k=1.0)
+
+
+def test_significance_passes_when_deflated_lcb_nonnegative():
+    # A real edge whose deflated LCB is positive but below the old 0.10 materiality
+    # floor now PASSES: significance is gated, materiality is not (it lives in the
+    # run score, which the operator judges).
     foundation = _foundation(full_train_mean=0.00045, worst_subwindow_mean=0.00045)
     objective, _, gates = _evaluate(foundation)
 
-    money_floor = deflated_window_floor(objective, k_accept=2.8)
-    assert objective.worst_window_return is not None and objective.worst_window_return > 0.0
-    assert money_floor is not None and money_floor < 0.10
-    assert not gates.by_name["money_floor"].passed
-    # The failed gate does not change the base score.
-    assert objective.score == _lcb(0.00045, 0.0010, 120.0, k=1.0)
+    lcb = deflated_window_floor(objective, k_accept=2.8)
+    assert lcb is not None and 0.0 <= lcb < 0.10
+    assert gates.by_name["significance"].passed
 
 
 def test_cost_stress_retention_fails_when_weak():
@@ -623,7 +633,7 @@ def test_cost_stress_retention_non_binding_when_realistic_nonpositive():
     objective, _, gates = _evaluate(foundation)
     assert objective.full_train_return is not None and objective.full_train_return <= 0.0
     assert gates.by_name["cost_stress_retention"].passed  # non-binding
-    assert not gates.by_name["money_floor"].passed  # money floor is the kill
+    assert not gates.by_name["significance"].passed  # significance is the kill
 
 
 def test_causality_gate_fails_when_not_admissible():
@@ -685,7 +695,7 @@ def _row() -> ResultRow:
         status="keep",
         score=0.2037,
         worst_window_id="train_2",
-        deflated_money_floor=0.162,
+        deflated_return_lcb=0.162,
         full_train_annualized_return=0.3024,
         worst_window_annualized_return=0.2268,
         cost_stress_return_retention=0.667,
@@ -696,7 +706,7 @@ def _row() -> ResultRow:
         full_train_psr=0.98,
         worst_subwindow_psr=0.91,
         gates_passed=True,
-        gate_flags="money_floor=pass",
+        gate_flags="significance=pass",
         trade_count=52,
         min_subwindow_trades=12,
         total_return=0.04,
@@ -726,7 +736,7 @@ def test_result_log_round_trips_and_replaces_empty_legacy_header(tmp_path: Path)
     append_result(header_only, row)
     header = header_only.read_text().splitlines()[0].split("\t")
     assert header == ResultRow.header()
-    assert "deflated_money_floor" in header
+    assert "deflated_return_lcb" in header
     assert "book_scale" in header
     assert "capacity_bound" in header
     assert "cost_stress_psr" not in header
@@ -853,7 +863,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert outcome.status == "keep"
     assert rows[0].score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
     assert rows[0].worst_window_id == "full_train"
-    assert rows[0].deflated_money_floor == _lcb(0.0012, 0.0010, 120.0, k=2.8)
+    assert rows[0].deflated_return_lcb == _lcb(0.0012, 0.0010, 120.0, k=2.8)
     assert rows[0].full_train_annualized_return == 0.0012 * _P
     assert rows[0].worst_window_annualized_return == 0.0012 * _P
     assert rows[0].book_scale == 1.5
@@ -943,14 +953,14 @@ def test_run_iteration_discards_when_causality_not_admissible(tmp_path: Path):
     assert run_card["failure_class"] == "causality"
 
 
-def test_run_iteration_discards_when_money_floor_fails(tmp_path: Path):
+def test_run_iteration_discards_when_significance_fails(tmp_path: Path):
     _write_workspace(tmp_path)
     protocol = load_protocol(tmp_path / "protocol.toml")
     result = FakeRunResult(
         succeeded=True,
         economics=FakeEconomics(trades=()),
         foundation=FakeFoundation(
-            _foundation(full_train_mean=0.00045, worst_subwindow_mean=0.00045)
+            _foundation(full_train_mean=0.0002, worst_subwindow_mean=0.0002)
         ),
         evidence=FakeEvidence(causality=FakeCausality()),
     )
@@ -971,7 +981,7 @@ def test_run_iteration_discards_when_money_floor_fails(tmp_path: Path):
         (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
     )
     assert outcome.status == "discard"
-    assert "money_floor=fail" in row.gate_flags
+    assert "significance=fail" in row.gate_flags
     assert run_card["failure_class"] == "no_edge"
 
 
@@ -1113,13 +1123,13 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
 def _gates_with(
     *,
     failed: frozenset[str] = frozenset(),
-    money_floor_value: float | None = 0.2,
+    significance_value: float | None = 0.2,
 ) -> GateSet:
     names = (
         "trade_floor",
         "minimum_evidence",
         "path_risk",
-        "money_floor",
+        "significance",
         "cost_stress_retention",
         "breadth",
         "causality",
@@ -1130,7 +1140,7 @@ def _gates_with(
             GateOutcome(
                 name=name,
                 passed=name not in failed,
-                value=money_floor_value if name == "money_floor" else None,
+                value=significance_value if name == "significance" else None,
                 threshold=None,
             )
             for name in names
@@ -1139,55 +1149,50 @@ def _gates_with(
 
 
 def test_failure_class_edge_when_all_gates_pass():
-    assert loop._failure_class(_gates_with(), None, _sizing()) == "edge"
+    assert loop._failure_class(_gates_with(), None) == "edge"
 
 
-def test_failure_class_capacity_bound_when_money_floor_throttled_with_real_edge():
-    # money_floor fails but the deflated floor is >= 0 (a significant edge after the
-    # k_accept haircut) and the book is capacity-bound: real edge, throttled scale.
-    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=0.05)
-    sizing = _sizing(capacity_bound=True, deployed_volatility=0.02, max_feasible_volatility=0.02)
-    assert loop._failure_class(gates, None, sizing) == "capacity_bound"
+def test_failure_class_capacity_bound_is_not_a_failure():
+    # A significant edge (significance gate passes) that is capacity-throttled is a
+    # keeper: capacity is a reported diagnostic, not a failure. A small positive
+    # deflated LCB still classifies as ``edge``.
+    assert loop._failure_class(_gates_with(significance_value=0.05), None) == "edge"
 
 
-def test_failure_class_no_edge_when_deflated_floor_negative():
-    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=-0.5)
-    assert loop._failure_class(gates, None, _sizing(capacity_bound=True)) == "no_edge"
-
-
-def test_failure_class_no_edge_when_money_floor_fails_without_capacity_bound():
-    # Significant edge (floor >= 0) but not capacity-throttled: scaling won't help.
-    gates = _gates_with(failed=frozenset({"money_floor"}), money_floor_value=0.05)
-    assert loop._failure_class(gates, None, _sizing(capacity_bound=False)) == "no_edge"
+def test_failure_class_no_edge_when_significance_fails():
+    gates = _gates_with(failed=frozenset({"significance"}), significance_value=-0.5)
+    assert loop._failure_class(gates, None) == "no_edge"
 
 
 def test_failure_class_breadth_evidence_and_gate_fallback():
     assert (
-        loop._failure_class(_gates_with(failed=frozenset({"breadth"})), None, _sizing())
+        loop._failure_class(_gates_with(failed=frozenset({"breadth"})), None)
         == "breadth_bound"
     )
     assert (
-        loop._failure_class(_gates_with(failed=frozenset({"minimum_evidence"})), None, _sizing())
+        loop._failure_class(_gates_with(failed=frozenset({"minimum_evidence"})), None)
         == "evidence_thin"
     )
     assert (
-        loop._failure_class(_gates_with(failed=frozenset({"path_risk"})), None, _sizing())
+        loop._failure_class(_gates_with(failed=frozenset({"path_risk"})), None)
         == "path_risk"
     )
 
 
-def test_failure_class_causality_takes_precedence_over_money_floor():
-    gates = _gates_with(failed=frozenset({"causality", "money_floor"}), money_floor_value=-0.5)
-    assert loop._failure_class(gates, None, _sizing()) == "causality"
+def test_failure_class_causality_takes_precedence_over_significance():
+    gates = _gates_with(
+        failed=frozenset({"causality", "significance"}), significance_value=-0.5
+    )
+    assert loop._failure_class(gates, None) == "causality"
 
 
 def test_failure_class_error_states():
     assert (
-        loop._failure_class(None, None, None, error="portfolio foundation unavailable")
+        loop._failure_class(None, None, error="portfolio foundation unavailable")
         == "foundation_unavailable"
     )
-    assert loop._failure_class(None, None, None, error="boom") == "run_error"
+    assert loop._failure_class(None, None, error="boom") == "run_error"
     assert (
-        loop._failure_class(None, ObjectiveResult(score=None, feasible=False), None)
+        loop._failure_class(None, ObjectiveResult(score=None, feasible=False))
         == "score_unavailable"
     )

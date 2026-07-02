@@ -80,7 +80,6 @@ min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
 min_cost_stress_return_retention = 0.5
 max_abs_drawdown = 0.2
-min_annualized_return = 0.10
 score_haircut_se = 2.8
 max_components = 3
 max_params = 10
@@ -98,7 +97,6 @@ def _brief_text(
     max_iterations: int = 50,
     target_volatility: float = 0.18,
     max_abs_drawdown: float = 0.22,
-    min_annualized_return: float = 0.12,
 ) -> str:
     universe_lines = ""
     if symbols is not None:
@@ -136,7 +134,6 @@ max_net_exposure = 1.0
 risk_budget_mode = "calibrate_vol"
 target_volatility = {target_volatility}
 max_abs_drawdown = {max_abs_drawdown}
-min_annualized_return = {min_annualized_return}
 objective_subwindows = 6
 min_trades = 180
 min_return_sample_count = 200
@@ -226,7 +223,6 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert recommended["risk_budget"]["target_volatility"] == 0.18
     assert recommended["leverage_budget"]["max_gross_exposure"] == 1.5
     assert recommended["gates"]["max_abs_drawdown"] == 0.22
-    assert recommended["gates"]["min_annualized_return"] == 0.12
     assert recommended["gates"]["min_trades"] == 180
     assert recommended["gates"]["min_return_sample_count"] == 200
     assert recommended["gates"]["min_effective_sample_size"] == 80.0

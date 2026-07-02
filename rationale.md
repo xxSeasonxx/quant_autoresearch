@@ -29,14 +29,22 @@ return. All eight are `research_ready` in the derived funding dataset with full
 source/derived row parity and complete `2025-03-01..2025-12-31` coverage. Symbol
 membership is protocol-frozen for this lifecycle.
 
-Why eight (not five): a cross-sectional reversal needs enough simultaneous
-candidates that the book is genuinely cross-sectional. Five names left the book
-firing one name at a time — symbol concentration pinned at 1.0, one calendar
-subwindow trade-starved, and the deployed-return Sharpe lower bound too lumpy to
-clear the money floor. Eight majors give the ranking more independent names to
-populate every subwindow, hold concentration under the breadth gate, and smooth
-the Sharpe lower bound. Capacity reshaping (spreading entries across bars) is a
-strategy-side lever, not a reason for more symbols.
+Why at least eight, and never fewer: this is a cross-sectional reversal, and the
+tradeable signal is relative — the idiosyncratic price extension is measured
+against the cross-section mean over the candidates present at the signal bar. At
+one name that deviation is identically zero, so the book cannot trade; at two or
+three, the cross-section mean the ranking depends on is noise. Fewer names is
+worse on every axis: it degrades the signal's own denominator, raises each name's
+equal weight and economic concentration toward the breadth gate, and cuts closed
+trades — widening the SE that the deflated money floor must overcome. The
+eight-name edge is broadly cross-sectional (most names net positive, concentrated
+in altcoins, not one-name beta), so if the money floor binds through a thin, lumpy
+Sharpe rather than a weak per-trade edge, the honest reseed is *wider* — toward
+the research-ready altcoins in the eligible twenty-five — never narrower. Read
+`effective_symbol_count` and `max_symbol_concentration` each run to judge realized
+breadth, and converge the active book with `top_n`, never by pruning the frozen
+universe. Capacity reshaping (spreading entries across bars) is a strategy-side
+lever, not a reason to change symbols.
 
 ## Signal Components
 
@@ -80,18 +88,28 @@ if the edge depends on one symbol or one time slice.
 
 ## Scoring Contract (current objective)
 
-The run score and `money_floor` gate deflate the **full-Train** annualized return
-at `k = 2.0` SE: pass needs `full_train_return - 2.0 * SE >= 0.10`. A separate
-light `subwindow_consistency` gate tolerates one of six subwindows below the
-`min_subwindow_return = 0.0` floor. Clearing the money floor needs an annualized
-Sharpe of about **2.86** under best-case dense sampling; a lumpy, autocorrelated
-held book needs more.
+The `significance` gate deflates the **full-Train** annualized return at `k = 2.0` SE and
+requires it to be **positive**: pass needs `full_train_return - 2.0 * SE >= 0`
+(`k_accept = gates.score_haircut_se`) — i.e. the edge is statistically real after the best-of-N
+multiple-testing correction (equivalently, the full-Train t-stat clears `k_accept`). It is the
+sole binding gate here; the other seven pass with margin. **Materiality is not gated:** how much
+money the edge deploys lives in the run score (`return - 1.0 * SE`, the deployed-return LCB the
+loop ranks on) and is the operator's judgment, not a hard floor. A `significance` failure means
+the edge is not distinguishable from best-of-N noise — not that it is merely small; and
+`capacity_bound` is a passing diagnostic, not a failure.
 
-Money floor = `deployed_vol x (Sharpe - 2.0 * Sharpe_SE)`. Two levers, both
-required: (1) a Sharpe **lower bound** comfortably positive — high t-stat, meaning
-many independent, low-kurtosis bets, not a few fat-tail winners; (2) enough
-**deployed vol** that the positive LCB clears 10%. Scaling vol multiplies the LCB,
-so vol only helps once the LCB is positive.
+Why the realized t sits at ~2 (verified against upstream, not an artifact): `t =
+full_train_return / SE = Φ⁻¹(PSR) = annualized_Sharpe * sqrt(n_eff / P)`, which reduces to
+`t = Sharpe * sqrt(duty_cycle * window_years)`. The book is at-risk only ~33% of the calendar
+(n_eff = 145,168 at-risk minutes / P = 525,600 → n_eff/P ≈ 0.28, √ ≈ 0.53), so at Sharpe ~3.8 →
+t ~2.0 and the deflated LCB sits right at zero. `n_eff` uses a Kish lag-1 factor and applies NO
+discount here (minute returns near-white at lag 1); kurtosis (~65) folds into the Sharpe SE but
+is negligible at this per-minute Sharpe — so t~2 is faithful, if slightly conservative. t is
+**scale-invariant** (same at 1.6% and 10% vol), so capacity lifts deployed return (the score) but
+not significance. The lever that raises t is a larger universe — **mainly by lifting duty cycle**
+(more names firing → more at-risk calendar → higher n_eff); the diversification/Sharpe gain is
+limited because crypto-perp crowding is one highly-correlated factor (ρ ≈ 0.6-0.8, which is why B2
+risk-parity was inert and B3 density diluted). Neither shape nor scale on 8 names moves it.
 
 ## Prior-Universe Hypotheses To Re-Test On The Broad Cross-Section
 
@@ -153,9 +171,277 @@ threshold is retained as a recall-oriented economic-dependence ceiling: one name
 may carry up to 70% of realized PnL. The dated entries below record breadth as
 observed under the prior metric.
 
-## Iteration Log
+## Current Lifecycle — Corrected Harness (active)
 
-Fresh lifecycle on the eight-major universe. Prior five-name attempts are archived
+Fresh lifecycle re-baselined on the corrected harness (attempt-0001). Same 8-major
+universe and mechanism as the archived log below; the harness changed:
+
+- `breadth` now reads **economic** concentration (largest symbol's share of realized
+  PnL), not peak gross notional. It PASSES (0.305 << 0.70). The archived "breadth is a
+  structural 1.0 wall" lesson is **obsolete** — an artifact of the old metric.
+- `subwindow_coverage` is **removed** as a gate; `subwindow_consistency` is now a
+  diagnostic. Per-window sufficiency lives only in `minimum_evidence` (return samples +
+  effective sample size). Archived "coverage fails / 3-of-6 windows negative" no longer gate.
+- `effective_symbol_count` (inverse-HHI of PnL shares) is a reported breadth diagnostic;
+  `failure_class` names the binding constraint semantically.
+
+What transfers (edge statistics unchanged): the edge is **one-directional** (fade
+crowded-short capitulations, go long; shorts have no gross edge); the minimal sufficient
+core is **negative funding ≥ 1 bp + price-down + idiosyncratically-down-vs-peers ≥ 2.5 bp**
+(persistence and falling-knife guards removable, funding-magnitude and cross-section floors
+load-bearing); cadence **240** is the edge peak; every magnitude/timing tightening removes
+good trades. The t-stat ceiling on 8 names was ~2.07, capped by setup sparsity (1-3
+concurrent crowded-shorts).
+
+**B0 baseline (attempt-0001) = archived best config** (cadence 240, long-only,
+min_same_sign 1, min_abs_funding 1, min_idio 2.5, recent-guard off, hold 720, top_n 5,
+fixed-horizon, entry_twap_bars 1): discard, score +0.0335, **failure_class capacity_bound**.
+Only `money_floor` fails (deflated +0.0023, needs +0.10); the other 7 gates pass (breadth
+0.305, causality pass, cost-stress 0.83, PF 1.686, PSR 0.981, full-train t ~2.07, 306 trades,
+effective_symbol_count 5.16). Real, broadly cross-sectional, cost-robust edge deployed at only
+**1.6% vol** (book_scale 0.052, max_feasible_vol == deployed_vol == 0.0163) vs 15% target, so
+6.5% return misses the 10% floor. **Binding constraint = capacity → deployed vol.** money_floor
+= deployed_vol × (Sharpe − 2·Sharpe_SE); with t~2 the deflation factor (1 − 2/t) ≈ 0.03 is tiny,
+so approaching +0.10 needs BOTH capacity relief AND a materially higher t-stat.
+
+- **B1 (entry_twap_bars 1 → 10; capacity relief):** Mechanism — selected names enter/exit
+  in one decision minute, pinning that bar at the 0.50 bar-participation cap and throttling
+  book_scale to 0.052. Ramping each name in over 10 consecutive 1-min bars (equal deltas) and
+  out over 10 bars drops per-bar participation ~10×, shifting the binding cap from
+  bar-participation toward the ADV ceiling (~0.25 vs current ~0.09). Observable —
+  max_feasible_vol / book_scale / deployed_vol. Falsifier — deployed vol does not rise (bar
+  participation was not binding, or per-symbol ADV already binds), or the edge degrades (a
+  10-min spread over a 720-min hold should be negligible). Now causally admissible
+  (multi-decision-per-signal ramp no longer false-flagged as suppression). Even on full
+  success, ~2-3× capacity relief lifts money_floor to ~0.006 (still < +0.10) — this measures
+  the true capacity ceiling, not a pass.
+- **B1 result (attempt-0002): capacity relief CONFIRMED; t-stat is the residual wall.**
+  book_scale 0.052 → **0.171**, deployed_vol 1.63% → **5.36%** (3.3×), full-train return
+  6.5% → **19.8%**, score 0.0335 → **0.0955 (new best)**. Edge untouched: PF 1.686 → 1.679,
+  306 trades (identical), concentration 0.308, cost-stress 0.77 pass. Still `capacity_bound`
+  (5.4% == max_feasible_vol → now at/near the ADV ceiling, ~3.3× vs A30's ~2.8× estimate).
+  BUT full-train t 2.07 → **1.93** (staggered fills reshaped the return-series
+  autocorrelation), so deflated money_floor +0.0023 → **−0.0068** and `failure_class`
+  flipped capacity_bound → no_edge. KEY STRUCTURE: money_floor = deployed_vol × Sharpe ×
+  (1 − 2/t) flips sign at **t = 2**; B0 was just above, B1 just below. Capacity is now
+  largely captured; the sole remaining lever to +0.10 is the **t-stat** (need ~3-4; at 5.4%
+  vol and Sharpe ~3.7, t=4 → floor ~0.099). Kept TWAP-10 as the deployable base; the t-stat
+  is universe-independence-bound, so the next moves attack portfolio-return SE directly.
+- **B2 (inverse-volatility weighting; TWAP-10 base):** Replace equal 1/N weights with a
+  risk-parity book shape — each selected name weighted ∝ 1/realized_vol (vol estimated
+  causally from 1-min returns over `vol_lookback_minutes` ending at the signal bar), gross
+  per decision preserved. Mechanism — equalizing per-name risk contribution stops the
+  high-vol altcoins from dominating portfolio variance, lowering portfolio-return SE for the
+  same mean → higher Sharpe/t-stat (classic risk-parity gain), pushing the deflated floor
+  back above zero and toward +0.10. This is the top untested signal-construction lever.
+  Falsifier — t-stat flat or worse: the edge is genuinely concentrated in the high-vol
+  altcoins (A11/A16: DOGE/XRP/SOL/ADA carry it, BTC/ETH rarely fire), so down-weighting them
+  loses more return than variance. Either outcome is decisive about where the edge lives.
+- **B2 result (attempt-0003): inverse-vol is INERT.** score 0.0955 → 0.0965, deflated
+  −0.0068 → −0.0054, t ~1.93 → ~1.95, PF 1.679 → 1.681 — every metric moved ~0.001. Neither
+  hurt (edge is not fragile to down-weighting altcoins) nor helped t. Reason: you cannot
+  risk-balance a book that holds only 1-3 names at a time — weighting cannot manufacture
+  independence the universe does not supply. THIRD confirmation of the t~2 ceiling from
+  concurrent-setup sparsity (archived top_n 8 ≡ 5; B1 capacity relieved 3.3× but t flat; B2
+  risk-parity inert). Capacity ceiling is likewise the per-name ADV cap (bar-cap had 10×
+  headroom at N=10, vol rose only 3.3×) — also a few-names artifact. Both walls trace to the
+  universe. Kept inverse_vol as the marginal-best base (candidate for later simplification).
+- **B3 (decision_interval 240 → 120; TWAP-10, inverse_vol base):** The archived lifecycle
+  converged to a tight, sparse, cadence-240 book partly because the now-removed breadth
+  (gross-notional) and subwindow_coverage gates punished density; and faster cadence
+  previously CRASHED on capacity (A3, pre-TWAP). Both blockers are gone. Mechanism — 2×
+  decision points create more overlapping cohorts → more concurrent names held → higher
+  effective sample size / lower portfolio-return SE → higher money-floor t-stat, now that
+  TWAP prevents the synchronized-entry capacity collapse. Observable — t-stat / n_eff /
+  concurrent breadth / deployed vol / PF. Falsifier — PF dilutes (faster cadence re-enters
+  the same names at lower-quality points, as A3 showed 1.33→1.19) and t does not rise →
+  cadence 240 stays the peak and faster cadence hurts the edge regardless of capacity.
+- **B3 result (attempt-0004): FALSIFIED — faster cadence is decisively worse.** cadence 120:
+  score 0.0965 → 0.0331, return 19.8% → 10.4% (halved), PF 1.681 → 1.385 (diluted), t ~1.95
+  → ~1.47, deployed vol 5.34% → 4.19% (lower — more turnover tightens the per-name ADV cap).
+  436 trades but worse: the extra entries are autocorrelated re-samples of the same crowded
+  names, NOT independent bets, so n_eff did not rise. This REFUTES "the old lifecycle
+  over-tightened due to now-removed gates" — the tight, sparse cadence-240 book is genuinely
+  optimal under the corrected harness too, not a gate artifact. Reverted to cadence 240.
+- **Trade-tape inspection (B1 diagnostics) rules out a stop-loss.** All 306 exits are
+  fixed-horizon; avg_win +7.7 bps / avg_loss −6.2 bps (near-symmetric), PF 1.68; the largest
+  losers are only ~−0.3% NAV and exit at the horizon — there is NO fat left tail to cut. A
+  stop-loss would whipsaw (cut mid-hold dips that recover over the slow reversal), consistent
+  with A6/A7/A18 (every exit-timing edit hurt). Not tested — evidence argues against it.
+- **B4 (entry_twap_bars 10 → 20; equal weighting; cadence-240 base):** Two consolidations.
+  (1) Simplification — revert inverse_vol → equal (B2 proved it inert, +0.001, but +2 params);
+  the simpler book is the base. (2) Capacity-ceiling characterization — vs B1 (TWAP-10, equal,
+  5.36% vol) this isolates whether deployable vol is maxed at the per-name ADV cap. Prediction
+  — INERT: at N=10 the bar-participation cap has ~10× headroom yet vol rose only 3.3×, so the
+  ADV cap (unaffected by more intraday spreading) already binds; N=20 should hold ~5.4% vol.
+  Falsifier — vol rises materially → bar-participation was still binding and more capacity is
+  free. Either way this fixes the true 8-name capacity ceiling for the handoff/reseed case.
+
+- **B4 result (attempt-0005): PREDICTION OVERTURNED — capacity is NOT maxed; new best by 2×.**
+  N=20 (equal): score 0.0955 → **0.1957** (~5.8× baseline), deployed vol 5.4% → **10.1%**
+  (doubled again toward the 15% target), return 19.8% → **38.8%**, deflated money_floor −0.0068
+  → **+0.0032 (positive)**, t 1.93 → **2.02** (recovered above 2 — TWAP does NOT systematically
+  hurt t), PF 1.679 → **1.718**, 306 trades (identical), failure_class no_edge → capacity_bound.
+  The bar-participation cap was STILL binding at N=10; N=20 relieved it further. Still
+  `capacity_bound` at 10.1% → more headroom below 15% target likely remains. Equal weighting
+  adopted (inverse_vol dropped — inert, +2 params). TWO durable facts: (1) capacity is the
+  dominant profitability lever and is not exhausted — deployable return climbs strongly with N;
+  (2) money_floor = return × (1 − 2/t), so at t≈2 the deflation factor ≈ 0 and even full 15% vol
+  leaves the floor near zero — clearing +0.10 needs t ≈ 3-4 (e.g. return ~30% at t=3 → floor
+  0.13). t is scale-invariant (B4 at 10% vol has the same t≈2 as B0 at 1.6%), so it stays
+  universe-bound; capacity lifts deployable return, not significance.
+- **B5 (entry_twap_bars 20 → 30, bound max 30 → 60; equal, cadence-240 base):** Push capacity
+  to the 15% risk-budget target. Mechanism — the bar-participation cap still binds at N=20
+  (vol 10.1% < 15% target, capacity_bound true); spreading each entry/exit over 30 bars lowers
+  per-bar participation further. Observable — deployed vol / book_scale / capacity_bound flag.
+  Success — deployed vol → ~15% (capacity_bound flips FALSE = risk budget, not liquidity, is
+  the limit), return → ~55%, score → ~0.29. Falsifier — vol plateaus below 15% (a per-name ADV
+  cap, unaffected by more intraday spreading, is the true ceiling) → that plateau IS the honest
+  8-name capacity ceiling. Either way maximizes deployable return and fixes the ceiling.
+
+- **B5 result (attempt-0006): capacity is NON-MONOTONIC in N; peak ≈ N=20.** N=30: deployed
+  vol 10.1% → **4.9%** (dropped, ≈ N=10 level), book_scale 0.326 → 0.160, return 38.8% →
+  19.6%, score 0.196 → 0.103. deployed_vol/book_scale ≈ 0.31 across ALL N, so this is a pure
+  capacity-sizing effect: the model allowed 2× higher book_scale at N=20 than N=30. Mechanism
+  — spreading over more bars cuts per-bar size but touches MORE bars, raising the chance of
+  hitting a thin-liquidity minute the per-bar participation cap binds on; so deployable vol
+  peaks (~N=20) rather than rising monotonically to the 15% target. The true 8-name capacity
+  ceiling is ~10% vol, not 15%. (N=30's deflated floor +0.0097 > N=20's +0.0032 is only t-noise
+  2.10 vs 2.02; both far from +0.10.) Vol trajectory by N: 1→1.6%, 10→5.4%, 20→10.1%, 30→4.9%.
+- **B6 (entry_twap_bars 30 → 25; equal, cadence-240 base):** Confirm the deployed-vol peak is
+  broad (robust optimum) vs a sharp spike at exactly N=20 (execution-noise artifact). Success —
+  N=25 vol ≈ 8-10% (broad peak → N≈20-25 is a stable deployable optimum). Falsifier — N=25 vol
+  ≈ 5% (sharp spike at 20 → the peak is a fragile capacity-model artifact, treat frontier as
+  ~5-10% noisy). Either way fixes the deployable optimum for the survivor/reseed handoff.
+
+- **B6 result (attempt-0007): N=20 is a SHARP SPIKE, not a broad peak.** N=25: deployed vol
+  **4.1%** (≈ N=10/25/30 cluster of 4-5.4%), score 0.085, return 16.3%. So by-N vol is
+  1→1.6%, 10→5.4%, 20→**10.1%**, 25→4.1%, 30→4.9% — only N=20 doubled. deployed_vol/book_scale
+  ≈ 0.31 throughout, so N=20 got 2× book_scale purely because that ramp offset avoided the
+  thin-liquidity minutes the per-bar cap binds on for the least-liquid name — a fragile,
+  Train-window-specific capacity artifact, not to be banked (North Star: no number the Train
+  window merely liked). Robust deployable frontier ≈ 5% vol (score ~0.10, ~3× baseline) — a
+  real, defensible TWAP capacity gain. money_floor still universe-bound (t ~2).
+- **B7 (entry_twap_bars 25 → 18; equal, cadence-240 base):** One decisive test of the N=20
+  spike width, because ~10% vs ~5% vol is a 2× profitability difference for the handoff.
+  Success — N=18 vol ≈ 9-10% (peak is broad 18-20, ~10% is robust and bankable). Falsifier —
+  N=18 vol ≈ 5% (razor spike at exactly 20, discount it; robust frontier stays ~5%). Stop
+  tuning N after this regardless of outcome — further N search would be overfitting the
+  capacity model to specific liquid minutes.
+
+- **B7 result (attempt-0008): ~10% vol is an N=18-20 PLATEAU, not a razor spike.** N=18:
+  deployed vol **9.2%**, score **0.173**, return 34.8%, PF 1.705, t ~1.99 (deflated −0.0023).
+  Updated by-N vol: 10→5.4%, 18→9.2%, 20→10.1%, 25→4.1%, 30→4.9%. So ~10% is reachable across
+  N≈18-20 with a sharp cliff above ~22 back to the ~5% floor. More robust than a spike but the
+  nearby cliff keeps the exact level execution-timing-sensitive. Deployable frontier: ~5%
+  robust floor, up to ~10% at N=18-20. Even at the ~10% peak the deflated floor is ~0 (t≈2) —
+  the survivor gate is capacity-independent and universe-bound. Stopped tuning N (committed).
+
+- **B8 result (attempt-0009): the edge is CROSS-SECTIONAL — min_idio is load-bearing.** min_idio
+  2.5 → 0 (N=18 base): PF 1.705 → 1.636, t 1.99 → 1.89, score 0.173 → 0.153, +12 trades. Removing
+  the idiosyncratically-down-vs-peers screen admits names down absolutely but not relative to the
+  cross-section → lower quality → PF/t drop (matches archived A16). Reverted to 2.5. The tradeable
+  edge is genuinely relative-value, so a LARGER cross-section improves signal quality (cleaner
+  relative ranking, more simultaneous idiosyncratic-deviation candidates) — a third, independent
+  reason the reseed lever is a bigger universe.
+
+## Current Lifecycle — Convergence Summary (attempt 9)
+
+Nine attempts on the corrected harness fully characterize the thesis:
+
+- **Win (real, robust):** entry-TWAP capacity relief lifts deployable volatility from the
+  1.6% baseline to a ~5% robust floor and a ~9-10% N=18-20 plateau — a 3-6× gain in deployable
+  return (score 0.033 → ~0.10 robust, ~0.17-0.20 at the plateau) with the edge intact (PF ~1.7,
+  causality pass, cost-stress ~0.78, breadth ~0.31). This is the first time this thesis has
+  deployed materially — the archived lifecycle was capacity-throttled to 1.6% and its TWAP
+  probe was bug-blocked.
+- **Wall (confirmed 5 ways):** the money_floor at +0.10 needs a full-Train t-stat ≈ 3-4;
+  it sits at ~2.0 (±0.1 noise) and is scale-invariant (same t at 1.6% and 10% vol) and
+  universe-bound. Unbroken by capacity (B1/B4), risk-parity weighting (B2, inert — too few
+  concurrent names to balance), density/faster cadence (B3, dilutes edge), and the trade tape
+  rules out a stop-loss (no fat left tail). Archived top_n 8 ≡ 5 confirms 1-3 concurrent setups.
+- **Both walls trace to one fact:** 8 names supply only 1-3 concurrent crowded-short setups,
+  which caps the t-stat (independence) AND the per-name ADV capacity. The single lever that
+  breaks both is a materially larger universe (~25 names) — a reseed, Season's call.
+
+The entire editable surface is now mapped (this lifecycle: capacity/TWAP N=1-30, weighting,
+cadence, exit/stop-loss, cross-section; archived and edge-invariant: funding/return/horizon/
+selection params). No untested distinct lever remains — further runs would be redundant
+re-confirmation (edge statistics unchanged) or N-polishing (overfitting the capacity model to
+specific liquid minutes). Search stopped at convergence rather than run redundant slots to 50.
+
+## Frozen Survivor-Candidate (this lifecycle) — NOT a Train survivor
+
+No config clears the Train gates (money_floor unreachable on 8 names). The best robust
+deployable candidate for Season's downstream OOS/paper/small-live review is **attempt-0008**
+(current `experiment.toml`): long-only crowding-reversal, cadence 240, min_same_sign 1,
+min_abs_funding 1, min_idio 2.5, recent-guard off, hold 720, top_n 5, equal weighting,
+**entry_twap_bars 18**. Score 0.173, deployed vol 9.2%, full-Train return 34.8%, PF 1.705,
+PSR 0.977, t ~1.99, breadth 0.31, causality pass, cost-stress 0.78. Peak-score point is
+attempt-0005 (N=20, score 0.196, vol 10.1%) but it sits at the capacity cliff (N>22 halves
+vol) so it is less robust; the ~5% floor (N=10/25/30) is the conservative deployable level.
+This is a candidate-quality edge, not a promotion signal.
+
+## Reseed Case (for Season; not executed) — larger universe
+
+The thesis is envelope-bound, not edge-bound. Both binding walls share one root cause and one fix.
+
+- **Root cause:** 8 majors supply only 1-3 concurrent crowded-short setups (top_n 8 ≡ top_n 5;
+  min_cross_section inert). This simultaneously (a) caps statistical independence → full-Train
+  t-stat ~2.0, so the deflated money_floor = return × (1 − 2/t) stays ~0 and the +0.10 gate is
+  unreachable regardless of deployed scale; and (b) concentrates capacity into few names →
+  per-name ADV participation caps deployable vol at ~5-10%.
+- **The edge is cross-sectional** (B8: min_idio load-bearing) and **broadly diversified**
+  (archived: 6-7 of 8 names net positive; breadth 0.31), so it is not a one-name artifact — a
+  wider cross-section should deepen it, not dilute it.
+- **Recommendation:** reseed the same long-only funding-crowding-reversal mechanism on the full
+  data-ready crypto-perp universe (~25 names), selected return-blind on eligibility (liquidity,
+  readiness), keeping the frozen mechanism, cadence 240, TWAP entry, and the minimal filter core.
+  Expected to raise t **mainly via duty cycle** — more names firing means the book is at-risk a
+  larger fraction of the calendar (n_eff rises). The diversification/Sharpe gain from more
+  concurrent names is **limited**: crypto-perp crowding is a single highly-correlated factor
+  (cross-perp ρ ≈ 0.6-0.8), so effective independent bets grow slowly with N — which is exactly
+  why B2 risk-parity was inert and B3 density diluted. Under the current **significance** gate
+  (deflated full-Train return > 0, ≈ t > 2), the reseed needs only to lift the realized t
+  comfortably above 2 — a lower, more reachable bar than the retired +0.10 materiality floor —
+  which a wider universe should do by raising duty cycle (at-risk fraction ~33% → ~45-55%) even
+  with limited diversification gain; it also lowers per-name ADV participation → more deployable
+  capacity. Materiality (how much money) is then read off the run score and Season's judgment,
+  not gated.
+- **Secondary lever** (Season's protocol call, not within-lifecycle): a higher leverage/notional
+  budget would raise deployable scale (the run score), independent of the significance gate.
+
+This is Season's decision; it changes neither the protocol nor this run. A reseed is a new
+lifecycle with a return-blind universe chosen on eligibility, never by dropping names that lost.
+
+- **B9 (long_hold_minutes 720 → 480; N=18 live base):** The one lever an adversarial review
+  found unclosed — hold length isolated on the live cadence-240/TWAP base and scored on
+  t/floor (A7 tested 480 on the stale cadence-120 base, judged on PF). Mechanism — `t = Sharpe
+  × √(duty_cycle × window_years)`; the book is at-risk only ~33% of the calendar. A shorter
+  hold frees capital sooner (the `active_until` lock releases earlier), so if freed capital
+  re-enters OTHER crowded-shorts it raises duty cycle / independent-bet count → higher n_eff →
+  higher t, the direct path to the +0.10 floor. Falsifier — t/floor flat or worse: the shorter
+  hold captures less of the slow reversal (lower per-minute Sharpe) more than the extra
+  re-entries add n_eff (A7 halved return on the old base), OR freed capital finds no other
+  crowded-short to enter (1-3 concurrent cap). P(clears +0.10) ~0.15 — decisive either way:
+  it closes the last within-8-name lever and confirms/refutes the plateau.
+
+- **B9 result (attempt-0010): FALSIFIED — the last within-8-name lever is closed; hold 720
+  optimal.** hold 480: deployed vol 9.2% → **11.7%** (highest of the lifecycle) and return 34.8%
+  → **39.6%** (highest raw), trades 306 → 352 — so duty cycle DID rise, as the review's mechanism
+  predicted. But edge quality collapsed: PF 1.705 → 1.481, win 56.5% → 50.9%, so Sharpe fell
+  faster than n_eff rose and **t dropped 1.99 → 1.61**, deflated floor −0.002 → **−0.096**. In
+  `t = Sharpe × √(duty × years)` the duty gain was swamped by the Sharpe loss — the reversal
+  needs the full ~720-min window. Reverted to 720. Every within-8-name lever is now exhausted:
+  capacity/TWAP (lifts vol not t), weighting (inert), cadence (dilutes), stop-loss (no left tail),
+  cross-section filter (load-bearing), hold length (dilutes). **Plateau confirmed on 8 names — no
+  strategy edit reaches the t ≈ 2.7 the +0.10 floor needs.** The reseed (larger universe → higher
+  duty cycle AND more concurrent bets → higher t) is the only remaining lever.
+
+## Iteration Log (archived prior lifecycle — edge-lessons durable, gate-lessons obsolete)
+
+Retained for its mechanism findings; its breadth/subwindow-gate conclusions are superseded
+by the corrected harness (see Current Lifecycle above). Prior five-name attempts are archived
 and do not seed this ledger.
 
 - **A0 baseline (both sides, cadence 120, top_n 5 of 8, holds 720):** discard,

@@ -75,7 +75,7 @@ For one thesis:
 4. Run a Train quick run through public `quant_strategies.runner.run_config`.
 5. Review diagnostic output and update `rationale.md`.
 6. Score the configured Train portfolio-foundation robustness objective.
-7. Apply binary gates, including evidence coverage, cost stress, path risk, breadth, economic magnitude, and aggregate trade floor.
+7. Apply binary validity gates, including evidence coverage, cost stress, path risk, breadth, statistical significance (deflated full-Train return > 0), and aggregate trade floor.
 8. Let the loop decide keep/discard with the implemented keep rule:
 
    ```text
@@ -89,8 +89,8 @@ For one thesis:
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
 `results.tsv` records a compact, human-scannable metric set per attempt:
-deployed-return LCB score, worst-window id and annualized return, deflated money
-floor, full-Train annualized return, cost-stress return retention, sizing,
+deployed-return LCB score, worst-window id and annualized return, deflated return
+LCB, full-Train annualized return, cost-stress return retention, sizing,
 diagnostic PSR fields, gate flags, derived failure class, foundation closed-trade
 count, minimum subwindow trades, total return, max drawdown, max symbol
 concentration, win rate, profit factor, average trade net, cost return sum,

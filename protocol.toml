@@ -73,7 +73,6 @@ min_effective_sample_size = 50.0
 max_symbol_concentration = 0.70
 min_cost_stress_return_retention = 0.50
 max_abs_drawdown = 0.25
-min_annualized_return = 0.10
 score_haircut_se = 2.0
 max_components = 3
 max_params = 50

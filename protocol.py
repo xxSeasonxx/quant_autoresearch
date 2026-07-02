@@ -533,14 +533,10 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "max_abs_drawdown"),
                 name="gates.max_abs_drawdown",
             ),
-            min_annualized_return=_floating(
-                _required(raw_gates, "min_annualized_return"),
-                name="gates.min_annualized_return",
-            ),
-            # Acceptance haircut k_accept for the deflated full-Train money floor —
-            # the multiple-testing correction for the best-of-N search. It sits below
-            # the best-of-N bound ~sqrt(2 * ln N) (~2.8 at N=50) but above the noise
-            # floor. Explicit, not derived from loop.max_iterations.
+            # Acceptance haircut k_accept for the deflated full-Train significance
+            # gate — the multiple-testing correction for the best-of-N search. It sits
+            # below the best-of-N bound ~sqrt(2 * ln N) (~2.8 at N=50) but above the
+            # noise floor. Explicit, not derived from loop.max_iterations.
             score_haircut_se=_positive_float(
                 _required(raw_gates, "score_haircut_se"),
                 name="gates.score_haircut_se",

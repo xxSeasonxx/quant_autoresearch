@@ -78,7 +78,9 @@ The active gate set covers:
 - **path risk:** full-Train max drawdown;
 - **breadth:** upstream economic concentration (largest single symbol's share of
   realized PnL);
-- **money floor:** `R_full - k_accept * SE_full >= min_annualized_return`;
+- **significance:** `R_full - k_accept * SE_full >= 0` — the deflated full-Train
+  return is positive (the edge is statistically real after the best-of-N
+  deflation). Materiality is not gated; deployed money lives in the run score;
 - **cost stress retention:** cost-stress full-Train annualized return retains the
   configured fraction of realistic full-Train annualized return when realistic
   return is positive;
@@ -88,7 +90,7 @@ The active gate set covers:
 Per-subwindow trade counts and per-slice returns (with a below-zero count) are
 reported diagnostics, not gates: per-window sample sufficiency is owned by
 **minimum evidence**, and the binding in-sample robustness gate is the full-Train
-deflated **money floor**. Per-slice return sign on contiguous, autocorrelated
+deflated **significance** gate. Per-slice return sign on contiguous, autocorrelated
 calendar slices is not gated — regime independence is the firewalled OOS stage's
 job.
 
@@ -102,7 +104,7 @@ scoring while still not being retention, paper-trade, or deployability proof.
 
 `results.tsv` is the compact loop ledger. It records:
 
-- score parts: `score`, `worst_window_id`, `deflated_money_floor`,
+- score parts: `score`, `worst_window_id`, `deflated_return_lcb`,
   `full_train_annualized_return`, `worst_window_annualized_return`,
   `cost_stress_return_retention`;
 - sizing: `book_scale`, `deployed_volatility`, `max_feasible_volatility`,
@@ -112,8 +114,8 @@ scoring while still not being retention, paper-trade, or deployability proof.
   `max_symbol_concentration`, `win_rate`, `profit_factor`, `avg_trade_net`,
   `cost_return_sum`;
 - loop state: gate flags, derived `failure_class` (one of `edge | no_edge |
-  capacity_bound | breadth_bound | evidence_thin | causality | <other gate> |
-  error states`), complexity count, failure reason, best status, continuation,
+  breadth_bound | evidence_thin | causality | <other gate> | error states`),
+  complexity count, failure reason, best status, continuation,
   stop reason, elapsed seconds, artifact directory, and note.
 
 Source provenance is owned by the per-attempt snapshot under `artifact_dir`, not

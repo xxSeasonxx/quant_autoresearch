@@ -4,6 +4,41 @@ Development chronology and migration rationale. Active contracts live in the
 owning docs (`program.md`, `protocol.toml`, and the module docstrings); this file
 is history only.
 
+## Validity-only significance gate (money-to-score)
+
+The money-first redesign (below) added an acceptance gate `deflated_full_train_return >=
+min_annualized_return` (0.10). That gate fused two questions — is the edge statistically
+real (validity), and does it deploy enough money (materiality) — into one number:
+`money_floor = return * (1 - k/t)`, with a cliff at `t = k`. A real, cost-robust, causal
+edge (Sharpe ~3.8) failed it not for edge quality but because low duty cycle (~33% of the
+calendar at-risk) and capacity limits suppressed the full-Train t-stat to ~2, collapsing the
+money term. A gate whose failures track "intermittent / capacity-limited" rather than "real
+vs overfit" is not a useful discovery filter upstream of OOS, and its verdict was routinely
+overridden.
+
+Repurposed to a **validity-only** gate, renamed `significance`:
+
+- **Gate** → `significance`: `R_full - k_accept * SE_full >= 0` — the edge is statistically
+  real after the best-of-N deflation (equivalently the full-Train t-stat clears `k_accept`).
+  The `k_accept` (`gates.score_haircut_se`) deflation — the multiple-testing correction — is
+  retained, so overfit protection is unchanged; only the materiality threshold is dropped.
+- **Money → score.** Materiality (how much money) lives entirely in the run score
+  (`R - k_rank * SE`, the deployed-return LCB the loop ranks on) and is the operator's
+  judgment, not a hard floor. `min_annualized_return` (0.10) was removed from config, parser,
+  brief, and proposal payload (no orphan config).
+- **`capacity_bound` stops being a `failure_class`:** a significant but capacity-throttled
+  edge now passes (`failure_class = edge`); its low deployed scale shows in the score and the
+  `capacity_bound` diagnostic column. A `significance` failure means the edge is not
+  distinguishable from best-of-N noise (`no_edge`).
+- The `deflated_money_floor` results column was renamed `deflated_return_lcb` (same deflated
+  return value, now non-gating).
+
+This reverses the "keep `money_floor` and 0.10 as-is; do not split it" recommendation in
+`docs/HARNESS_REVIEW_2026-06-25.md` — a deliberate operator decision, not a rescue: the change
+does not pass the strategy that prompted it (its deflated LCB is ~0, borderline on validity
+too). The score already carried money (`k_rank`, `_K_RANK = 1.0`), so no score change was
+needed, and no upstream `quant_strategies` change — the gate and deflation are consumer-side.
+
 ## Money-first Train objective
 
 The Train loop previously maximized worst-window PSR

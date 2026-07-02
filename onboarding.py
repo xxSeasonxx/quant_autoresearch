@@ -266,7 +266,6 @@ class StrategyBrief:
     risk_budget_mode: str
     target_volatility: float
     max_abs_drawdown: float
-    min_annualized_return: float
     objective_subwindows: int
     min_trades: int
     min_return_sample_count: int
@@ -325,7 +324,6 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         risk_budget_mode=_risk_budget_mode(data),
         target_volatility=_positive_float(data, "target_volatility"),
         max_abs_drawdown=_fraction(data, "max_abs_drawdown"),
-        min_annualized_return=_finite_float(data, "min_annualized_return"),
         objective_subwindows=_positive_int(data, "objective_subwindows"),
         min_trades=_nonnegative_int(data, "min_trades"),
         min_return_sample_count=_nonnegative_int(data, "min_return_sample_count"),
@@ -403,43 +401,39 @@ def _train_years(start: object, end: object) -> float | None:
 
 
 def _feasibility_rows(recommended: Mapping[str, Any]) -> list[dict[str, object]]:
-    """Annualized Sharpe needed to clear the deflated money floor.
+    """Annualized Sharpe needed for the deflated full-Train return to be significant.
 
-    From `R - k*SE >= T` with best-case dense sampling (effective years ~= calendar
-    years): `S_ann >= k/sqrt(Y) + T/sigma`. The full-Train row is the active gate;
-    the per-subwindow row is informational (per-window deflation is not used).
+    The `significance` gate requires the deflated return `R - k*SE >= 0`. With best-case
+    dense sampling (effective years ~= calendar years) this is `S_ann >= k/sqrt(Y)`. The
+    full-Train row is the active gate; the per-subwindow row is informational. A held or
+    low-duty-cycle book realizes a lower t than dense sampling implies, so it needs a
+    higher Sharpe than the table shows.
     """
 
     gates = recommended.get("gates", {})
     objective = recommended.get("objective", {})
-    risk = recommended.get("risk_budget", {})
     data = recommended.get("data", {})
     k = gates.get("score_haircut_se")
-    floor = gates.get("min_annualized_return")
     subwindows = objective.get("subwindows")
-    target_vol = risk.get("target_volatility")
     years = _train_years(data.get("start"), data.get("end"))
     if not (
         isinstance(k, (int, float))
-        and isinstance(floor, (int, float))
         and isinstance(subwindows, int)
-        and isinstance(target_vol, (int, float))
         and years is not None
-        and target_vol > 0.0
         and subwindows > 0
     ):
         return []
     rows: list[dict[str, object]] = []
-    full = k / sqrt(years) + floor / target_vol
+    full = k / sqrt(years)
     rows.append(
         {
-            "window": "money_floor (full_train, active)",
+            "window": "significance (full_train, active)",
             "years": round(years, 3),
             "required_sharpe": round(full, 2),
         }
     )
     sub_years = years / subwindows
-    per_sub = k / sqrt(sub_years) + floor / target_vol
+    per_sub = k / sqrt(sub_years)
     rows.append(
         {
             "window": "per-subwindow deflation (reference, not used)",
@@ -457,10 +451,9 @@ def _feasibility_warning(rows: list[dict[str, object]]) -> str | None:
     required = active["required_sharpe"]
     if isinstance(required, (int, float)) and required > 4.0:
         return (
-            f"Feasibility: clearing the money floor needs annualized Sharpe ~{required} "
-            "(best-case, dense sampling; a held book needs more). That is implausibly "
-            "high — lower gates.min_annualized_return or gates.score_haircut_se, "
-            "lengthen the Train window, or expect no survivor."
+            f"Feasibility: the deflated return needs annualized Sharpe ~{required} to be "
+            "significant (best-case dense sampling; a held / low-duty book needs more). "
+            "That is implausibly high — lengthen the Train window or expect no survivor."
         )
     return None
 
@@ -524,7 +517,6 @@ def _proposal_payload_without_hash(
             "max_symbol_concentration": current.gates.max_symbol_concentration,
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
-            "min_annualized_return": current.gates.min_annualized_return,
             "score_haircut_se": current.gates.score_haircut_se,
             "max_components": current.gates.max_components,
             "max_params": current.gates.max_params,
@@ -577,7 +569,6 @@ def _proposal_payload_without_hash(
             "max_symbol_concentration": brief.max_symbol_concentration,
             "min_cost_stress_return_retention": brief.min_cost_stress_return_retention,
             "max_abs_drawdown": brief.max_abs_drawdown,
-            "min_annualized_return": brief.min_annualized_return,
             "score_haircut_se": score_haircut,
             "max_components": brief.max_components,
             "max_params": brief.max_params,
@@ -657,8 +648,7 @@ def _proposal_payload_without_hash(
             "gates.max_symbol_concentration": "Set the maximum allowed one-symbol dependence for the claim.",
             "gates.min_cost_stress_return_retention": "Set the minimum cost-stress robustness requirement.",
             "gates.max_abs_drawdown": "Map the maximum tolerable drawdown directly into the path-risk gate.",
-            "gates.min_annualized_return": "Map the minimum annualized return directly into the deflated full-Train money floor.",
-            "gates.score_haircut_se": "Deliberate acceptance haircut (best-of-N multiple-testing correction); below sqrt(2 * ln(max_iterations)) but above the noise floor.",
+            "gates.score_haircut_se": "Deliberate acceptance haircut (best-of-N multiple-testing correction) for the deflated full-Train significance gate; below sqrt(2 * ln(max_iterations)) but above the noise floor.",
             "gates.max_components": "Set the maximum signal-component complexity allowed in rationale.md.",
             "gates.max_params": "Set the maximum bounded-parameter complexity allowed in experiment.toml.",
         },

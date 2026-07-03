@@ -35,9 +35,11 @@ _REQUIRED_FIELDS = {
 }
 _DEFAULT_PARAMS: dict[str, object] = {
     "funding_lookback_events": 5,
+    "funding_decay": 0.0,
     "return_lookback_minutes": 120,
     "decision_interval_minutes": 240,
     "entry_twap_bars": 1,
+    "exit_twap_bars": 0,
     "decision_lag_minutes": 1,
     "session_start_hour": 0,
     "session_end_hour": 24,
@@ -52,13 +54,22 @@ _DEFAULT_PARAMS: dict[str, object] = {
     "recent_return_lookback_minutes": 60,
     "max_recent_same_direction_return_bps": 250.0,
     "min_idiosyncratic_return_bps": 2.5,
+    "idiosyncratic_mode": "raw",
+    "min_idiosyncratic_sigma": 0.5,
     "selection_score": "combined",
+    "cross_section_reference": "mean",
     "weighting": "equal",
+    "dislocation_weight_power": 1.0,
     "vol_lookback_minutes": 1440,
     "long_hold_minutes": 720,
     "short_hold_minutes": 480,
+    "hold_vol_scaling": 0.0,
+    "hold_dislocation_scaling": 0.0,
     "take_profit_frac": 0.0,
 }
+
+_HOLD_MIN_MINUTES = 120
+_HOLD_MAX_MINUTES = 1440
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,7 @@ class _Selection:
     candidate: _Candidate
     side: int
     score: float
+    idiosyncratic: float = 0.0
 
 
 def validate_params(params: Mapping[str, object]) -> dict[str, object]:
@@ -119,6 +131,9 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         "funding_lookback_events": _positive_int(
             merged["funding_lookback_events"], "funding_lookback_events"
         ),
+        "funding_decay": _non_negative_float(
+            merged["funding_decay"], "funding_decay"
+        ),
         "return_lookback_minutes": _positive_int(
             merged["return_lookback_minutes"], "return_lookback_minutes"
         ),
@@ -127,6 +142,9 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         ),
         "entry_twap_bars": _positive_int(
             merged["entry_twap_bars"], "entry_twap_bars"
+        ),
+        "exit_twap_bars": _non_negative_int(
+            merged["exit_twap_bars"], "exit_twap_bars"
         ),
         "decision_lag_minutes": _non_negative_int(
             merged["decision_lag_minutes"], "decision_lag_minutes"
@@ -169,7 +187,17 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
             merged["min_idiosyncratic_return_bps"],
             "min_idiosyncratic_return_bps",
         ),
+        "idiosyncratic_mode": _idiosyncratic_mode(merged["idiosyncratic_mode"]),
+        "min_idiosyncratic_sigma": _non_negative_float(
+            merged["min_idiosyncratic_sigma"], "min_idiosyncratic_sigma"
+        ),
         "selection_score": _selection_score(merged["selection_score"]),
+        "cross_section_reference": _cross_section_reference(
+            merged["cross_section_reference"]
+        ),
+        "dislocation_weight_power": _positive_float(
+            merged["dislocation_weight_power"], "dislocation_weight_power"
+        ),
         "weighting": _weighting(merged["weighting"]),
         "vol_lookback_minutes": _positive_int(
             merged["vol_lookback_minutes"], "vol_lookback_minutes"
@@ -179,6 +207,12 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         ),
         "short_hold_minutes": _positive_int(
             merged["short_hold_minutes"], "short_hold_minutes"
+        ),
+        "hold_vol_scaling": _non_negative_float(
+            merged["hold_vol_scaling"], "hold_vol_scaling"
+        ),
+        "hold_dislocation_scaling": _non_negative_float(
+            merged["hold_dislocation_scaling"], "hold_dislocation_scaling"
         ),
         "take_profit_frac": _non_negative_float(
             merged["take_profit_frac"], "take_profit_frac"
@@ -212,6 +246,7 @@ def generate_decisions(
     n_universe = len(rows_by_symbol)
     weighting = _param_str(validated, "weighting")
     twap_bars = _param_int(validated, "entry_twap_bars")
+    exit_twap_bars = _param_int(validated, "exit_twap_bars") or twap_bars
     take_profit_frac = _param_float(validated, "take_profit_frac")
     risk_rule = (
         RiskRule(take_profit=take_profit_frac) if take_profit_frac > 0.0 else None
@@ -230,6 +265,7 @@ def generate_decisions(
                     funding_lookback_events=_param_int(
                         validated, "funding_lookback_events"
                     ),
+                    funding_decay=_param_float(validated, "funding_decay"),
                     return_lookback_minutes=_param_int(
                         validated, "return_lookback_minutes"
                     ),
@@ -246,13 +282,21 @@ def generate_decisions(
         if len(candidates) < _param_int(validated, "min_cross_section"):
             continue
 
-        market_return_bps = sum(
-            candidate.return_extension_bps for candidate in candidates
-        ) / len(candidates)
+        market_return_bps = _cross_section_reference_bps(
+            [candidate.return_extension_bps for candidate in candidates],
+            _param_str(validated, "cross_section_reference"),
+        )
         selections = _select_candidates(candidates, market_return_bps, validated)
         if not selections:
             continue
-        magnitudes = _selection_targets(selections, n_universe, weighting)
+        magnitudes = _selection_targets(
+            selections,
+            n_universe,
+            weighting,
+            _param_float(validated, "dislocation_weight_power"),
+        )
+        reference_volatility = _reference_volatility(selections)
+        reference_idiosyncratic = _reference_idiosyncratic(selections)
 
         cross_section_available_at = max(
             candidate.signal_row.available_at for candidate in candidates
@@ -271,11 +315,27 @@ def generate_decisions(
             ):
                 continue
 
-            hold_minutes = (
+            base_hold = (
                 _param_int(validated, "long_hold_minutes")
                 if selection.side > 0
                 else _param_int(validated, "short_hold_minutes")
             )
+            if _param_float(validated, "hold_vol_scaling") > 0.0:
+                hold_minutes = _scaled_hold_minutes(
+                    base_hold,
+                    candidate.volatility,
+                    reference_volatility,
+                    _param_float(validated, "hold_vol_scaling"),
+                )
+            elif _param_float(validated, "hold_dislocation_scaling") > 0.0:
+                hold_minutes = _conviction_scaled_hold(
+                    base_hold,
+                    selection.idiosyncratic,
+                    reference_idiosyncratic,
+                    _param_float(validated, "hold_dislocation_scaling"),
+                )
+            else:
+                hold_minutes = base_hold
             exit_time = decision_time + timedelta(minutes=hold_minutes)
 
             target = selection.side * magnitude
@@ -286,6 +346,7 @@ def generate_decisions(
                     exit_time=exit_time,
                     target=target,
                     twap_bars=twap_bars,
+                    exit_twap_bars=exit_twap_bars,
                     entry_as_of=candidate.signal_row.timestamp,
                     risk_rule=risk_rule,
                     observations=_observations(candidate),
@@ -301,7 +362,7 @@ def generate_decisions(
                     },
                 )
             )
-            active_until[symbol] = exit_time + timedelta(minutes=twap_bars - 1)
+            active_until[symbol] = exit_time + timedelta(minutes=exit_twap_bars - 1)
 
     return sorted(
         decisions,
@@ -320,19 +381,22 @@ def _ramped_decisions(
     exit_time: datetime,
     target: float,
     twap_bars: int,
+    exit_twap_bars: int,
     entry_as_of: datetime,
     risk_rule: RiskRule | None,
     observations: tuple[ObservationRef, ...],
     metadata: Mapping[str, object],
 ) -> list[TargetDecision]:
-    """Ramp a position in and out over ``twap_bars`` consecutive 1-minute bars.
+    """Ramp a position in over ``twap_bars`` and out over ``exit_twap_bars`` bars.
 
     Each standing target steps the cumulative NAV weight so the engine trades an
     equal delta per bar, spreading entry and exit participation instead of pinning
-    one bar against the capacity cap. ``twap_bars == 1`` reproduces a single-bar
-    entry and single-bar exit. Entry steps carry the signal-bar ``as_of``; the exit
-    is the fixed-horizon unwind scheduled at entry, so its steps carry the entry
-    time as ``as_of``.
+    one bar against the capacity cap. Entry and exit spread independently, so the
+    exit ramp can be lengthened to relieve the synchronized fixed-horizon unwind
+    without changing entry timing. ``twap_bars == 1`` reproduces a single-bar
+    entry. Entry steps carry the signal-bar ``as_of``; the exit is the
+    fixed-horizon unwind scheduled at entry, so its steps carry the entry time as
+    ``as_of``.
     """
 
     decisions: list[TargetDecision] = []
@@ -349,14 +413,14 @@ def _ramped_decisions(
                 metadata=metadata,
             )
         )
-    for step in range(twap_bars):
+    for step in range(exit_twap_bars):
         decisions.append(
             TargetDecision(
                 strategy_id=_STRATEGY_ID,
                 instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
                 decision_time=exit_time + timedelta(minutes=step),
                 as_of_time=entry_time,
-                target=target * (twap_bars - 1 - step) / twap_bars,
+                target=target * (exit_twap_bars - 1 - step) / exit_twap_bars,
                 metadata={"exit_reason": "fixed_horizon"},
             )
         )
@@ -445,6 +509,7 @@ def _candidate_at_signal_time(
     signal_time: datetime,
     *,
     funding_lookback_events: int,
+    funding_decay: float,
     return_lookback_minutes: int,
     recent_return_lookback_minutes: int,
     vol_lookback_minutes: int,
@@ -467,7 +532,7 @@ def _candidate_at_signal_time(
         funding_index - funding_lookback_events : funding_index
     ]
 
-    funding_pressure_bps = sum(event.rate for event in funding_events) * 10_000.0
+    funding_pressure_bps = _weighted_funding_pressure_bps(funding_events, funding_decay)
     latest_funding_bps = funding_events[-1].rate * 10_000.0
     sign = 1 if funding_pressure_bps > 0.0 else -1 if funding_pressure_bps < 0.0 else 0
     same_sign_funding_events = (
@@ -499,6 +564,30 @@ def _candidate_at_signal_time(
         volatility=_realized_volatility(rows, signal_index, vol_lookback_minutes),
         recent_row=recent_row,
     )
+
+
+def _weighted_funding_pressure_bps(
+    funding_events: tuple[_FundingEvent, ...], decay: float
+) -> float:
+    """Summed funding crowding in bps, optionally recency-weighted.
+
+    Events are ordered oldest-to-newest. With ``decay == 0`` every event carries
+    weight 1 and this is the plain sum (baseline). With ``decay > 0`` recent
+    settlements weigh more (``exp(-decay * age)``, age 0 = newest); weights are
+    renormalized to sum to the event count so the crowding *scale* is preserved
+    and only its recency *tilt* changes.
+    """
+
+    if decay <= 0.0 or len(funding_events) <= 1:
+        return sum(event.rate for event in funding_events) * 10_000.0
+    count = len(funding_events)
+    weights = [math.exp(-decay * (count - 1 - i)) for i in range(count)]
+    total = sum(weights)
+    scale = count / total
+    weighted = sum(
+        weights[i] * scale * funding_events[i].rate for i in range(count)
+    )
+    return weighted * 10_000.0
 
 
 def _realized_volatility(
@@ -533,12 +622,48 @@ def _select_candidates(
     min_return = _param_float(params, "min_abs_return_bps")
     min_latest_funding = _param_float(params, "min_latest_abs_funding_bps")
     min_same_sign = _param_int(params, "min_same_sign_funding_events")
-    min_idio = _param_float(params, "min_idiosyncratic_return_bps")
     max_recent = _param_float(params, "max_recent_same_direction_return_bps")
     selection_score = _param_str(params, "selection_score")
 
+    # Idiosyncratic dislocation is the name's price extension measured against the
+    # cross-section reference. "raw" uses the extension in bps vs the cross-section
+    # mean. "vol_normalized" divides each extension by its expected horizon move
+    # (per-minute vol × sqrt(horizon)) so the screen is comparable across names of
+    # different volatility. "beta_adjusted" subtracts a beta-scaled market move
+    # (beta ≈ name_vol / cross-section_vol) rather than the beta=1 mean, so a
+    # high-beta name's move is not mistaken for idiosyncratic dislocation.
+    mode = _param_str(params, "idiosyncratic_mode")
+    return_lookback_minutes = _param_int(params, "return_lookback_minutes")
+    betas: dict[str, float] | None = None
+    if mode == "vol_normalized":
+        min_idio = _param_float(params, "min_idiosyncratic_sigma")
+        dislocations = {
+            candidate.symbol: _dislocation_sigma(candidate, return_lookback_minutes)
+            for candidate in candidates
+        }
+        known = [value for value in dislocations.values() if value is not None]
+        if not known:
+            return []
+        market_dislocation = sum(known) / len(known)
+    else:
+        min_idio = _param_float(params, "min_idiosyncratic_return_bps")
+        dislocations = {
+            candidate.symbol: candidate.return_extension_bps for candidate in candidates
+        }
+        market_dislocation = market_return_bps
+        if mode == "beta_adjusted":
+            betas = _cross_section_betas(candidates)
+
     selections: list[_Selection] = []
     for candidate in candidates:
+        dislocation = dislocations[candidate.symbol]
+        if dislocation is None:
+            continue
+        reference = market_dislocation * (
+            betas[candidate.symbol] if betas is not None else 1.0
+        )
+        idio_long = reference - dislocation
+        idio_short = dislocation - reference
         if (
             _param_bool(params, "include_negative_funding_longs")
             and candidate.funding_pressure_bps <= -min_funding
@@ -546,13 +671,14 @@ def _select_candidates(
             and abs(candidate.latest_funding_bps) >= min_latest_funding
             and candidate.same_sign_funding_events >= min_same_sign
             and candidate.recent_return_bps >= -max_recent
-            and market_return_bps - candidate.return_extension_bps >= min_idio
+            and idio_long >= min_idio
         ):
             selections.append(
                 _Selection(
                     candidate=candidate,
                     side=1,
-                    score=_score(candidate, 1, market_return_bps, selection_score),
+                    score=_score(candidate, idio_long, selection_score),
+                    idiosyncratic=idio_long,
                 )
             )
         if (
@@ -562,13 +688,14 @@ def _select_candidates(
             and abs(candidate.latest_funding_bps) >= min_latest_funding
             and candidate.same_sign_funding_events >= min_same_sign
             and candidate.recent_return_bps <= max_recent
-            and candidate.return_extension_bps - market_return_bps >= min_idio
+            and idio_short >= min_idio
         ):
             selections.append(
                 _Selection(
                     candidate=candidate,
                     side=-1,
-                    score=_score(candidate, -1, market_return_bps, selection_score),
+                    score=_score(candidate, idio_short, selection_score),
+                    idiosyncratic=idio_short,
                 )
             )
 
@@ -584,7 +711,10 @@ def _select_candidates(
 
 
 def _selection_targets(
-    selections: Sequence[_Selection], n_universe: int, weighting: str
+    selections: Sequence[_Selection],
+    n_universe: int,
+    weighting: str,
+    dislocation_weight_power: float = 1.0,
 ) -> list[float]:
     """Per-selection target magnitudes (before the signed side is applied).
 
@@ -592,14 +722,32 @@ def _selection_targets(
     active names, unchanged from the equal-weight book). ``inverse_vol`` keeps the
     same average per-name budget but reshapes it across the selected set in
     proportion to ``1/realized_vol`` (risk parity), so gross per decision is
-    preserved while high-vol names carry proportionally less. Candidates with no
-    volatility estimate take the selected-set mean; a fully degenerate set falls
-    back to equal weight.
+    preserved while high-vol names carry proportionally less. ``dislocation``
+    reshapes the same budget in proportion to each name's idiosyncratic
+    dislocation magnitude — conviction weighting that leans into the biggest
+    capitulations. Both reshaping modes preserve gross per decision and fall back
+    to equal weight on a degenerate set.
     """
 
     base = 1.0 / n_universe
     if weighting == "equal":
         return [base] * len(selections)
+
+    if weighting in {"dislocation", "combined", "capitulation"}:
+        if weighting == "dislocation":
+            signal = lambda s: s.idiosyncratic  # noqa: E731
+        elif weighting == "combined":
+            signal = lambda s: s.score  # noqa: E731
+        else:  # capitulation: magnitude of the name's recent same-direction move
+            signal = lambda s: -s.side * s.candidate.recent_return_bps  # noqa: E731
+        weights = [
+            max(0.0, signal(selection)) ** dislocation_weight_power
+            for selection in selections
+        ]
+        mean_weight = sum(weights) / len(weights) if weights else 0.0
+        if mean_weight <= 0.0:
+            return [base] * len(selections)
+        return [base * value / mean_weight for value in weights]
 
     inverse = [
         1.0 / selection.candidate.volatility
@@ -616,19 +764,143 @@ def _selection_targets(
     return [base * value / mean_inverse for value in inverse]
 
 
+def _cross_section_betas(candidates: Sequence[_Candidate]) -> dict[str, float]:
+    """Per-name beta proxy to the cross-section: ``name_vol / mean_vol``.
+
+    A vol-ratio proxy for market beta (exact under the high cross-perp
+    correlation of crowded regimes). Names or a cross-section with unknown
+    volatility fall back to beta 1.0, which reproduces the plain-mean reference.
+    """
+
+    known = [candidate.volatility for candidate in candidates if candidate.volatility]
+    if not known:
+        return {candidate.symbol: 1.0 for candidate in candidates}
+    market_vol = sum(known) / len(known)
+    if market_vol <= 0.0:
+        return {candidate.symbol: 1.0 for candidate in candidates}
+    return {
+        candidate.symbol: (
+            candidate.volatility / market_vol if candidate.volatility else 1.0
+        )
+        for candidate in candidates
+    }
+
+
+def _dislocation_sigma(
+    candidate: _Candidate, return_lookback_minutes: int
+) -> float | None:
+    """Price extension in units of the name's expected move over the lookback.
+
+    Divides the raw extension by ``per_minute_vol * sqrt(horizon)`` (random-walk
+    horizon vol), so a dislocation is measured relative to each name's own
+    volatility rather than in absolute bps. Returns ``None`` when volatility is
+    unknown or degenerate so the name is excluded from vol-normalized screening.
+    """
+
+    if not candidate.volatility:
+        return None
+    scale_bps = candidate.volatility * math.sqrt(return_lookback_minutes) * 10_000.0
+    if scale_bps <= 0.0:
+        return None
+    return candidate.return_extension_bps / scale_bps
+
+
+def _cross_section_reference_bps(values: Sequence[float], mode: str) -> float:
+    """Cross-section reference extension: the mean, or the robust median.
+
+    ``median`` resists the skew a few co-moving extreme names impose on the mean,
+    giving a cleaner "typical move" for the idiosyncratic dislocation.
+    """
+
+    if not values:
+        return 0.0
+    if mode == "median":
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        if len(ordered) % 2 == 1:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2.0
+    return sum(values) / len(values)
+
+
+def _reference_volatility(selections: Sequence[_Selection]) -> float | None:
+    """Mean realized volatility across the selected names, or ``None`` if unknown.
+
+    Used as the reference point for risk-time hold scaling so a name is held
+    relative to how volatile it is versus the rest of the selected book.
+    """
+
+    known = [
+        selection.candidate.volatility
+        for selection in selections
+        if selection.candidate.volatility
+    ]
+    if not known:
+        return None
+    return sum(known) / len(known)
+
+
+def _scaled_hold_minutes(
+    base_hold: int,
+    volatility: float | None,
+    reference_volatility: float | None,
+    scaling: float,
+) -> int:
+    """Hold length, optionally scaled into risk-time.
+
+    ``scaling == 0`` returns the fixed ``base_hold``. Otherwise the hold is
+    ``base_hold * (reference_vol / name_vol) ** scaling`` — higher-vol names are
+    held shorter — clamped to ``[_HOLD_MIN_MINUTES, _HOLD_MAX_MINUTES]``. Falls
+    back to the fixed hold when either volatility is unknown.
+    """
+
+    if scaling <= 0.0 or not volatility or not reference_volatility:
+        return base_hold
+    scaled = base_hold * (reference_volatility / volatility) ** scaling
+    return int(min(_HOLD_MAX_MINUTES, max(_HOLD_MIN_MINUTES, scaled)))
+
+
+def _reference_idiosyncratic(selections: Sequence[_Selection]) -> float | None:
+    """Mean positive idiosyncratic dislocation across the selected names."""
+
+    positive = [
+        selection.idiosyncratic
+        for selection in selections
+        if selection.idiosyncratic > 0.0
+    ]
+    if not positive:
+        return None
+    return sum(positive) / len(positive)
+
+
+def _conviction_scaled_hold(
+    base_hold: int,
+    idiosyncratic: float,
+    reference_idiosyncratic: float | None,
+    scaling: float,
+) -> int:
+    """Hold length scaled by conviction (idiosyncratic dislocation magnitude).
+
+    ``scaling == 0`` returns the fixed ``base_hold``. Otherwise the hold is
+    ``base_hold * (idio / reference_idio) ** scaling`` — bigger capitulations are
+    held longer for their bigger, slower bounce — clamped to
+    ``[_HOLD_MIN_MINUTES, _HOLD_MAX_MINUTES]``. Falls back to the fixed hold when
+    the dislocation reference is unknown or non-positive.
+    """
+
+    if scaling <= 0.0 or idiosyncratic <= 0.0 or not reference_idiosyncratic:
+        return base_hold
+    scaled = base_hold * (idiosyncratic / reference_idiosyncratic) ** scaling
+    return int(min(_HOLD_MAX_MINUTES, max(_HOLD_MIN_MINUTES, scaled)))
+
+
 def _score(
     candidate: _Candidate,
-    side: int,
-    market_return_bps: float,
+    idiosyncratic_dislocation: float,
     selection_score: str,
 ) -> float:
     funding_score = abs(candidate.funding_pressure_bps)
-    idiosyncratic_return = (
-        market_return_bps - candidate.return_extension_bps
-        if side > 0
-        else candidate.return_extension_bps - market_return_bps
-    )
-    extension_score = max(0.0, idiosyncratic_return)
+    extension_score = max(0.0, idiosyncratic_dislocation)
     if selection_score == "funding":
         return funding_score
     if selection_score == "extension":
@@ -780,8 +1052,27 @@ def _selection_score(value: object) -> str:
     return parsed
 
 
+def _idiosyncratic_mode(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"raw", "vol_normalized", "beta_adjusted"}:
+        raise ValueError(
+            "idiosyncratic_mode must be one of: raw, vol_normalized, beta_adjusted"
+        )
+    return parsed
+
+
+def _cross_section_reference(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"mean", "median"}:
+        raise ValueError("cross_section_reference must be one of: mean, median")
+    return parsed
+
+
 def _weighting(value: object) -> str:
     parsed = str(value)
-    if parsed not in {"equal", "inverse_vol"}:
-        raise ValueError("weighting must be one of: equal, inverse_vol")
+    if parsed not in {"equal", "inverse_vol", "dislocation", "combined", "capitulation"}:
+        raise ValueError(
+            "weighting must be one of: equal, inverse_vol, dislocation, combined, "
+            "capitulation"
+        )
     return parsed

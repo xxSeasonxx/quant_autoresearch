@@ -1,8 +1,10 @@
 [params]
 funding_lookback_events = 5
+funding_decay = 0.0
 return_lookback_minutes = 120
 decision_interval_minutes = 240
-entry_twap_bars = 18
+entry_twap_bars = 20
+exit_twap_bars = 30
 decision_lag_minutes = 1
 session_start_hour = 0
 session_end_hour = 24
@@ -17,11 +19,17 @@ min_latest_abs_funding_bps = 0.0
 recent_return_lookback_minutes = 60
 max_recent_same_direction_return_bps = 1000.0
 min_idiosyncratic_return_bps = 2.5
+idiosyncratic_mode = "raw"
+min_idiosyncratic_sigma = 0.5
 selection_score = "combined"
-weighting = "equal"
+cross_section_reference = "mean"
+weighting = "dislocation"
+dislocation_weight_power = 3.0
 vol_lookback_minutes = 1440
 long_hold_minutes = 720
 short_hold_minutes = 720
+hold_vol_scaling = 0.0
+hold_dislocation_scaling = 0.0
 take_profit_frac = 0.0
 
 # Bounded search space: ranges the thesis needs tested, not pinned to baseline.
@@ -30,6 +38,10 @@ take_profit_frac = 0.0
 [bounds.funding_lookback_events]
 min = 3
 max = 10
+
+[bounds.funding_decay]
+min = 0.0
+max = 2.0
 
 [bounds.return_lookback_minutes]
 min = 30
@@ -40,6 +52,10 @@ min = 30
 max = 720
 
 [bounds.entry_twap_bars]
+min = 1
+max = 30
+
+[bounds.exit_twap_bars]
 min = 1
 max = 60
 
@@ -95,6 +111,10 @@ max = 1000.0
 min = 0.0
 max = 50.0
 
+[bounds.min_idiosyncratic_sigma]
+min = 0.0
+max = 3.0
+
 [bounds.long_hold_minutes]
 min = 120
 max = 1440
@@ -102,6 +122,18 @@ max = 1440
 [bounds.short_hold_minutes]
 min = 120
 max = 1440
+
+[bounds.hold_vol_scaling]
+min = 0.0
+max = 2.0
+
+[bounds.hold_dislocation_scaling]
+min = 0.0
+max = 2.0
+
+[bounds.dislocation_weight_power]
+min = 1.0
+max = 6.0
 
 [bounds.take_profit_frac]
 min = 0.0

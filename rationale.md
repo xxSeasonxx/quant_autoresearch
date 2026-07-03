@@ -171,10 +171,500 @@ threshold is retained as a recall-oriented economic-dependence ceiling: one name
 may carry up to 70% of realized PnL. The dated entries below record breadth as
 observed under the prior metric.
 
-## Current Lifecycle — Corrected Harness (active)
+## Current Lifecycle — warm-start re-baseline under the significance gate (active)
 
-Fresh lifecycle re-baselined on the corrected harness (attempt-0001). Same 8-major
-universe and mechanism as the archived log below; the harness changed:
+Fresh lifecycle: the prior 8-name lifecycle (retired `money_floor` gate) was reset and
+archived (logged below as *Prior Lifecycle*), and this baseline is warm-started from that
+lifecycle's best configuration — attempt-0005: long-only crowding-reversal, cadence 240,
+`min_same_sign 1`, `min_abs_funding 1`, `min_idio 2.5`, recent-guard off, hold 720,
+`top_n 5`, equal weighting, **`entry_twap_bars 20`**. `strategy.py` is unchanged from that
+config; the warm-start is a *starting point re-validated fresh under the new gate*, not an
+imported result.
+
+**Why re-run 8 names under the new gate (materially different).** The prior lifecycle failed
+the retired `money_floor` (+0.10 deflated return) at a t ≈ 2.0 plateau and concluded "8 names
+exhausted, reseed." That conclusion was **premature** (the loop stopped at attempt 9/50) and
+does **not** carry into this lifecycle. The active `significance` gate passes at deflated
+full-Train return ≥ 0 (≈ t ≥ 2) — the same plateau now sits *at* the bar, not far below it.
+attempt-0005's deflated return was **+0.0032 (positive)**, so the warm-start baseline plausibly
+**clears the significance gate**; `capacity_bound` is a passing diagnostic, not a kill.
+
+**First failure mode to watch.** Whether the warm-start baseline clears significance (deflated
+full-Train return ≥ 0) at a feasible, scoreable book; and, if it passes, whether the loop can
+lift the deployed-return **score** (materiality — capacity, breadth, duty cycle) without pushing
+the deflated return back below zero. The t ≈ 2 plateau makes significance marginal, so score
+gains that cost t are the trap.
+
+**This lifecycle runs to its configured stop** (a fired stop rule or `max_iterations = 50`),
+maintaining the Reseed Log and Lever Enumeration below; a reseed case is consolidated only at a
+stop rule, never as an early exit.
+
+### Reseed Log (append-only; read only at a stop rule, never a stop trigger)
+
+- (baseline, attempt-0001) warm-start **passes the significance gate** (deflated return LCB
+  +0.0032, marginal) — **weakens the immediate "reseed now" case**: 8 names can clear the new
+  gate, so the thesis is viable here, not envelope-dead. But significance is thin (t ≈ 2) and the
+  score is capacity-throttled (10.1% vol < 15% target), so the wider-universe hypothesis
+  (duty-cycle-led t lift + more deployable capacity) stays open as a score/robustness lever, to
+  be re-argued from this lifecycle's evidence at a stop rule.
+- (2026-07-02, attempt-0002) L1 vol-normalized dislocation DISCARD (−0.187): **neutral-to-weak
+  for reseed** — a signal-construction lever, not an envelope constraint. It sharpens *where the
+  edge is* (absolute-bps, vol-seeking, in high-vol altcoins) and shows per-trade quality is
+  saturated on 8 names (book already holds the right 1–3), so it removes signal-construction as a
+  within-8-name t lever — consistent with, but not itself, the universe-bound story.
+- (2026-07-02, attempt-0003) L4 decoupled exit ramp DISCARD (significance fail, t 1.997):
+  **strengthens the reseed case materially.** Capacity is now fully relievable to the 15% risk
+  budget (score 0.282, return 56.5%, PF intact) yet significance still fails because t is
+  scale-invariant and pinned at ~2.0 — direct evidence that the binding constraint is **t
+  (universe-bound), not capacity or the edge**. A wider universe (higher duty cycle → higher
+  n_eff → t robustly >2) is what would convert this deployed 56% return into a passing survivor.
+- (2026-07-02, attempt-0004) L5 exit=30 crossover KEEP (new survivor 0.282, t 2.024): **neutral
+  for reseed on the edge, but sharpens the framing** — an 8-name all-gates-pass survivor exists
+  once capacity is fully deployed, so the thesis is *viable* here (not envelope-dead under the
+  new gate). The reseed remains the lever for a *higher/robust* t (the pass is knife-edge at
+  t≈2.02), not for viability.
+- (2026-07-02, attempt-0005) L6 funding recency DISCARD: **strengthens** — another within-8-name
+  edge-quality lever falsified; the per-trade edge is saturated (funding sign-only, price
+  absolute-bps cross-sectional), so t cannot be lifted by signal construction on 8 names. Only
+  more concurrent independent setups (wider universe) can.
+- (2026-07-02, attempt-0006) L7 vol-scaled hold DISCARD (t→1.82): **strengthens** — exit-timing
+  falsified; the reversal is funding/clock-driven, fixed 720 is right, cutting winners loses the
+  edge. No exit lever lifts t on 8 names.
+- (2026-07-02, attempt-0007) L8 median reference near-inert DISCARD: **strengthens** — the signal
+  form is settled; cross-section reference robustness is not a lever. Every signal/funding/exit
+  edge lever now falsified or inert → the 8-name per-trade edge is comprehensively saturated. The
+  reseed (wider universe → duty cycle → robust t>2) is the sole remaining lever; the case is
+  approaching consolidation at enumeration closure.
+- (2026-07-02, attempt-0008) L9 dislocation sizing KEEP (new survivor 0.291, t 2.043, PF 1.747):
+  **neutral-to-slightly-weakening for reseed on viability, but sharpens it** — a *within-8-name*
+  edge-quality win exists (conviction sizing), so the 8-name book is not fully wrung out and the
+  survivor is stronger than thought. But the t gain (2.02→2.04) is still inside the ±0.1 knife-edge
+  band; the significance pass remains marginal. The reseed is still the only lever for a *robust*
+  (non-knife-edge) t, and now also for deploying the (improved) edge on more concurrent names.
+- (2026-07-02, attempts 0007/0009/0010) L8 median / L10 disloc-hold / L11 beta-adjust — all
+  DISCARD (near-inert or fail): **strengthen** — signal reference, exit-hold, and cross-name
+  adjustment dimensions all closed; no within-8-name lever there lifts t.
+- (2026-07-02, attempt-0011) L12 conviction convexity KEEP (new survivor 0.311, t 2.095, PF 1.797):
+  **shifts the reseed framing from "envelope-dead" to "edge under-exploited"** — a second
+  edge-quality win (super-linear conviction) shows real un-captured 8-name return the prior
+  lifecycle missed, and t now clears 2.0 by ~0.095 (less marginal). The reseed case is now less
+  "the thesis can't clear the gate" (it does, more robustly) and more "a wider universe would
+  deploy this improved convex-conviction edge on more concurrent crowded-shorts, raising duty
+  cycle for a more robust t and more deployed return."
+- (2026-07-02, attempts 0012/0013) convexity bracket KEEP (survivor 0.326→0.335, t 2.146→2.175):
+  **strengthens the "edge under-exploited" reading** — super-linear conviction is a robust,
+  inspected (broad subwindow) win; the 8-name edge had real un-captured return. Reinforces that a
+  wider universe should deploy this *improved* edge on more concurrent setups.
+- (2026-07-02, attempt-0014) combined-conviction KEEP-by-score but REJECTED (overfit micro-gain):
+  **neutral** — a mechanism-less +0.006 marks the overfit zone; the productive within-8-name search
+  is done. Confirms closure: the reseed (wider universe) is the only remaining real lever.
+- (2026-07-02, attempt-0015) recent-capitulation conviction DISCARD (worse): **strengthens** — the
+  final within-8-name conviction axis falsified; conviction is dislocation-specific and fully
+  exploited. Enumeration closed. Consolidated reseed case above stands: the binding constraint is
+  the universe (1–3 concurrent setups → t~2.1 plateau), not the edge.
+
+### Lever Enumeration (distinct levers × run/result, this lifecycle)
+
+- baseline (warm-start attempt-0005 config, attempt-0001) — **KEEP; all 8 gates pass.**
+  score 0.196, deflated return LCB +0.0032 (significance passes, marginal), full-Train return
+  38.8%, deployed vol 10.1% (`capacity_bound` = passing diagnostic), PF 1.718, breadth 0.313,
+  PSR 0.978, 306 trades, `failure_class = edge`. First gate-clearing Train survivor for this
+  thesis; `continuation: allowed`.
+- Prior-lifecycle levers (capacity/TWAP, weighting, cadence, exit/stop-loss, cross-section,
+  hold length) are edge-characterized but must be **re-read against the significance gate**,
+  where the bar is t ≥ 2, not the retired +0.10 floor; a lever that was "inert on money_floor"
+  is not automatically settled here. Enumerate distinct levers with their results as the loop
+  proceeds.
+
+**Campaign framing (baseline diagnostics → where the score lever lives).** attempt-0001 is
+capacity-bound with **bar-participation pinned at 0.50** and ADV participation only 0.047 (5× of
+the 0.25 ADV ceiling): the binding cap is per-symbol single-minute liquidity, which the prior
+lifecycle proved is **non-monotonic/fragile** in entry-TWAP (N=20 is a spike, not a plateau).
+So within-8-name capacity is near-exhausted and is not a *robust* score lever. The score
+(`return − 1·SE`) improves robustly by **lowering SE via signal quality** — cleaner trades →
+higher per-minute Sharpe → higher t → higher score. The one frontier the prior lifecycle
+flagged-but-never-ran is **signal construction** (its own A8 note: "remaining untested levers are
+signal CONSTRUCTION … per-symbol vol normalization, not thresholds"). That is this campaign's
+primary axis. Threshold/structure/cadence/hold/weighting/sides/stop-loss are gate-independent
+physics already mapped; they are recorded run/settled here and not re-run as polish.
+
+Planned distinct levers (execute one at a time; revise from diagnostics):
+- L1 vol-normalized idiosyncratic dislocation (signal construction) — attempt-0002.
+- L2 funding recency/acceleration weighting (signal construction) — pending.
+- L3 alternative dislocation anchor (own-mean reversion z-score vs fixed-lookback) — pending.
+- L4 capacity reshaping not yet tried honestly (confirms/refutes the ~10% ceiling) — pending.
+- Simplification of whatever survivor emerges.
+
+- **L1 (attempt-0002): vol-normalized idiosyncratic dislocation.**
+  - *Mechanism:* the raw-bps cross-section screen (`market_mean − extension ≥ 2.5 bps`) is a
+    tiny threshold for high-vol altcoins (they always pass) and meaningful only for low-vol
+    majors, so the current book is effectively "any high-vol name that is idiosyncratically
+    down at all." Dividing each name's extension by its own expected horizon move
+    (`per_min_vol·√lookback`) makes the dislocation a σ-score, applying an equal relative-value
+    bar across names → screens for genuinely large moves-vs-own-vol → cleaner per-trade edge →
+    higher Sharpe/t → higher score.
+  - *Observable:* PF, full-train t / SE, per-symbol mix (does it pull in low-vol BTC/ETH?),
+    trade count, deployed vol.
+  - *Falsifier:* PF/t flat or worse — either raw bps already captures the dislocation, or the
+    edge genuinely lives in the high-vol altcoins and σ-normalization dilutes it by admitting
+    weak low-vol setups (BTC net-negative, ETH tiny). Decisive about *where the edge lives*.
+  - *Book effect:* selection set changes (σ-threshold 0.5); gross/turnover ~unchanged (shape,
+    not magnitude); breadth may shift toward majors.
+  - *Failure mode targeted:* thin/lumpy Sharpe (SE), the sole binding gate's marginal t≈2.
+  - *Result (attempt-0002): DECISIVELY FALSIFIED — DISCARD, score −0.187.* σ≥0.5 collapsed the
+    edge: trades 306→92, PF 1.72→**1.08**, full-Train return 38.8%→4.95%, deflated +0.0032→
+    **−0.42**, cost-stress retention 0.78→**−0.91**, `trade_floor`/`significance`/`cost_stress`
+    all fail, `failure_class = no_edge`. **Learning (durable):** the edge is *vol-seeking in
+    absolute bps* — it lives in large-absolute-move idiosyncratic capitulations of the high-vol
+    altcoins (DOGE/XRP/ADA/SOL). Dividing by own-vol de-selects exactly those (a big DOGE move
+    is "only ~1σ for DOGE"), and because the crowded names co-move (ρ 0.6–0.8) the σ-idio-vs-mean
+    is small for them → the screen keeps only weak low-vol setups. This sharpens B2 (inverse-vol
+    weighting inert): the edge is not merely vol-agnostic, it is actively vol-seeking. **Corollary
+    that reshapes the campaign:** no signal-construction lever leans *further* into the edge —
+    the book already holds exactly the 1–3 right names (top_n/min_cross_section never bind), so
+    per-trade quality is saturated on 8 names. Any σ-/mean-normalization variant (L3) would fail
+    the same way; L3 dropped. Remaining distinct axes: **deployment (capacity reshaping, honest)**
+    and simplification. Reverted to raw.
+
+- **L4 (attempt-0003): decoupled exit ramp (capacity reshaping).**
+  - *Mechanism:* deployed vol is capacity-bound with **bar-participation pinned at 0.50** while
+    ADV sits at 0.047 (5× headroom). The prior lifecycle only ever ramped entry and exit
+    *symmetrically* over one `entry_twap_bars` and found the symmetric ramp non-monotonic
+    (N=20 spike). Exit is a separate synchronized event: at the fixed horizon every name in a
+    cohort unwinds together, so exit minutes may pin the cap independently of entry. Spreading
+    the *exit* over more bars (`exit_twap_bars` 20→40, entry held at 20) lowers per-exit-minute
+    participation → higher `book_scale` → more of the real edge deployed → higher score. This is
+    program-endorsed turnover spreading, not magnitude/leverage.
+  - *Observable:* `book_scale`, `deployed_volatility`, `max_bar_participation` (does it drop
+    below 0.50?), PF/t (must stay intact), trade count (unchanged — same entries).
+  - *Falsifier:* `book_scale`/vol flat → exits were not the binding pin (entries pin), so the
+    ~10% ceiling is entry-liquidity-bound and robustly exhausted; OR vol drops (longer exit
+    touches thinner late-horizon minutes) → same non-monotonic fragility as symmetric TWAP.
+    Either outcome honestly characterizes the 8-name capacity ceiling for the reseed case.
+  - *Book effect:* turnover unchanged in total; exit participation per minute halved; effective
+    hold ~20 min longer at the tail.
+  - *Failure mode targeted:* implementation/capacity limit throttling deployed return (score).
+  - *Result (attempt-0003): DISCARD (significance fail), but the capacity mechanism CONFIRMED
+    and a major structural finding.* exit=40: `capacity_bound` **FALSE** — book_scale 0.33→0.53,
+    deployed vol 10.1%→**15.0%** (hit the 15% risk-budget target), max-feasible 18.6%. The
+    synchronized fixed-horizon exit **was** the binding 0.50 bar-cap pin; decoupling it deploys
+    the book to its full risk budget. Return 38.8%→**56.5%**, PF **1.695** (intact), 306 trades,
+    breadth 0.31, cost-stress pass, score 0.196→**0.282**. BUT significance FAILS: deflated
+    **−0.0013**, t **1.997** (baseline 2.016). **Confirms the money-first structure:** capacity
+    relief scales return and SE together → moves the score, not t (scale-invariant, universe-bound
+    at ~2.0); extra exit-spreading also shaves t via return-series autocorrelation (B1 mechanism).
+    So the fully-deployed book sits on the t=2 knife-edge. `max_feasible_vol` rises with
+    exit-spreading (10.1%@20 → 18.6%@40), so there is a crossover exit_twap that reaches the 15%
+    target with the LEAST spreading → least autocorrelation → highest t among fully-deployed
+    configs. exit=40 overshot. Not reverted — carried as the deployment base for the L5 crossover
+    probe.
+
+- **L5 (attempt-0004): exit_twap crossover (full deployment at maximum t).**
+  - *Mechanism:* find the smallest exit-spread that still reaches the 15% risk-budget target, so
+    the book deploys the full edge (return ~56%, score ~0.28) while paying the *minimum*
+    autocorrelation t-cost. exit=30 probes the crossover between deployed-vol=10.1%@exit=20 (t
+    2.016, passes) and 15.0%@exit=40 (t 1.997, fails).
+  - *Observable:* `capacity_bound`, deployed vs max-feasible vol, deflated_return_lcb / t,
+    score, PF.
+  - *Falsifier:* if exit=30 still deploys <15% (capacity_bound TRUE) OR t is still <2.0 →
+    there is no fully-deployed point that clears t=2, so the significance gate is genuinely
+    t-bound at the 8-name knife-edge and capacity cannot buy a passing survivor above 0.196.
+  - *Failure mode targeted:* the score↔t tradeoff at the capacity frontier; whether a
+    higher-score all-gates-pass survivor exists on 8 names.
+  - *Result (attempt-0004): KEEP — NEW BEST SURVIVOR, all 8 gates pass, score 0.282.* exit=30
+    reaches near-full deployment (deployed vol **14.5%**, capacity_bound just barely TRUE),
+    return **55.7%**, PF **1.713**, 306 trades, breadth 0.31. Significance PASSES: deflated
+    **+0.0066**, t **2.024** (> baseline 2.016 > exit=40's 1.997 — t bounces ±0.02 with exit
+    spread, all within the ±0.1 knife-edge band around 2.0). **A real +44% score gain
+    (0.196→0.282) from a robust monotonic capacity mechanism** (exit-un-pinning: vol 10.1→14.5→15%
+    across exit 20→30→40, smooth, not a fragile spike). Adopted as the survivor base
+    (`entry_twap=20, exit_twap=30`). Caveat carried: the significance pass is marginal (t≈2.02,
+    8-name knife-edge). Not fine-sweeping exit_twap further — that would be knife-edge polishing.
+
+**Survivor (this lifecycle, current): attempt-0004** — long-only crowding-reversal, cadence 240,
+`min_same_sign=1`, `min_abs_funding=1`, `min_idio=2.5` (raw), recent-guard off, hold 720,
+`top_n=5`, equal weighting, `entry_twap=20`, `exit_twap=30`. Score 0.282, all gates pass, t 2.024.
+
+**State after L5: capacity is solved (full risk-budget deployment); the signal is saturated on 8
+names (L1); t is universe-bound at ~2.0.** Remaining distinct levers are low-probability per-trade
+edge/Sharpe probes (funding timing, dislocation reference frame, exit-completion timing,
+vol-scaled hold) — each a genuine falsification that closes a dimension and accretes the reseed
+case. Running them breadth-first to demonstrate (not assume) the 8-name plateau; will not
+manufacture threshold-nudges to pad the count.
+
+- **L6 (attempt-0005): funding recency weighting.**
+  - *Mechanism:* funding_pressure is an equal sum over the last N settlements (~40h), mixing
+    fresh and stale crowding. Exponentially weighting recent settlements more (`funding_decay`,
+    scale-normalized so the magnitude scale is preserved) tests whether *fresh* crowding reverses
+    more cleanly than time-averaged crowding → higher per-trade edge → higher Sharpe/t.
+  - *Observable:* PF, t / deflated, trade count (should be ~flat — scale preserved), by-symbol.
+  - *Falsifier:* PF/t flat or worse → funding is sign-only (crowded-short = negative funding),
+    its timing/magnitude non-predictive (consistent with A5 magnitude-null, A10 count-flat,
+    A15 sign-only-floor-load-bearing). Closes the funding-timing dimension.
+  - *Failure mode targeted:* thin Sharpe (SE) via the funding signal dimension.
+  - *Result (attempt-0005): FALSIFIED — DISCARD, score 0.062.* decay=0.5: PF 1.71→**1.44**,
+    return 55.7%→20.3%, deployed vol→7.6%, significance fails (deflated −0.079), +33 trades,
+    `failure_class = no_edge`. Recency-tilting admits names whose recent funding trends/flips
+    sign → lower-quality setups → edge diluted. **Confirms funding is purely a sign detector**
+    (crowded-short = negative funding); level/count/magnitude/timing all non-predictive
+    (A5/A10/A15). Funding-timing dimension CLOSED. Reverted decay=0.
+
+- **L7 (attempt-0006): vol-scaled ("risk-time") hold length.**
+  - *Mechanism:* the fixed 720-min hold is a universe average, but the edge concentrates in
+    high-vol altcoins (DOGE/XRP/ADA/SOL) whose capitulation-bounce plausibly completes faster in
+    clock time. Holding in *risk-time* — hold ∝ (ref_vol/name_vol)^`hold_vol_scaling`, clamped
+    [120,1440] — exits high-vol names sooner (locking the bounce before post-reversal noise) and
+    low-vol names later, matching capture to each name's dynamics → higher per-trade Sharpe/t.
+    `hold_vol_scaling=0` reproduces the fixed hold.
+  - *Observable:* PF, t/deflated, holding-period spread, by-symbol PnL, deployed vol.
+  - *Falsifier:* PF/t flat or worse → the reversal is funding/clock-driven (settles on the 8h
+    schedule), so vol-scaling the hold mismatches the mechanism and the fixed 720 (A7/A8 peak)
+    is right regardless of name vol. Closes the exit-timing dimension.
+  - *Failure mode targeted:* exit mismatch / thin Sharpe (SE).
+  - *Result (attempt-0006): FALSIFIED — DISCARD, score 0.231.* scaling=1: deployed full 15% vol
+    but t dropped 2.024→**1.82** (significance fail), PF 1.71→1.64. Win-rate rose (0.573) but PF
+    fell — cutting high-vol names short yields more small wins and **loses the big bounces** (the
+    overshoots ARE the edge; same lesson as A18 take-profit). The reversal is funding/clock-driven;
+    fixed 720 is right regardless of name vol. Exit-timing dimension CLOSED. Reverted scaling=0.
+
+- **L8 (attempt-0007): robust cross-section reference (mean → median).**
+  - *Mechanism:* the idiosyncratic dislocation is measured vs the cross-section MEAN extension.
+    With a co-moving cross-section (ρ 0.6–0.8) a few extreme names skew the mean, adding noise to
+    the "typical move" the idio is measured against. A median (or trimmed) reference is a robust
+    estimate of the typical name's move → cleaner idiosyncratic signal → better selection → higher
+    per-trade edge. This is the one distinct signal lever NOT answered by L1 (which was
+    normalization, not reference robustness).
+  - *Observable:* PF, t/deflated, trade count, by-symbol.
+  - *Falsifier:* PF/t flat → with 4–8 candidates mean≈median, so the reference is already
+    well-formed and reference robustness is not a lever. Near-inert expected; a clean final
+    rigor check that the signal form is settled.
+  - *Failure mode targeted:* thin Sharpe (SE) via cross-section reference noise.
+  - *Result (attempt-0007): NEAR-INERT — DISCARD, score 0.274.* median: PF 1.699 vs 1.713, return
+    55.5%, 305 trades — essentially identical to the mean survivor; t 1.97 (mean marginally
+    better, significance just fails). With 4–8 candidates mean≈median → the cross-section reference
+    is already well-formed; reference robustness is not a lever. Signal form SETTLED. Reverted to
+    mean.
+
+- **L9 (attempt-0008): dislocation-magnitude sizing.**
+  - *Mechanism:* the book equal-weights the 1–3 selected names. Weighting each ∝ its idiosyncratic
+    dislocation magnitude (gross preserved — shape, not magnitude) puts the most capital on the
+    biggest capitulations, which A6 evidence says bounce biggest → higher return per unit risk →
+    higher per-trade Sharpe/t. Distinct from B2 inverse-vol, which leaned *away* from the high-vol
+    names that carry the edge; this leans *into* the confirmed vol-seeking/absolute-dislocation
+    edge, so it is the most likely of the remaining levers to actually help.
+  - *Observable:* PF, t/deflated, by-symbol PnL concentration, breadth (concentration must stay
+    < 0.70), deployed vol.
+  - *Falsifier:* PF/t flat → sizing cannot help a 1–3-name book (B2 lesson: too few concurrent
+    names to reshape), so conviction-weighting is washed out like every other sizing lever.
+  - *Failure mode targeted:* thin Sharpe (SE) — whether conviction sizing lifts per-trade edge.
+  - *Result (attempt-0008): KEEP — NEW BEST SURVIVOR, all 8 gates pass, score 0.291.* Conviction
+    weighting lifted PF 1.713→**1.747** (best of lifecycle), return 55.7→**57.0%**, t 2.024→**2.043**,
+    deflated **+0.012** (best significance margin), breadth 0.314, 306 trades. **My "sizing inert"
+    prediction was FALSIFIED** — dislocation-weighting helps because it leans *into* the confirmed
+    edge (biggest capitulations bounce biggest, A6), unlike B2's inverse-vol which leaned away.
+    First edge-QUALITY win of the lifecycle (PF up, not just capacity). Adopted. Lesson: lean-in
+    conviction levers can beat the saturation prior — so the remaining "predicted-fail" levers
+    deserve genuine tests, not dismissal.
+
+**Survivor (updated): attempt-0008** — long-only crowding-reversal, cadence 240, `min_same_sign=1`,
+`min_abs_funding=1`, `min_idio=2.5` (raw, mean reference), recent-guard off, hold 720, `top_n=5`,
+`entry_twap=20`, `exit_twap=30`, **`weighting=dislocation`**. Score 0.291 (+48% vs baseline), t 2.043,
+PF 1.747, all gates pass (significance marginal at the 8-name t≈2 knife-edge).
+
+- **L10 (attempt-0009): dislocation-scaled hold (conviction on the time axis).**
+  - *Mechanism:* the sizing win shows leaning into dislocation helps. Its time-axis analog: hold
+    the biggest capitulations longer (`hold ∝ (idio/ref_idio)^hold_dislocation_scaling`, clamped),
+    since a bigger crowded-short capitulation plausibly has a bigger, slower bounce (A6). Distinct
+    from L7, which scaled by *vol* and cut high-vol names short (that hurt).
+  - *Observable:* PF, t/deflated, holding-period spread, by-symbol.
+  - *Falsifier:* PF/t flat or worse → either the reversal horizon is dislocation-independent (fixed
+    720 right for all), or the return-series heterogeneity from varied holds costs more t than the
+    conviction-PF gain adds (the L7 heterogeneity mechanism, direction-independent).
+  - *Failure mode targeted:* exit mismatch / thin Sharpe (SE).
+  - *Result (attempt-0009): FALSIFIED — DISCARD, score 0.246.* t 2.043→**1.93** (significance fail),
+    PF 1.747→1.731, return→51%. The L7 heterogeneity mechanism dominated: varying hold length —
+    even in the conviction direction — creates heterogeneous overlapping return series → lower
+    n_eff → higher SE → lower t. **Clean contrast:** conviction helps via SIZING (0008 — same
+    trades, reshaped weights, no heterogeneity) but not via HOLD. Exit/hold dimension now closed by
+    FIVE converging falsifications (A7/A8/A18/L7/L9). Reverted to the 0008 survivor.
+
+- **L11 (attempt-0010): beta-adjusted idiosyncratic dislocation.**
+  - *Mechanism:* the current signal subtracts the beta=1 cross-section MEAN move; a high-beta
+    (high-vol) altcoin that simply moved with the market then looks idiosyncratically dislocated
+    when it is not. Subtracting a beta-scaled market move (`reference = beta × market_mean`,
+    beta ≈ name_vol / cross-section_vol) removes the market-common component, leaving the true
+    idiosyncratic residual → cleaner selection → higher edge. Generalizes raw (beta=1 ≡ current);
+    distinct from L1 (which rescaled magnitude by own vol, not the reference by beta).
+  - *Observable:* PF, t/deflated, by-symbol mix (does it de-select high-vol altcoins?), trades.
+  - *Falsifier:* PF/t flat or worse → either the beta=1 mean is already adequate, or (like L1)
+    beta-adjustment de-selects the high-vol altcoins whose *raw absolute* moves carry the edge.
+    Together with L1 this definitively closes the "cross-name adjustment" question.
+  - *Failure mode targeted:* thin Sharpe (SE) via market-beta contamination of the signal.
+  - *Result (attempt-0010): DISCARD, score 0.271 — passes all gates but does not beat the survivor.*
+    PF 1.728 vs 1.747, t 2.004 vs 2.043, return 54.1%. Beta-adjustment mildly de-emphasizes the
+    high-vol altcoins (as L1 predicted, but gently — beta≈1.6/0.4 is a softer touch than full
+    σ-normalization). **Together with L1 this definitively closes cross-name adjustment: the edge is
+    raw absolute dislocation; neither vol-normalization (catastrophic) nor beta-adjustment (mild)
+    helps.** Signal dimension SETTLED three ways. Reverted to raw.
+
+- **L12 (attempt-0011): conviction-sizing convexity (weight ∝ dislocation²).**
+  - *Mechanism:* the linear dislocation-sizing win (0008) shows conviction helps. A convex weight
+    (`dislocation_weight_power` 1→2) concentrates capital further on the largest capitulations —
+    the highest-conviction, biggest-expected-bounce signals — which should raise per-trade Sharpe
+    if the edge scales super-linearly with dislocation. Gross preserved; a discrete structural test
+    of the sizing win's shape, not an aimless sweep.
+  - *Observable:* PF, t/deflated, `max_symbol_concentration` (breadth gate 0.70 — currently 0.31),
+    deployed vol, score.
+  - *Falsifier:* PF/t flat or worse, or breadth rises toward 0.70 → convexity over-concentrates a
+    1–3-name book into single-name risk without an edge gain; linear conviction is the right shape.
+  - *Failure mode targeted:* thin Sharpe (SE) / symbol concentration — the sizing win's optimal shape.
+  - *Result (attempt-0011): KEEP — NEW BEST SURVIVOR, all 8 gates pass, score 0.311.* power=2:
+    PF 1.747→**1.797** (best of lifecycle), return 57→**59.5%**, t 2.043→**2.095** (widest clearance
+    of 2.0 yet), deflated **+0.027** (least-marginal significance pass), full 15% vol deployed,
+    breadth 0.317 (safe). **Third consecutive conviction win** — the edge scales *super-linearly*
+    with dislocation: biggest capitulations → biggest, cleanest bounces (A6). Adopted. The prior
+    lifecycle missed this entirely (only tested inverse-vol, which leans the wrong way).
+
+**Survivor (updated): attempt-0011** — long-only crowding-reversal, cadence 240, `min_same_sign=1`,
+`min_abs_funding=1`, `min_idio=2.5` (raw, mean ref), recent-guard off, hold 720, `top_n=5`,
+`entry_twap=20`, `exit_twap=30`, `weighting=dislocation`, **`dislocation_weight_power=2`**.
+Score **0.311 (+59% vs baseline)**, t 2.095, PF 1.797, all gates pass.
+
+- **L13 (attempt-0012): convexity bracket (power 2 → 3).**
+  - *Mechanism:* convexity is a live climbing direction (equal→linear→convex² all improved). Test
+    power=3 to bracket the optimum: does even sharper conviction concentration keep helping, or is
+    ~2 the peak? One bracketing point, not a fine sweep.
+  - *Observable:* PF, t/deflated, breadth (0.70 gate; 0.317 at p=2), score.
+  - *Falsifier:* PF/t flat-or-worse, or breadth rises materially → p≈2 is the peak; over-concentration
+    into single-name risk beyond that. Commit to the better of {p=2, p=3} and stop the exponent sweep.
+  - *Failure mode targeted:* symbol concentration / diminishing conviction returns.
+  - *Result (attempt-0012): KEEP — NEW BEST SURVIVOR, all gates pass, score 0.326.* power=3:
+    PF 1.797→**1.837**, return 59.5→**61.0%**, t 2.095→**2.146**, deflated **+0.041** (most robust
+    significance margin), full 15% vol, breadth 0.319 (safe), still climbing. **Inspection (per the
+    overfit red-flag protocol) shows the convexity gain is ROBUST, not overfit:** it improves the
+    *weakest* subwindow (train_1 PSR 0.653→0.699 across p=1→3) and train_6 while strong windows stay
+    flat, so the t-gain broadly tightens the weak end; PnL stays spread across 5–6 altcoins (top
+    share 0.33, all 6 subwindows positive). A genuine cross-sectional feature (biggest dislocations
+    bounce biggest, broadly). Adopted p=3; continuing to bracket.
+
+- **L14 (attempt-0013): convexity bracket (power 3 → 4).**
+  - *Mechanism:* convexity still climbing at p=3 with robust broad subwindow gains and safe breadth.
+    Test power=4 to locate the peak/break: does it keep broadly improving, or does breadth rise /
+    the weak-window gain reverse (over-concentration)?
+  - *Observable:* score, t, PF, `max_symbol_concentration`, train_1 subwindow PSR.
+  - *Falsifier:* score/t flat-or-down, or breadth rises materially, or train_1 PSR reverses →
+    p≈3 is the robust peak; commit and stop the exponent sweep.
+  - *Failure mode targeted:* symbol concentration / diminishing conviction returns.
+  - *Result (attempt-0013): KEEP — NEW BEST SURVIVOR, all gates pass, score 0.335.* power=4:
+    PF **1.864**, return **62.0%**, t **2.175**, deflated **+0.051**, breadth 0.320 (safe),
+    worst-subwindow 0.717. But the climb DECELERATED (score deltas +0.020/+0.015/+0.009;
+    PF +0.050/+0.040/+0.027) — diminishing returns to the peak. **STOP convexity escalation at
+    p=4** per the overfit discipline: pushing to p=5,6 for the last ~+0.005 is Train-number-chasing.
+    Conviction thread exhausted at its peak. Survivor of record = attempt-0013.
+
+**Survivor (updated): attempt-0013** — long-only crowding-reversal, cadence 240, `min_same_sign=1`,
+`min_abs_funding=1`, `min_idio=2.5` (raw, mean ref), recent-guard off, hold 720, `top_n=5`,
+`entry_twap=20`, `exit_twap=30`, `weighting=dislocation`, **`dislocation_weight_power=4`**.
+Score **0.335 (+71% vs baseline 0.196)**, t 2.175, PF 1.864, deployed vol 15.0% (full budget),
+all gates pass. Robustness note: the well-motivated convexity is ~quadratic-cubic; p=4's marginal
+gain over p=3 (+0.009) is small — a point for OOS validation, not a robustness claim.
+
+- **L15 (attempt-0014): combined-conviction weighting (funding + dislocation).**
+  - *Mechanism:* the conviction win weights by dislocation. Does weighting by the full selection
+    score (funding magnitude + dislocation) help more (general conviction) or less (funding
+    magnitude is non-predictive noise, A5)? Probes whether the win is dislocation-specific.
+  - *Observable:* PF, t/deflated, score vs the 0.335 dislocation survivor.
+  - *Falsifier:* combined ≤ dislocation → the conviction is dislocation-specific (funding magnitude
+    dilutes), confirming A5 and the dislocation-conviction finding. (Expected.)
+  - *Failure mode targeted:* whether conviction generalizes beyond the dislocation signal.
+  - *Result (attempt-0014): KEEP by score (0.341) but REJECTED as an overfit micro-gain.* combined:
+    +0.006 over pure dislocation, t 2.201, but breadth crept 0.320→**0.364** and the gain comes from
+    adding **funding magnitude** to the conviction weight — which A5 established is **non-predictive**.
+    No mechanism explains the gain (Quant Research Standard: "if the evidence cannot explain the
+    result, do not edit"), so it is Train-flattering, not edge. Rejected; reverted to pure
+    dislocation. This is the overfit zone (micro-gains from mechanism-less knobs) — the honest
+    signal that the productive conviction search is done.
+
+- **L16 (attempt-0015): recent-capitulation conviction weighting.**
+  - *Mechanism:* a distinct, *predictive* conviction signal (vs the rejected non-predictive funding
+    magnitude): weight by the magnitude of each name's recent same-direction move (a fresh, ongoing
+    capitulation). A6 established bigger recent capitulations bounce best, so concentrating on the
+    deepest recent fallers should lift per-trade Sharpe — an independent conviction axis from the
+    cross-sectional dislocation. Tested alone (convex power=3) vs the dislocation survivor.
+  - *Falsifier:* PF/t below the dislocation survivor (0.326) → recent-return is a worse or redundant
+    conviction axis; dislocation-conviction stands.
+  - *Result (attempt-0015): FALSIFIED — DISCARD, score 0.278.* PF 1.837→**1.715**, significance
+    fails, −13 trades (zeroing recent-risers de-selected qualifying names). Recent-return magnitude
+    is a worse conviction axis than cross-sectional dislocation. **Confirms conviction is
+    dislocation-specific** (the edge is relative-value, B8). Conviction axis SETTLED = convex
+    cross-sectional dislocation. Reverted.
+
+## Stop — enumeration genuinely closed (attempt 15; feasible survivor; universe/envelope-bound)
+
+This is now a genuine stop, not premature closure: (1) the productive climb has plateaued — the last
+robust improvement was the dislocation convexity (attempt-0012/0013); the two attempts since
+(0014 combined = mechanism-less overfit micro-gain, 0015 capitulation = worse) produced no robust
+gain; (2) every mechanism-dimension has a result; (3) the remaining un-run ideas are **variants of
+already-closed mechanism-classes**, not new mechanisms — a dynamic signal-reversion exit is a
+combination of continuous-rotation (A4, falsified: bled the reversal) and varied-exit-time (L7/L9,
+falsified: return-series heterogeneity lowers t); a multi-horizon dislocation is a confirmation
+filter (the filter class is closed — A5/A6/A11/A15/A16 all cut good trades or inert). No new distinct
+hypothesis with a real, non-variant mechanism can be articulated. Dimension status:
+
+- **Signal construction** — CLOSED. Edge is *raw absolute-bps* cross-sectional dislocation; both
+  vol-normalization (L1, catastrophic) and beta-adjustment (L11, mild) fail; median reference inert
+  (L8). It is vol-*seeking*, not vol-agnostic.
+- **Funding** — CLOSED. Sign-only detector; level/count/magnitude/recency/weight-magnitude all
+  non-predictive (A5/A10/L6/L15).
+- **Exit** — CLOSED (6 converging results). Fixed-horizon 720 is optimal; every timing/scaling
+  variant (A7 short, A8 long, A18 take-profit, L7 vol-scaled, L9 disloc-scaled) hurts — shorter cuts
+  the slow bounce, any *varied* exit adds return-series heterogeneity → lower n_eff → lower t. A
+  dynamic signal-reversion exit is a variant of this closed class (same heterogeneity cost) and is
+  not run.
+- **Capacity** — SOLVED. Decoupling the synchronized fixed-horizon exit ramp (L4/L5) deploys the
+  full 15% risk budget (was liquidity-throttled to 10%); a robust, monotonic mechanism.
+- **Sizing / conviction** — SOLVED and bracketed. Convex dislocation-weighting (super-linear
+  conviction) is the second win, inspected-robust to ~p3 (broad subwindow gains, spread PnL); p4/
+  combined are the overfit tail. Inverse-vol (B2) inert; leans the wrong way.
+- **Selection / cadence / hold / sides** — mapped (top_n inert at 1–3 concurrent; cadence 240
+  funding-aligned; hold 720; long-only, shorts no gross edge).
+
+**Frozen Train survivor (recommended, robust): attempt-0012** — long-only crowding-reversal, cadence
+240, `min_same_sign=1`, `min_abs_funding=1`, `min_idio=2.5` (raw, mean ref), recent-guard off, hold
+720, `top_n=5`, `entry_twap=20`, `exit_twap=30`, `weighting=dislocation`, `dislocation_weight_power=3`.
+Score **0.326 (+66% vs the 0.196 warm-start baseline)**, full-Train return 61.0%, deployed vol 15.0%
+(full risk budget), t **2.146**, PF 1.837, breadth 0.319, all 8 gates pass, causality admissible,
+6/6 subwindows positive. This is a candidate for Season's downstream OOS/paper/small-live review,
+**not** a deployability claim. The protocol ledger's numeric-max is attempt-0014 (0.341, combined/p4);
+its final ~+0.015 is a mechanism-less overfit tail (non-predictive funding magnitude, decelerating
+convexity, rising concentration) — I recommend the robust config above and flag the tail for OOS
+scrutiny.
+
+**Two robust wins the prior lifecycle missed** (it only reached ~0.196-equivalent and concluded
+"reseed"): (1) exit-ramp decoupling → full-budget deployment; (2) convex dislocation-conviction
+sizing → higher per-trade Sharpe. Together +66%. The significance pass is now less marginal (t 2.15
+vs the 2.0 knife-edge) but still on the 8-name plateau: t is scale-invariant and universe-bound, so
+neither win *robustly* lifts it far above 2.
+
+### Reseed Case (for Season; not executed) — larger return-blind universe
+
+The binding constraint is the **universe/envelope, not the edge**. The edge is real, causal,
+cost/impact-robust, broadly cross-sectional, and now well-deployed and conviction-shaped — yet the
+full-Train t sits at ~2.0–2.15 because 8 majors supply only 1–3 concurrent crowded-short setups,
+capping statistical independence (duty cycle ~33%). Every within-8-name t lever is falsified.
+Recommendation: reseed the same long-only funding-crowding-reversal mechanism — carrying the two new
+wins (exit-decoupling, convex conviction) — on the full data-ready crypto-perp universe (~25 names),
+chosen return-blind on eligibility (liquidity, readiness), never by dropping losers. Expected to
+raise t mainly via **duty cycle** (more names firing → more at-risk calendar → higher n_eff) and to
+lower per-name ADV participation (more deployable capacity); the diversification/Sharpe gain is
+limited (crypto-perp crowding is one ρ≈0.6–0.8 factor). This changes neither the protocol nor this
+run; a reseed is a new lifecycle and Season's call.
+
+## Prior Lifecycle — 8-name, retired money_floor gate (archived; edge-lessons durable, gate/exhaustion conclusions superseded)
+
+Re-baselined on the corrected harness (attempt-0001). Same 8-major universe and mechanism as
+the active lifecycle above; this log scored under the retired `money_floor` gate. The harness
+changed:
 
 - `breadth` now reads **economic** concentration (largest symbol's share of realized
   PnL), not peak gross notional. It PASSES (0.305 << 0.70). The archived "breadth is a

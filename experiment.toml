@@ -1,121 +1,140 @@
-strategy_id = "crypto_perp_autoresearch_ensemble"
-strategy_path = "strategy.py"
-max_attempts = 50
-active_window_id = "locked_recent_2026"
-
-[[windows]]
-id = "locked_recent_2026"
-start = "2025-10-16"
-end = "2026-04-13"
-
-[[windows]]
-id = "validation_2025_h2"
-start = "2025-07-01"
-end = "2025-12-27"
-
-[[windows]]
-id = "validation_2025_h1"
-start = "2025-01-01"
-end = "2025-06-29"
-
-[data]
-kind = "crypto_perp_funding"
-symbols = [
-  "ADA-PERP",
-  "XRP-PERP",
-  "AVAX-PERP",
-]
-strict = true
-
 [params]
-symbols = [
-  "ADA-PERP",
-  "XRP-PERP",
-  "AVAX-PERP",
-]
-side_mode = "short_only"
-excluded_decision_hours = [1, 2, 3, 4, 14, 20]
-symbol_weight_fractions = [0.95, 0.025, 0.025]
-use_full_indicator_history = false
-use_trailing_stop = true
-base_position_pct = 0.20
-atr_stop_mult = 5.5
-min_votes = 4
-cooldown_bars = 2
-rsi_period = 8
-rsi_long_exit_threshold = 69.0
-rsi_short_exit_threshold = 31.0
-use_rsi_exhaustion_filter = false
-ema_fast_span = 12
-ema_slow_span = 26
-macd_fast_span = 12
-macd_slow_span = 26
-macd_signal_span = 9
-bb_window_hours = 10
-bb_percentile_threshold = 85.0
-base_momentum_threshold = 0.012
-vol_lookback_hours = 48
-vshort_threshold_mult = 0.5
-dynamic_threshold_vol_weight = 0.5
-dynamic_threshold_floor = 0.006
-dynamic_threshold_ceiling = 0.025
+funding_lookback_events = 5
+funding_decay = 0.0
+return_lookback_minutes = 120
+decision_interval_minutes = 240
+entry_twap_bars = 20
+exit_twap_bars = 30
+decision_lag_minutes = 1
+session_start_hour = 0
+session_end_hour = 24
+top_n = 5
+min_cross_section = 4
+min_abs_funding_bps = 1.0
+min_abs_return_bps = 0.0
+include_positive_funding_shorts = false
+include_negative_funding_longs = true
+min_same_sign_funding_events = 1
+min_latest_abs_funding_bps = 0.0
+recent_return_lookback_minutes = 60
+max_recent_same_direction_return_bps = 1000.0
+min_idiosyncratic_return_bps = 2.5
+idiosyncratic_mode = "raw"
+min_idiosyncratic_sigma = 0.5
+selection_score = "combined"
+cross_section_reference = "mean"
+weighting = "dislocation"
+dislocation_weight_power = 3.0
+vol_lookback_minutes = 1440
+long_hold_minutes = 720
+short_hold_minutes = 720
+hold_vol_scaling = 0.0
+hold_dislocation_scaling = 0.0
+take_profit_frac = 0.0
 
-[fill_model]
-price = "close"
-entry_lag_bars = 1
-exit_lag_bars = 1
+# Bounded search space: ranges the thesis needs tested, not pinned to baseline.
+# Causal/operational fields (decision_lag, session hours) stay pinned by design.
 
-[cost_model]
-fee_bps_per_side = 0.0
-slippage_bps_per_side = 0.0
+[bounds.funding_lookback_events]
+min = 3
+max = 10
 
-[scoring]
-metric = "net_return"
-min_score_trades = 80
+[bounds.funding_decay]
+min = 0.0
+max = 2.0
 
-[research]
-mode = "explore"
-primary_window_id = "locked_recent_2026"
-confirmation_window_ids = ["locked_recent_2026", "validation_2025_h2"]
-parallel_workers = 1
-confirm_on_explore_keep = false
+[bounds.return_lookback_minutes]
+min = 30
+max = 480
 
-[confirmation_scoring]
-primary_metric = "net_return_per_day"
-dispersion_weight = 0.5
-weak_window_floor = 0.0
-weak_window_penalty = 0.001
-min_trades_per_window = 80
-low_trade_penalty = 0.001
-min_symbol_count = 3
-symbol_concentration_penalty = 0.00025
+[bounds.decision_interval_minutes]
+min = 30
+max = 720
 
-[promotion]
-enabled = true
-screen_on_scored_explore = false
-recent_window_ids = ["locked_recent_2026", "validation_2025_h2"]
-rotating_probe_window_ids = ["validation_2025_h1"]
-deep_probe_floor = -0.001
-near_equal_score_tolerance = 0.0001
-cost_stress_id = "realistic_costs"
-cost_fee_bps_per_side = 0.5
-cost_slippage_bps_per_side = 0.5
-cost_stress_min_ratio = 0.5
+[bounds.entry_twap_bars]
+min = 1
+max = 30
 
-[artifacts]
-profile = "research"
-keep_strategy_snapshot = true
-keep_config = true
-keep_summary = true
-keep_evidence = true
-keep_signals = false
-keep_engine_request = false
-keep_input_rows_csv = false
-keep_input_rows_jsonl = false
-compress_large_artifacts = false
-large_artifact_max_mb = 100
+[bounds.exit_twap_bars]
+min = 1
+max = 60
 
-[output]
-results_dir = "results/next50_crypto_perp_autoresearch_ensemble"
-mode = "screen"
-artifact_profile = "summary"
+[bounds.decision_lag_minutes]
+min = 1
+max = 1
+
+[bounds.session_start_hour]
+min = 0
+max = 0
+
+[bounds.session_end_hour]
+min = 24
+max = 24
+
+[bounds.top_n]
+min = 1
+max = 8
+
+[bounds.min_cross_section]
+min = 2
+max = 8
+
+[bounds.min_abs_funding_bps]
+min = 0.0
+max = 10.0
+
+[bounds.min_abs_return_bps]
+min = 0.0
+max = 50.0
+
+[bounds.min_same_sign_funding_events]
+min = 1
+max = 5
+
+[bounds.min_latest_abs_funding_bps]
+min = 0.0
+max = 10.0
+
+[bounds.recent_return_lookback_minutes]
+min = 0
+max = 240
+
+[bounds.vol_lookback_minutes]
+min = 240
+max = 2880
+
+[bounds.max_recent_same_direction_return_bps]
+min = 0.0
+max = 1000.0
+
+[bounds.min_idiosyncratic_return_bps]
+min = 0.0
+max = 50.0
+
+[bounds.min_idiosyncratic_sigma]
+min = 0.0
+max = 3.0
+
+[bounds.long_hold_minutes]
+min = 120
+max = 1440
+
+[bounds.short_hold_minutes]
+min = 120
+max = 1440
+
+[bounds.hold_vol_scaling]
+min = 0.0
+max = 2.0
+
+[bounds.hold_dislocation_scaling]
+min = 0.0
+max = 2.0
+
+[bounds.dislocation_weight_power]
+min = 1.0
+max = 6.0
+
+[bounds.take_profit_frac]
+min = 0.0
+max = 0.5

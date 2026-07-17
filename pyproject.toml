@@ -11,7 +11,20 @@ dependencies = [
     "quant-strategies",
 ]
 
+[project.scripts]
+quant-autoresearch = "loop:main"
+
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.mypy]
+exclude = [
+    "^results/",
+    "^\\.autoresearch/",
+]
+
+[[tool.mypy.overrides]]
+module = ["quant_data.*", "quant_strategies.*"]
+ignore_missing_imports = true

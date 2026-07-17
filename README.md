@@ -1,159 +1,134 @@
 # quant_autoresearch
 
-`quant_autoresearch` is a small research workbench for improving one quant
-strategy candidate at a time.
+`quant_autoresearch` is a small autonomous research workbench for developing one quant strategy thesis at a time.
 
-The repo is intentionally narrow: an agent or researcher edits only the active
-strategy and its experiment config, while the runner keeps the evaluation loop,
-attempt ledger, promotion gates, and generated artifacts separate.
+The shape is intentionally close to Karpathy's `autoresearch`: a short `program.md`, one narrow editable strategy surface, fixed read-only run configuration, and an append-only `results.tsv`. The trading-specific difference is that the loop never tunes against OOS. It only develops on Train and hands survivors to Season for downstream OOS, paper, and small-live review.
 
-This is not a production trading system, investment advice, or a final
-validation framework. It is a fast bench for finding candidates worth promoting
-to deeper validation.
+This is not a trading system, investment advice, or proof of deployability.
 
-## What It Shows
+For a new plain-language strategy idea, invoke the `new-thesis-setup` skill
+(`/new-thesis-setup`). It owns mandate collection, protocol proposal, approval,
+lifecycle reset, and first baseline preflight.
 
-The current public example is a crypto perpetual futures strategy candidate:
-`crypto_perp_autoresearch_ensemble`.
+Root files may hold either the neutral scaffold or an active local thesis. Use
+`python -m loop status` as the lifecycle-state source; do not infer state from
+checkout comments or strategy names alone.
 
-The strategy started as a broad technical-vote ensemble and was iterated through
-guarded screens. The important point is not that one backtest number improved;
-it is that the workbench rejected tempting one-window gains and only promoted
-candidates that survived a compact robustness screen.
+## Active Documents
 
-Raw generated result directories are intentionally ignored, while the public
-`results.tsv` ledger records the attempt history. The latest campaign showed
-this progression:
+| Path | Role |
+| --- | --- |
+| `new-thesis-setup` skill | New-thesis setup workflow (`/new-thesis-setup`); the filled brief lives under `.autoresearch/protocol_briefs/`. |
+| `program.md` | Agent operating contract for one active Train loop. |
+| `docs/score_research.md` | Train money-score rationale and scoring boundaries. |
+| `docs/adr/0001-curated-few-research-regime.md` | Research-regime decision. |
+| `docs/templates/oos-drift-review.md` | Downstream one-look OOS drift review template. |
+| `HISTORY.md` | Development chronology and migration rationale. |
 
-| Stage | Change | Primary score/day | Guard evidence | Promotion score | Outcome |
-| --- | --- | ---: | --- | ---: | --- |
-| Baseline | Imported ensemble after contract fix | `-0.000021` | 628 trades | n/a | Baseline kept for comparison |
-| First serious filter | Short-only technical vote filter | `0.000120` | H1 `0.000105` | `-0.000998` | Rejected by promotion |
-| First promoted subset | Short-only ADA/XRP/AVAX/LINK | `0.000137` | H1 `0.000198` | `0.000080` | Promoted |
-| Concentrated trio | Short-only ADA/XRP/AVAX | `0.000162` | H1 `0.000156` | `0.000098` | Promoted |
-| Timing filter | Exclude weak decision hours `01/02/03/04/14` | `0.000279` | H1 `0.000210`, H2 `0.000206` | `0.000224` | Promoted |
-| Sizing variant | Same signal, `base_position_pct = 0.20` | `0.000698` | H1 `0.000526`, H2 `0.000515` | `0.000561` | Promoted |
-| Current promoted candidate | ADA-heavy weights plus excluded hour `20` | `0.001092` | H1 `0.000662`, H2 `0.000843` | `0.000905` | Promoted |
-| Rejected high primary | Higher volatility threshold weight | `0.001169` | H1 `0.000631` | `0.000851` | Rejected despite higher primary |
+## Editable Surface
 
-Scores are runner-owned research metrics. The primary score is normalized by
-window days when window metadata is available. Promotion score additionally
-penalizes dispersion, failed sample gates, weak windows, symbol concentration,
-and cost-stress fragility according to `experiment.toml`.
+The agent may edit:
 
-## How The Loop Works
+- `strategy.py`
+- `experiment.toml` `[params]`, within the existing `[bounds.*]`
+- `rationale.md` when variants are tried or signal components change
 
-The ordinary editable surface is small:
+The agent does not edit during an active thesis loop:
 
-```text
-strategy.py
-experiment.toml
-```
+- symbols
+- Train start/end
+- data kind
+- cost model
+- fill model
+- capacity model
+- leverage budget
+- objective kind
+- gate thresholds
+- `plateau_patience`, `max_iterations`, `subwindows`, `min_abs_improvement`, or `min_rel_improvement`
 
-The harness is deliberately treated as stable during strategy research:
+Those live in `protocol.toml` and are chosen through the `new-thesis-setup` skill
+before a thesis starts. A new-thesis setup can use explicit `symbols` or a
+`.autoresearch/universe/` resolver artifact; `propose-protocol` maps the approved
+symbol list into the recommendation table but does not edit `protocol.toml`.
 
-```text
-program.md
-runner.py
-scoring.py
-experiment_config.py
-promotion.py
-artifact_policy.py
-```
+## Artifact Authority
 
-The loop is:
+During an active thesis loop, the agent's active loop inputs are:
 
-1. Establish a baseline on the configured primary window.
-2. Make one focused strategy or experiment change.
-3. Run a cheap explore screen.
-4. Run one or more guard diagnostics only when the result is plausible.
-5. Promote only serious candidates through the compact robustness screen.
-6. Send promoted candidates to a separate comprehensive validation process.
+- `program.md`, `protocol.toml`, `experiment.toml`, `strategy.py`, and `rationale.md`
+- recent `results.tsv`
+- the latest quick-run artifact directory recorded in `results.tsv`, especially diagnostics needed to choose the next Train edit
 
-The loop is designed to prevent common autoresearch failure modes:
+Generated audit and handoff artifacts are evidence records, not source. Thesis locks, source snapshots, and terminal manifests preserve what happened and what should be handed to Season after a stop rule fires; they are not routine inputs for choosing Train edits.
 
-- overfitting one recent window
-- treating parameter sweeps as new strategy logic
-- hiding upstream data or engine limitations inside `strategy.py`
-- confusing a promoted candidate with final validation
+Season downstream-only artifacts include OOS drift reviews, OOS evaluation artifacts, paper-test notes, and small-live notes. They must not feed back into the same Train loop.
 
-## Current Strategy
+Do not browse the rest of the repo during ordinary Train iteration unless debugging a failure, checking an explicitly in-scope contract, or Season asks.
 
-`strategy.py` exposes the decision-strategy contract expected by the local
-runner:
+## Loop
 
-```python
-generate_decisions(rows, params)
-validate_params(params)
-```
+For one thesis:
 
-The active candidate uses completed hourly crypto perpetual bars and emits
-target-weight decisions when a group of technical votes agrees. The current
-config focuses on an ADA/XRP/AVAX universe with short-only entries, timing
-filters, ATR-based risk exits, and explicit promotion screens across recent and
-diagnostic windows.
+1. Set the working thesis in `rationale.md`.
+2. Establish a feasible baseline.
+3. Modify `strategy.py` or bounded params.
+4. Run a Train quick run through public `quant_strategies.runner.run_config`.
+5. Review diagnostic output and update `rationale.md`.
+6. Score the configured Train portfolio-foundation robustness objective.
+7. Apply binary validity gates, including evidence coverage, cost stress, path risk, breadth, statistical significance (deflated full-Train return > 0), and aggregate trade floor.
+8. Let the loop decide keep/discard with the implemented keep rule:
 
-The strategy code includes the market rationale, required observables,
-assumptions, and falsifier. If an idea needs upstream engine or data support,
-it belongs in `UPSTREAM_LIMITATIONS_TODO.md` rather than being approximated in a
-misleading way inside the strategy.
+   ```text
+   all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
+   ```
 
-## Running Locally
+9. Append one compact row to `results.tsv`; source provenance is preserved in the
+   attempt snapshot under the row's `artifact_dir`.
+10. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
-This repo delegates execution to `quant_strategies.runner.run_config` and
-expects local market data access. A fresh public clone is useful for reading the
-workflow and strategy, but it will not run unless your environment can resolve
-the `quant-strategies` dependency and its data requirements.
+A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
-With the local stack available:
+`results.tsv` records a compact, human-scannable metric set per attempt:
+deployed-return LCB score, worst-window id and annualized return, deflated return
+LCB, full-Train annualized return, cost-stress return retention, sizing,
+diagnostic PSR fields, gate flags, derived failure class, foundation closed-trade
+count, minimum subwindow trades, total return, max drawdown, max symbol
+concentration, win rate, profit factor, average trade net, cost return sum,
+complexity count, typed failure reason, artifact directory, and lifecycle state. Source provenance is preserved
+in the per-attempt snapshot; richer vectors, gate details, foundation warnings,
+and causality evidence live in the per-attempt `run_card.json` under the generated
+artifact directory. Only `keep` updates the best Train survivor; ordinary
+discarded variants may still remain useful working bases for thesis-guided
+follow-up edits. The complexity gate counts validated bounded params and signal
+components declared in `rationale.md` under `### Component:` headings.
+
+## Commands
 
 ```bash
-conda run -n quant python runner.py --explore --description "baseline"
+conda run -n quant python -m pytest
+conda run -n quant python -m loop resolve-universe --data-kind crypto_perp_funding --dataset crypto_perp_1min_with_funding --start 2025-03-01 --end 2025-12-31 --exclude MATIC-PERP --out .autoresearch/universe/latest.json
+conda run -n quant python -m loop propose-protocol --brief .autoresearch/protocol_briefs/latest.md --out .autoresearch/protocol_proposals/latest.json
+conda run -n quant python -m loop baseline --mechanism "<why it should work>" --falsifier "<what kills it>" --approved-proposal .autoresearch/protocol_proposals/latest.json
+conda run -n quant python -m loop status
+conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
+conda run -n quant python -m loop reset --confirm RESET-LIFECYCLE
 ```
 
-Run one guarded diagnostic window without updating the best candidate:
+The `resolve-universe` command writes a return-blind eligibility artifact from
+catalog/readiness metadata only. The `propose-protocol` command writes proposal
+artifacts only; it does not edit `protocol.toml`. The `baseline` command
+validates an approved proposal before the first attempt, then uses the normal
+climb path. The `climb` command runs the current candidate once and logs the
+attempt. The `reset` command archives generated lifecycle state only:
+`results.tsv`, `.autoresearch/thesis_lock.json`, and `.autoresearch/quick/`.
+It does not edit `strategy.py`, `protocol.toml`, `experiment.toml`, or
+`rationale.md`. The autonomous editing loop is driven by the agent contract in
+`program.md`.
 
-```bash
-conda run -n quant python runner.py --window-id validation_2025_h1 --description "guard: idea"
-```
+The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.
 
-Promote a serious candidate:
+## Upstream Boundary
 
-```bash
-conda run -n quant python runner.py --promote --description "promote candidate: idea"
-```
+`quant_autoresearch` consumes `quant_strategies` through public APIs only. Strategy execution uses `quant_strategies.runner.run_config`; private engine modules are not part of this contract.
 
-The public ledger is committed for auditability:
-
-```text
-results.tsv
-```
-
-Raw generated artifacts stay out of git:
-
-```text
-results/session_state.json
-results/<attempt>/score.json
-results/<attempt>/summary.json
-results/<attempt>/evidence.json
-results/<attempt>/promotion_score.json
-```
-
-## Repository Map
-
-- `strategy.py` - active scratch strategy candidate
-- `experiment.toml` - windows, universe, params, scoring, promotion, artifacts
-- `runner.py` - attempt orchestration and ledger writing
-- `promotion.py` - promotion screen logic
-- `scoring.py` - score normalization and sample gates
-- `experiment_config.py` - config parsing and validation
-- `program.md` - durable research-loop instructions for agents
-- `tests/` - harness and contract tests
-
-## Caveats
-
-- These are research-bench results, not live trading claims.
-- Promotion is a screening step, not comprehensive validation.
-- Cost, fill, data availability, and sample quality assumptions matter.
-- The current candidate is intentionally simple enough to audit; extra
-  complexity needs to pay for itself with stronger guarded evidence.
+There is one model of money: the single netted-book NAV path is the scored object, read from the quick-run portfolio foundation (compact full-Train and subwindow portfolio-return metrics for the Train score and gates). The per-trade economics tape is a derived attribution view of that same book, used for diagnostics only. Survivor-grade NAV/path traces still belong downstream, outside this Train loop.

@@ -2,15 +2,18 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-/.autoresearch_session.json
-/results
+# Generated autoresearch state; never source.
+/.autoresearch/
+/results/
+/results.tsv
 
 # Local agent/editor state.
 /.claude/
 /.cursor/
 /.codegraph/
 /.codex/skills/openspec-*/
-/openspec/
+/openspec/changes/archive/2026-06-06-*/
+/openspec/changes/archive/2026-06-07-*/
 
 # Scratch notes for local research sessions.
 /TODO.md

@@ -1,14 +1,17 @@
 # Upstream Limitations TODO
 
-This file is only for research ideas that are worth testing but are blocked by
-upstream data, engine, or harness capabilities. Do not use it for ordinary
-strategy parameters, failed attempts, or generated run results.
+Use this file only for promising research or loop capabilities blocked by upstream
+data, engine, or public API limits. Do not use it for ordinary strategy params,
+failed attempts, or generated run results.
 
 Each note should include:
 
-- the strategy idea or hypothesis
+- the idea or workflow it would unlock
 - the missing upstream capability
-- why the current harness cannot test it faithfully
+- why the current loop cannot test it faithfully
 - the validation it would unlock
 
 ## Open Items
+
+_None._
+

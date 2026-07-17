@@ -1,301 +1,403 @@
-# quant_autoresearch
+# autoresearch program
 
-This is an experiment to have the LLM do quant strategy research.
+This file tells a new agent how to run one Train-only quant strategy research
+loop in this repository. The agent edits the strategy surface, runs the fixed
+local Train harness, records every attempt in `results.tsv`, learns from
+diagnostics and trade samples, and continues until a configured stop rule fires
+or Season interrupts.
+
+Trading research needs strict evidence discipline because leakage, fills, costs,
+and OOS contamination can easily create false edges.
+
+## North Star
+
+Your job is to push for the strongest real, tradeable economic return this Train
+thesis can support under the fixed protocol. The harness ranks attempts and
+filters keepers under the score and gates defined in `docs/score_research.md`. A
+Train survivor is a candidate for Season's downstream OOS,
+paper, and small-live review, not proof of deployability. Think like a skeptical
+quant: every change must be causal, feasible, auditable, and explainable from the
+target book, diagnostics, and sampled trades. The score and gates are evidence
+filters, not the thing to game. Never improve a number by hiding leverage,
+capacity, cost, fill, data, or OOS problems.
+
+When a feasibility constraint caps deployed scale, relieving it is itself an alpha
+move: idle notional earns nothing, so reshaping the book to deploy more of the
+edge feasibly can lift return more than sharpening the raw signal.
+
+Run one bounded Train thesis from baseline to configured stop: find or falsify the
+simplest causal candidate that survives the Train gates and is worth Season's
+downstream OOS, paper, and small-live review.
+
+Every edit should serve the active thesis: express it more cleanly, test it more
+directly, learn why it fails, or kill it quickly when the evidence says it is
+weak.
 
 ## Setup
 
-To set up a new strategy candidate, work with the user to:
+If this is a new thesis or reseed, invoke the `new-thesis-setup` skill
+(`/new-thesis-setup`) before running the first baseline. That skill owns mandate
+intake, protocol recommendation, Season approval, lifecycle reset, and
+first-baseline preflight.
 
-1. **Understand the candidate**: read `strategy.py` and identify the strategy
-   hypothesis before changing anything. Fine-tune and improve the strategy, but
-   do not drift away from the overarching strategy hypothesis. Keep the file
-   shaped like a current `quant_strategies` decision strategy: expose
-   `generate_decisions(rows, params)` and, when useful, `validate_params(params)`.
-   Review the strategy to ensure it is implemented correctly.
-2. **Use the current worktree**: this workbench is intentionally run on the
-   current branch unless the human explicitly asks for a new branch.
-3. **Read the in-scope files**: The repo is small. Read these files for full
-   context:
-   - `README.md` — repository context.
-   - `program.md` — these instructions.
-   - `strategy.py` — the scratch strategy you modify.
-   - `experiment.toml` — the experiment configuration you modify.
-   - latest `results/` artifacts, if present.
-   - `results.tsv`, if present.
-4. **Check data and harness readiness**: the runner delegates execution to
-   `quant_strategies` and may depend on `quant_data`. If either upstream system
-   is missing data or fails independently of the strategy, document the
-   limitation instead of mutating the strategy to hide it.
-5. **Confirm and go**: confirm setup looks good.
+Setup also declares the bounded search space: set `experiment.toml` `[bounds.*]`
+to the ranges the thesis needs tested, not pinned to the baseline point. Bounds
+pinned at `min == max` leave the loop nothing to search.
 
-Once setup is clear, kick off the experimentation.
+After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
+Ordinary Train iteration uses only:
+
+- `program.md` for this operating contract;
+- `protocol.toml` for frozen Train data, costs, fills, capacity, leverage budget, objective, gates, and stop rules;
+- `experiment.toml` for bounded params;
+- `strategy.py` for editable target-book logic;
+- `rationale.md` for thesis, components, variants, and lessons;
+- recent `results.tsv`;
+- the latest run card and diagnostics.
+
+During ordinary Train iteration, do not browse the rest of this repo. Use the
+in-scope files, recent `results.tsv`, and latest diagnostics. Browse elsewhere
+only to debug a run failure, check an explicitly in-scope contract, or follow a
+direct request from Season.
+
+If protocol-owned assumptions need to change, record the reseed rationale in the
+Reseed Log (`rationale.md`) and keep iterating the current lifecycle — do not halt
+mid-run to wait for approval. The reseed is Season's call at a stop-rule boundary, not a
+mid-run pause; the loop stays productive until a stop rule fires or Season
+interrupts.
 
 ## Experimentation
 
-Each experiment evaluates one scratch strategy under a research window
-configured in `experiment.toml`. This project does not use short smoke-test
-windows. Configured windows must span 120 to 180 calendar days so results have
-enough trades, funding cycles, and regime variation to be meaningful. You
-launch one deterministic exploration attempt simply as:
+Each experiment is one Train quick run through `climb`. The strategy edit should
+be one thesis-linked change or one bold thesis-guided variant. Do not run a
+manual sweep when the next structural lesson is unclear.
+
+### Fixed Evidence Boundary
+
+The loop uses Train-only quick runs. Train robustness is a development filter,
+not proof of an edge.
+
+Do not run `evaluate`. Do not import evaluation APIs. Do not read or create OOS
+windows from this loop. Do not let downstream OOS, paper, or live results feed
+back into this same Train thesis.
+
+The hard boundary is evidence integrity:
+
+- no lookahead;
+- no same-bar fill fantasy;
+- no hidden data, cost, fill, or engine limitation;
+- no hidden symbol cherry-picking;
+- no OOS feedback;
+- no gate repair that cannot be explained from portfolio diagnostics and sampled trades;
+- no complexity that exists only because the Train window liked it.
+
+### Editable Surface
+
+Ordinary loop edits are:
+
+- `strategy.py`: the editable target-book surface via `generate_decisions(bars,
+  params)`. It returns a complete portfolio of standing, signed weight-of-NAV
+  `TargetDecision`s per instrument (`0` = flat/close), idempotent (re-emitting the
+  current target trades nothing, and same-symbol targets net), with optional
+  declared price-path `RiskRule` exits. Data/time exits are explicit `target=0`
+  decisions or new targets, not an implicit ticket duration. Keep it pure and
+  causal: a row is usable only when its `available_at` is on or before the
+  emitted `decision_time`;
+  `timestamp` is bar/event time, not proof that the row was tradable knowledge.
+  Keep `as_of_time <= decision_time` and declare observations for data the
+  decision depends on.
+- `experiment.toml`: the bounded `[params]` and their `[bounds.*]` search ranges.
+  You own this search space: set each bound to the range the thesis needs tested,
+  and widen or tighten it as the mechanism demands. The bounds are a research
+  tool, not a frozen wall.
+- `rationale.md`: thesis, components, diagnostics, failure modes, and lessons.
+
+`protocol.toml` owns the current Train window, data kind, costs, fills, capacity
+model, leverage budget, objective, gates, and stop rules. Do not change dates,
+costs, fills, capacity, leverage budget, objective, gate thresholds, plateau
+patience, max iterations, subwindows, or improvement thresholds from strategy
+code. If those assumptions need to change, Season changes the protocol before the
+thesis starts or explicitly approves the change.
+
+The thesis identity frozen for the lifecycle is the mechanism, the falsifier, and
+the `protocol.toml` evaluation (data, costs, fills, capacity, leverage budget,
+objective, gates, stop rules). That identity is what makes attempts comparable.
+
+State the mechanism and falsifier as the **invariant economic hypothesis** — the
+causal edge and what would disprove it — at the most general level that still keeps
+attempts comparable. They must not embed a lever this contract lists as editable
+(side logic, hold or exit horizon, cadence, allocation shape, weighting, selection
+thresholds, or a specific carried implementation win): naming one in the identity
+accidentally freezes it, forcing a reseed to change what should be an ordinary loop
+edit. Because restricting a lever (e.g. trading one side only) is always an in-loop
+edit while widening one embedded in the identity is a reseed, freeze the widest
+defensible mechanism and let the loop restrict from there.
+
+The `experiment.toml` search space is not part of it: bounds and params are yours
+to set and revise mid-run. The hard attempt cap bounds Train search pressure but
+does not turn the fixed Train strength hurdle into statistical proof or a
+best-of-N correction. Widening or tightening a bound is an ordinary loop edit,
+not a reseed.
+
+Build within the operator-frozen leverage budget and capacity model; intended
+exposure beyond the budget fails closed upstream (see Target Book Rules).
+
+The universe is two things, owned by two parties. The frozen **universe** is the
+eligible population the mechanism may trade — protocol-owned, selected
+return-blind, and fixed for the lifecycle. The **active book** is how many of
+those names the signal actually holds — strategy-owned, varying every attempt
+through ranking, `top_n`, and selection thresholds. Converging on the right
+breadth means reducing the *book*, never the *universe*: start from the full
+frozen universe and let the signal hold fewer names where the edge is strongest.
+That reduction is honest because the signal drives it — return-blind and causal —
+not which names earned. The breadth you land on is an output of the mechanism and
+regime; read it as evidence, not a count to optimize toward.
+
+A universe change is not an ordinary loop edit: symbols are protocol-owned and
+frozen for the active lifecycle. Do not change the universe while continuing to
+count the same run. If a different universe looks like the cleanest move, record the
+reseed rationale in the Reseed Log (`rationale.md`); Season can approve a new
+lifecycle, and the new
+universe must itself be chosen return-blind on eligibility — never by dropping the
+names that lost money. Never reach a new universe through hidden signal logic:
+thresholds tuned until only the historically winning names ever trade is exactly
+that. Symbol-specific normalization, ranking, scaling, side treatment, and causal
+eligibility rules remain valid when they express the thesis and are visible in
+`rationale.md`.
+
+The universe is a researcher degree of freedom the Train score does not price. The
+hard attempt cap bounds only the searched `experiment.toml`/`strategy.py` space;
+the universe is frozen outside it. Trying several return-blind universes and
+keeping whichever lifecycle scores best is additional, unpriced multiple testing
+— luck that reads as skill. Guard it by direction of flow: universe
+*generalization* is resolved only downstream, OOS on the frozen survivor across
+return-blind universe definitions, never by comparing Train scores across universe
+lifecycles. Within a lifecycle the single frozen universe stands; its sensitivity
+is a reseed input recorded in the Reseed Log, not a Train metric.
+
+Generated artifacts under `.autoresearch/` and `results/` are evidence, not
+source. Use the latest diagnostics to choose the next Train edit, but do not
+treat generated snapshots or terminal manifests as active design documents.
+
+### Target Book Rules
+
+A target book is a standing portfolio, not a stream of trade tickets.
+
+- `target` is signed weight of NAV: positive long, negative short, `0` flat.
+- A target stands until a later same-symbol decision changes it.
+- Re-emitting the same target trades nothing; same-symbol targets net.
+- Gross exposure is `sum(abs(target))`; net exposure is `abs(sum(target))`.
+- The strategy owns relative allocation shape, side logic, rebalance cadence,
+  data/time exits, and declared price-path `RiskRule`s.
+- The operator and upstream own book scale (risk-budget sizing), gross/net exposure
+  ceilings, capacity, costs, fills, universe, objective, gates, and stop rules.
+- Gross or net exposure over the frozen budget is fail-closed and non-scoreable,
+  never clamped.
+- Optimize shape, not magnitude: upstream sizes the book, so a global magnitude
+  knob is washed out and is not a degree of freedom to search. The score rewards
+  the deployed money the *shape* earns at the upstream-sized book; improve the
+  edge's shape, breadth, and robustness, not a scale multiplier. Leverage is
+  magnitude too: it scales return and risk together without changing the edge, so
+  levering up flatters full-window return without improving the alpha — it is not a
+  knob you turn. If a different leverage budget is genuinely right, that is a
+  reseed case for Season, not a mid-run change.
+- If capacity, financing, or execution cannot be priced by the engine, record the
+  limitation instead of hiding it in strategy code.
+
+When feasibility is the binding constraint — capacity, participation, or
+deployable scale — treat it as part of the alpha problem, not a wall to route
+around. The strategy-owned moves that relieve it are real research: spread
+turnover across bars so no single decision minute pins participation, hold longer
+and rebalance less so the same edge deploys more notional per unit of impact,
+concentrate where the signal is strongest rather than diluting breadth, and
+reshape allocation to fit the capacity profile. This reshaping is the work of the
+loop, not a reason to pause it: keep iterating until a configured stop rule fires,
+and never stop on your own to declare the envelope binding. Exhaust these moves
+honestly; only a wall that survives genuine reshaping — shown by decomposing the
+failure into edge quality (net bps/trade, profit factor), which capacity cap
+binds, and realized-versus-target scale — is evidence about the envelope, written
+into the reseed case only at stop.
+
+### Quant Research Standard
+
+Before each structural edit after the baseline, state:
+
+- mechanism: why this should make money;
+- observable: what data expresses it at decision time;
+- falsifier: what result would kill it;
+- book effect: expected change to gross, net, turnover, concentration, capacity,
+  and exits;
+- failure mode targeted: edge unproven, too sparse, too costly, side asymmetry, symbol
+  concentration, time/regime dependence, exit mismatch, implementation limit, or
+  data limit.
+
+Use the score to compare attempts, but use diagnostics and trade tape to decide
+what to try next. Inspect actual trades before structural edits when the artifact
+provides them. If no trade sample exists, use the typed failure reason,
+foundation warnings, and gate details instead. If the available evidence cannot
+explain the result, do not edit.
+
+Allowed bold moves include changing signal construction, allocation, target
+weights, entry and rebalance cadence, target duration, explicit exit timing,
+declared risk shape, side logic, symbol treatment, and simplification when
+diagnostics and trade tape justify it. If the better research move is blocked by
+upstream data, fill, cost, public API, or engine capability, update
+`UPSTREAM_LIMITATIONS_TODO.md` instead of approximating it silently in strategy
+code.
+
+After any material strategy-logic change, do a quick causality review before
+trusting the next result: check timestamp ordering, available fields, fill
+assumptions, state updates, and hidden reads from artifacts, results, or
+diagnostics.
+
+A parameter sweep that tests a real edge hypothesis is legitimate research: sweep
+a bound when it better expresses the mechanism, aligns the signal with a plausible
+market horizon, fixes a diagnosed failure, or relieves a feasibility constraint.
+What is not research is aimless boundary-polishing — nudging a bound only to
+flatter the in-sample score with no mechanism behind the move. More attempts
+should mean more distinct research, not more polishing.
+
+Each attempt after the baseline must test a mechanistically distinct lever — new
+signal construction, allocation shape, side logic, exit structure, or causal
+eligibility rule — with its own mechanism and falsifier. What makes an attempt
+distinct is a new mechanism, not the kind of edit: a bound sweep is distinct when it
+carries one (per the sweep rule above), and re-parameterizing an already-run lever
+with no new mechanism is the polishing that does not count. Maintain a **Lever
+Enumeration** in `rationale.md`:
+every distinct lever the thesis affords, each marked run/not-run with its result.
+Exhaustion is a property of this enumeration, not of the iteration counter: the run
+may not conclude while a plausible distinct lever is un-run and no stop rule has
+fired, and it ends at whichever comes first — the enumeration genuinely closed
+(every distinct lever has a result and no new distinct hypothesis can be articulated
+with a real mechanism) or the `max_iterations` cap. Running out of distinct
+hypotheses before the cap is the honest signal of near-exhaustion; manufacturing
+threshold-nudges to fill the cap is the dishonesty this forbids.
+
+Simplicity wins ties. A small score improvement with ugly symbol/time exceptions
+is probably overfit. Removing code, params, or conditions while keeping equal or
+better evidence is a strong result. Prefer killing a weak thesis over adding
+filters until the sample flatters it, but do not confuse caution with passivity:
+bold variants are good when they test the mechanism.
+
+## Output Format
+
+Run one ordinary Train attempt with `climb`:
 
 ```bash
-conda run -n quant python runner.py --explore --description "short attempt description"
+conda run -n quant python -m loop climb \
+  --mechanism "<why it should work>" \
+  --falsifier "<what kills it>"
 ```
 
-Choose windows from a quant research perspective. You may change
-`active_window_id`, edit configured `[[windows]]`, or run a configured
-`--window-id` when there is a research reason: regime, sample quality,
-holdout/stress check, recent out-of-sample evidence, or a falsifier. Do not cherry-pick windows
-just to rescue the last score.
+`climb` runs one candidate, writes the artifact directory and `run_card.json`,
+appends one row to `results.tsv`, and prints the latest result fields as
+parseable key/value lines. Read the printed summary and the attempt's
+`run_card.json`.
 
-Choose symbols from a quant research perspective. You may edit the configured
-symbol universe when there is a research reason: liquidity, data coverage,
-market structure, representative breadth, or a falsifier. Do not cherry-pick
-symbols just to rescue the last score.
+`--mechanism` and `--falsifier` carry the frozen thesis identity, not the
+per-attempt idea: pass the same text verbatim on every attempt. The harness
+matches them against the thesis lock and refuses a changed identity. Put the
+per-attempt hypothesis — why this specific edit should make money and what would
+kill it — in `rationale.md`.
 
-**What you CAN do:**
+## Logging Results
 
-- Modify `strategy.py`.
-- Modify `experiment.toml`.
-- Add a package when the strategy genuinely needs it, but record the dependency
-  in the project configuration before using it so the run is reproducible.
-  Treat dependency changes as setup changes, not ordinary loop edits.
+Do not append `results.tsv` yourself or start a second ledger during ordinary
+iteration. Confirm that `climb` appended one tab-separated row, then read that row. Use `results.tsv` for
+scan state and the per-attempt `run_card.json` for score parts, gate outcomes,
+foundation warnings, causality evidence, primary failure mode, and sampled
+trades.
 
-Editable during a research loop:
+## Experiment Loop
 
-- `strategy.py`
-- `experiment.toml`
+Loop for the current thesis until a configured stop rule fires or Season
+interrupts:
 
-Read-only during a research loop:
+1. Read `protocol.toml`, `experiment.toml`, `strategy.py`, `rationale.md`, and
+   recent `results.tsv`.
+2. Establish or inspect the feasible baseline.
+3. Inspect diagnostics, failure reasons, and sampled trades from the latest
+   relevant attempt.
+4. Make one thesis-linked edit or one bold thesis-guided variant.
+5. Run the Train quick run through `climb`.
+6. Parse score, gate flags, portfolio-foundation metrics, basic economics, exits,
+   failure reasons, and trade samples.
+7. Confirm `climb` appended exactly one tab-separated row to `results.tsv` and read
+   it; do not write it yourself (see Logging Results).
+8. Refresh `rationale.md` with what changed, why, the failure mode targeted, the
+   diagnostic result, and the next falsifier.
+9. Let the loop decide keep/discard/crash. Only all-gates-pass attempts that
+   improve by the protocol keep rule advance the best Train survivor.
 
-- `program.md`
-- `runner.py`
-- `scoring.py`
-- `experiment_config.py`
-- `README.md`
-- `tests/`
-- `results/`
-- `results.tsv`
+Do not pause once the loop has begun. After setup confirmation, do not ask
+whether to continue, whether this is a good stopping point, or whether to try one
+more edit. Continue until a protocol stop rule fires or Season interrupts. This
+workflow is meant to run while Season is away from the keyboard.
 
-**What you CANNOT do:**
+The only decisions reserved for Season are protocol- and harness-level: changing
+`protocol.toml` (data, costs, fills, capacity, leverage/notional budget, objective,
+gates, stop rules) or the universe — i.e. a reseed. Present those as a reseed case
+in `rationale.md` reached at a stop-rule boundary, not by pausing mid-run.
+Everything else inside the loop and its in-scope files — reshaping the book,
+widening or tightening bounds, simplifying, killing a weak variant, and choosing
+the next edit — is yours to run without asking. Do not offer decision menus for
+work that is already inside this contract; take the obvious next step and surface
+only a genuine fork.
 
-- Modify the evaluation harness: `runner.py`, `scoring.py`, or
-  `experiment_config.py`.
-- Modify generated artifacts in `results/` or `results.tsv`.
-- Install an unrecorded package or rely on an ad hoc local environment.
-- Add runner calls, file writes, subprocesses, network calls, or
-  autonomous loops inside `strategy.py`.
-- Set `decision_lag_minutes` to zero; decisions must be emitted after the
-  as-of bar can be observed.
+`discard` and `crash` never become final candidates, but a discarded working
+variant may remain the base for the next edit when it is still simple, causal,
+and connected to the thesis.
 
-**The goal is simple: find promoted candidates for the next review step.** The runner
-keeps raw `net_return` as evidence, but the guarded score is normalized by
-window days when window metadata is available. It is valid only when the trade
-count passes the configured sample gate. Higher is better, but only promoted
-candidates should become best-so-far for this workbench.
-Set the sample gate high enough for the configured 120-180 day windows; a gate
-that was acceptable for a short debugging run is not acceptable research
-evidence.
+## When The Loop Looks Overfit
 
-Think like a quant researcher. Loop feedback only: the score is loop feedback only. Do not blindly
-chase the last number. Use the score to compare attempts, then use causal
-timing, trade count, costs, data quality, fill assumptions, and overfit risk to
-decide what to try next.
+Slow down and inspect the evidence more carefully when:
 
-Do not default to a parameter sweep. The next iteration should usually improve
-the strategy hypothesis, signal construction, risk filter, timing logic,
-universe definition, or failure mode exposed by the evidence. Parameter changes
-are valid only when you can explain why the new value better expresses that
-quant idea; do not tune numbers just because the last run moved the score.
+- three consecutive edits target the same gate;
+- a fix depends on one symbol, one subwindow, or one time boundary;
+- the candidate needs named-symbol exceptions to survive;
+- the next idea is only "move the threshold a little";
+- the improvement cannot be explained from sampled trades or failure details;
+- more than 30 attempts have run on one Train window without a new structural
+  lesson.
 
-**Simplicity criterion**: All else being equal, simpler is better. A small score
-improvement that adds ugly complexity is not worth it. Conversely, removing
-something and getting equal or better results is a great outcome. When
-evaluating whether to keep a change, weigh the complexity cost against the
-improvement magnitude.
+This is a research sanity check, not a stop. Inspect trades and choose one path
+that **continues the loop**: simplify, make a larger structural move inside the
+current thesis, or continue with a written trade-tape justification. Recording an
+updated reseed hypothesis in the Reseed Log is expected here — but it is a note,
+never a reason to stop iterating. Freezing the survivor and concluding the run
+happen only when a configured stop rule fires (see Stop). Do not change thesis or
+protocol mid-run unless Season explicitly reseeds the run.
 
-**The first run**: Your very first run should always establish the baseline, so
-run the current `strategy.py` and `experiment.toml` as is.
+A 50 or 100 attempt run should still have shape: baseline and sanity repairs
+first, bold structural variants next, simplification and diagnosed repairs after
+that, then exit/risk-shape variants. This is a bias, not a cage; keep going when
+new structural lessons are still appearing.
 
-## Candidate confirmation and promotion
+## Stop
 
-Candidate confirmation is still supported for deliberate bundle checks:
-`runner.py --confirm` remains available when you need a manual recent-window
-bundle diagnostic before promotion.
+Stop when one configured rule fires: plateau after a feasible baseline,
+max iterations, complexity cap exhaustion, or no feasible baseline within the
+baseline grace window.
 
-A one-window result is exploration evidence only. The default fast loop
-escalates serious candidates with `runner.py --promote`.
+Do not conclude — freeze a survivor, declare thesis death, or finalize a reseed
+case — before a configured stop rule fires. While the harness reports
+`continuation: allowed` with an empty `stop_reason`, the run is not done: a judgment
+that "research has converged" or "the envelope binds" is not a stop rule, and is
+exactly the premature-closure the loop must resist. A reseed story often looks
+complete long before the search is; keep generating mechanistically distinct
+falsifications until a stop rule fires, then read the accumulated Reseed Log.
 
-Recent windows dominate the score. Older windows are diagnostic or
-stress evidence unless `experiment.toml` says otherwise.
+At stop, report the frozen Train survivor or say the thesis died on Train.
+A Train survivor is not a promotion signal; it is only a candidate for downstream
+OOS, paper, and small-live review.
 
-Do not prune symbols or windows because of one isolated result. If a candidate
-improves one window but weakens the recent bundle, discard it.
-
-Before changing `strategy.py` or `experiment.toml`, explain what trade evidence
-changed your belief, what causal hypothesis follows, what focused change tests
-it, and what result would falsify it.
-
-## Fast guard
-
-Use a cheap guard before spending time on full promotion:
-
-1. Primary explore window: `locked_recent_2026`.
-2. Fixed guard diagnostic: `validation_2025_h1`.
-
-Commands:
-
-```bash
-conda run -n quant python runner.py --explore --description "short attempt description"
-conda run -n quant python runner.py --window-id validation_2025_h1 --description "fixed guard: short attempt description"
-```
-
-The guard is a sanity check, not a second optimizer target. If the primary
-improves but the guard weakens materially, reject the idea unless there is a
-clear quant reason to diagnose it.
-
-Do not run full promotion after every idea. Use `runner.py --promote` only for
-serious candidates:
-
-```bash
-conda run -n quant python runner.py --promote --description "promote candidate: short description"
-```
-
-Promotion screening remains a compact robustness filter, not final validation.
-A promoted candidate is ready for the next review step; comprehensive validation
-is separate.
-
-## Output format
-
-Once the runner finishes it prints a JSON summary like this:
-
-```json
-{
-  "attempt": 1,
-  "decision": "keep",
-  "remaining_attempts": 0,
-  "result_dir": "results/attempt_0001_example",
-  "run_kind": "explore",
-  "status": "active"
-}
-```
-
-Use the printed `result_dir` to inspect the attempt artifacts. Artifact detail
-is controlled by `experiment.toml` and runner settings. Use fuller artifacts
-only when the extra evidence is worth the storage cost.
-
-```bash
-cat results/session_state.json
-cat results.tsv
-```
-
-For explore or guard diagnostics:
-
-```bash
-cat <result_dir>/score.json
-cat <result_dir>/summary.json
-cat <result_dir>/evidence.json
-```
-
-For promotion:
-
-```bash
-cat <result_dir>/promotion_score.json
-cat <result_dir>/promotion_summary.json
-cat <result_dir>/trade_attribution.json
-```
-
-If promotion reports `promote`, advance the promoted candidate for the next
-review step. If promotion reports `reject`, restore the previous promoted or
-baseline commit before trying another idea.
-
-## Logging results
-
-The runner appends results to `results.tsv` automatically. Do not hand-edit this
-file during the research loop.
-
-The ledger records attempt identity, evaluated window, result directory,
-score/trade feedback, status, and the short description. The exact schema is
-owned by the runner.
-
-## Evidence review
-
-Before changing the strategy after any run, inspect the latest artifacts and
-write down the research reason for the next attempt:
-
-- hypothesis and economic rationale
-- causal timing and `as_of_time` assumptions
-- falsifier
-- guarded score movement and raw return movement
-- raw net return, gross return, funding return, costs, and failed gates
-- trade count and sample quality
-- fill assumptions and data quality
-- overfit risk and whether the change adds unjustified complexity
-- if changing a parameter, the quant reason the new value should improve the
-  strategy rather than merely fitting the last run
-
-If an attempt fails, attribute the root source before changing anything:
-
-- `strategy_error`
-- `config_error`
-- `quant_strategies_error`
-- `quant_data_error`
-- `environment_error`
-
-If the error is not from `strategy.py`, document the limitation instead of
-mutating the strategy to work around it. Capture useful feedback for
-`quant_strategies` or `quant_data` when those upstream systems are the source.
-When evidence suggests a strategy approach is worth testing but blocked by
-upstream data, engine, or harness limits, note it in
-`UPSTREAM_LIMITATIONS_TODO.md` with the idea, missing capability, and validation
-it would unlock. Do not contort `strategy.py` to approximate unsupported
-behavior; leave the limitation as an explicit upstream research task.
-
-## The experiment loop
-
-The experiment runs in the current worktree.
-
-LOOP UNTIL THE HARNESS SAYS THE SESSION IS EXHAUSTED:
-
-1. Look at the git state: the current branch and commit we're on.
-2. Review the latest `results/` artifacts and `results.tsv`.
-3. Tune `strategy.py` or `experiment.toml` with one focused experimental idea.
-4. Run the cheap screen:
-   `conda run -n quant python runner.py --explore --description "short attempt description"`.
-   If the primary result is plausible and a diagnostic window is useful, run:
-   `conda run -n quant python runner.py --window-id WINDOW_ID --description "diagnostic: short attempt description"`.
-   If both support a serious candidate with a clear quant rationale, run:
-   `conda run -n quant python runner.py --promote --description "promote candidate: short description"`.
-   Do not run full promotion after every idea.
-5. Read the JSON summary. For `run_kind = "promotion"`, inspect
-   `promotion_score.json`, `promotion_summary.json`, and
-   `trade_attribution.json`. For explore or guard diagnostics, inspect
-   `score.json`, `summary.json`, and `evidence.json`.
-6. The runner records the results in `results.tsv`; leave it untracked by git.
-7. If promotion reports `promote`, keep that candidate as the current best.
-8. If promotion reports `reject` or the cheap screen fails, restore
-   `strategy.py` and `experiment.toml` to the previous promoted or baseline
-   version before designing the next change. Keep generated results as the
-   research record.
-9. If the run was exploration or diagnostic only, treat it as evidence for the
-    next focused change, not as best-so-far.
-
-The idea is that you are an autonomous quant researcher trying things out. If a
-promoted candidate works, keep. If it does not promote, discard. You are
-advancing the strategy only when promotion evidence improves or when an equal
-promoted result is materially simpler.
-
-**Crashes**: If a run crashes because of a typo, missing import, malformed
-config, or other local issue, fix it if it is clearly from `strategy.py` or
-`experiment.toml`. If the idea itself is fundamentally broken, log and move on.
-If the failure is from `quant_strategies`, `quant_data`, or the environment,
-document the limitation and do not contort the strategy around the upstream
-failure.
-
-**NEVER EARLY STOP**: Once the experiment loop has begun, do not pause to ask
-the human whether you should continue while the harness still reports remaining
-session capacity. Do not ask "should I keep going?" or "is this a good stopping
-point?". If you run out of ideas, think harder: re-read the in-scope files,
-study the latest artifacts, combine previous near-misses, simplify accidental
-complexity, or try a more radical but causal quant hypothesis. The loop runs
-until the harness says the session is exhausted or the human interrupts you.
+A reseed recommendation is a third honest outcome, reached through the stop rules,
+never instead of them. Maintain a **Reseed Log** in `rationale.md`: a living,
+append-only section with one dated line per attempt recording whether that result
+strengthens or weakens the reseed case, and why. It accretes the reseed argument as
+evidence builds and is **never itself a reason to stop** — it is read only after a
+stop rule has fired. When the loop stops and the accumulated log shows the binding
+constraint is the protocol envelope itself — universe, notional, leverage budget,
+capacity, or a gate — not the edge, consolidate it into a concrete, evidence-backed
+reseed case. It does not change the protocol or the run; Season decides whether to
+reseed.

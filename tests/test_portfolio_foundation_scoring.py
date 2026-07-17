@@ -18,10 +18,13 @@ from objective import (
     FoundationMetric,
     FoundationScenario,
     FoundationSizing,
+    LoopConfig,
     ObjectiveConfig,
     ObjectiveResult,
     TradeSample,
-    deflated_window_floor,
+    is_improvement,
+    plateau_reached,
+    train_strength_floor,
     score_foundation_cost_stress,
     score_objective,
 )
@@ -46,7 +49,7 @@ def _metric(
     effective_sample_size: float | None = 120.0,
     sharpe: float | None = None,
     sharpe_se: float | None = None,
-    total_return: float = 0.05,
+    total_return: float | None = 0.05,
     max_drawdown: float = -0.03,
     closed_trade_count: int = 20,
     return_sample_count: int = 200,
@@ -148,7 +151,7 @@ def _foundation(
 
 
 def _config() -> ObjectiveConfig:
-    return ObjectiveConfig(kind="return_lcb_subwindow", subwindows=3, psr_hurdle_sharpe=0.0)
+    return ObjectiveConfig(kind="full_window_total_return", subwindows=3, psr_hurdle_sharpe=0.0)
 
 
 def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[str, object]:
@@ -259,7 +262,7 @@ def _gate_config() -> GateConfig:
         max_symbol_concentration=0.75,
         min_cost_stress_return_retention=0.5,
         max_abs_drawdown=0.2,
-        score_haircut_se=2.8,
+        train_strength_haircut_se=2.0,
         max_components=3,
         max_params=10,
     )
@@ -280,7 +283,7 @@ def _evaluate(
         components=("signal",),
         config=config or _gate_config(),
         objective=objective,
-        cost_stress_full_train_return=cost_stress.full_train_return,
+        cost_stress_full_train_at_risk_annualized_return=cost_stress.full_train_at_risk_annualized_return,
         causality_admissible=causality_admissible,
         foundation_scenario=foundation.realistic_costs,
     )
@@ -338,7 +341,7 @@ min_rel_improvement = 0.0
 baseline_grace_iterations = 3
 
 [objective]
-kind = "return_lcb_subwindow"
+kind = "full_window_total_return"
 subwindows = 3
 psr_hurdle_sharpe = 0.0
 
@@ -349,7 +352,7 @@ min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
 min_cost_stress_return_retention = 0.5
 max_abs_drawdown = 0.2
-score_haircut_se = 2.8
+train_strength_haircut_se = 2.0
 max_components = 3
 max_params = 10
 """.strip() + "\n"
@@ -368,8 +371,8 @@ def test_protocol_materializes_money_objective_and_micro(tmp_path: Path):
     assert isinstance(output, Mapping)
 
     assert protocol.output.causality_check == "micro"
-    assert protocol.objective.kind == "return_lcb_subwindow"
-    assert protocol.gates.score_haircut_se == 2.8
+    assert protocol.objective.kind == "full_window_total_return"
+    assert protocol.gates.train_strength_haircut_se == 2.0
     assert protocol.gates.min_cost_stress_return_retention == 0.5
     assert output["causality_check"] == "micro"
     assert output["micro_probe_limit"] == 40
@@ -389,7 +392,7 @@ def test_protocol_rejects_unknown_objective_kind(tmp_path: Path):
     protocol_path = tmp_path / "protocol.toml"
     protocol_path.write_text(
         _protocol_text().replace(
-            'kind = "return_lcb_subwindow"', 'kind = "portfolio_psr_subwindow"'
+            'kind = "full_window_total_return"', 'kind = "return_lcb_subwindow"'
         )
     )
     try:
@@ -400,37 +403,63 @@ def test_protocol_rejects_unknown_objective_kind(tmp_path: Path):
         raise AssertionError("expected unknown objective kind to fail")
 
 
-def test_protocol_rejects_invalid_acceptance_haircut(tmp_path: Path):
+@pytest.mark.parametrize(
+    "gate_keys",
+    [
+        "score_haircut_se = 2.0",
+        "train_strength_haircut_se = 2.0\nscore_haircut_se = 2.0",
+    ],
+)
+def test_protocol_rejects_previous_train_strength_key(
+    tmp_path: Path,
+    gate_keys: str,
+):
     protocol_path = tmp_path / "protocol.toml"
     protocol_path.write_text(
-        _protocol_text().replace("score_haircut_se = 2.8", "score_haircut_se = 0.0")
+        _protocol_text().replace(
+            "train_strength_haircut_se = 2.0",
+            gate_keys,
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="gates.score_haircut_se is no longer supported",
+    ):
+        load_protocol(protocol_path)
+
+
+def test_protocol_rejects_invalid_train_strength_haircut(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        _protocol_text().replace("train_strength_haircut_se = 2.0", "train_strength_haircut_se = 0.0")
     )
     try:
         load_protocol(protocol_path)
     except ValueError as exc:
-        assert "score_haircut_se must be > 0" in str(exc)
+        assert "train_strength_haircut_se must be > 0" in str(exc)
     else:
-        raise AssertionError("expected non-positive acceptance haircut to fail")
+        raise AssertionError("expected non-positive Train strength haircut to fail")
 
 
-def test_acceptance_haircut_is_independent_of_max_iterations(tmp_path: Path):
+def test_train_strength_haircut_is_independent_of_max_iterations(tmp_path: Path):
     base = tmp_path / "base.toml"
     base.write_text(_protocol_text())
     bigger = tmp_path / "bigger.toml"
     bigger.write_text(_protocol_text().replace("max_iterations = 10", "max_iterations = 500"))
 
-    assert load_protocol(base).gates.score_haircut_se == load_protocol(bigger).gates.score_haircut_se
+    assert load_protocol(base).gates.train_strength_haircut_se == load_protocol(bigger).gates.train_strength_haircut_se
 
 
 # --- money score -----------------------------------------------------------
 
 
-def test_score_is_full_train_lcb_at_k_rank_one():
+def test_score_is_realistic_cost_full_window_total_return():
     result = score_objective((), _config(), foundation=_foundation())
 
-    expected = _lcb(0.0012, 0.0010, 120.0, k=1.0)  # full_train binds the score
-    assert result.score == expected
-    assert result.full_train_return == 0.0012 * _P
+    assert result.score == 0.05
+    assert result.full_window_total_return == 0.05
+    assert result.full_train_at_risk_annualized_return == 0.0012 * _P
     assert result.subwindow_trade_counts == (20, 12, 20)
 
 
@@ -462,37 +491,35 @@ def test_score_binds_on_full_train_not_a_subwindow():
 
     result = score_objective((), _config(), foundation=foundation)
 
-    assert result.full_train_return == 0.0030 * _P
-    assert result.score == _lcb(0.0030, 0.0010, 120.0, k=1.0)
-    assert min(result.window_returns) == 0.0010 * _P
+    assert result.full_train_at_risk_annualized_return == 0.0030 * _P
+    assert result.score == 0.05
+    assert min(result.window_at_risk_annualized_returns) == 0.0010 * _P
 
 
-def test_scaling_deployed_return_moves_the_score():
-    base = score_objective((), _config(), foundation=_foundation()).score
-    bigger = score_objective(
-        (),
-        _config(),
-        foundation=_foundation(
-            full_train_mean=0.0024,
-            worst_subwindow_mean=0.0018,
-        ),
-    ).score
-    smaller = score_objective(
-        (),
-        _config(),
-        foundation=_foundation(
-            full_train_mean=0.0006,
-            worst_subwindow_mean=0.00045,
-        ),
-    ).score
+def test_identical_at_risk_performance_ranks_by_money_earned():
+    lower_duty_cycle = score_objective(
+        (), _config(), foundation=_foundation(total_return=0.03)
+    )
+    higher_duty_cycle = score_objective(
+        (), _config(), foundation=_foundation(total_return=0.07)
+    )
 
-    assert base is not None and bigger is not None and smaller is not None
-    assert bigger > base > smaller
+    assert (
+        lower_duty_cycle.full_train_at_risk_annualized_return
+        == higher_duty_cycle.full_train_at_risk_annualized_return
+    )
+    assert (
+        lower_duty_cycle.full_train_at_risk_annualized_standard_error
+        == higher_duty_cycle.full_train_at_risk_annualized_standard_error
+    )
+    assert higher_duty_cycle.score == 0.07
+    assert lower_duty_cycle.score == 0.03
+    assert higher_duty_cycle.score > lower_duty_cycle.score
 
 
-def test_se_comes_directly_from_per_window_fields_not_a_proxy():
-    # A Sharpe SE deliberately inconsistent with the money moments: the score must
-    # use return_volatility * P / sqrt(n_eff), not sharpe_se * volatility.
+def test_train_strength_se_comes_from_return_moments_not_sharpe_proxy():
+    # A Sharpe SE deliberately inconsistent with the return moments: Train strength
+    # must use return_volatility * P / sqrt(n_eff), not sharpe_se * volatility.
     metric = _metric("full_train", sharpe=0.4, sharpe_se=9.0)
     foundation = FoundationEvidence(
         realistic_costs=FoundationScenario(
@@ -505,15 +532,16 @@ def test_se_comes_directly_from_per_window_fields_not_a_proxy():
     )
     result = score_objective((), _config(), foundation=foundation)
 
-    direct = _lcb(0.0012, 0.0010, 120.0, k=1.0)
+    direct = _lcb(0.0012, 0.0010, 120.0, k=2.0)
     proxy = 0.0012 * _P - 9.0 * 0.0010
-    assert result.score == direct
-    assert result.score != proxy
+    assert train_strength_floor(result, haircut_se=2.0) == direct
+    assert train_strength_floor(result, haircut_se=2.0) != proxy
+    assert result.score == 0.05
 
 
-def test_lcb_cross_check_matches_psr_t_stat():
+def test_train_strength_cross_check_matches_psr_t_stat():
     # With sharpe = mean/vol and sharpe_se = 1/sqrt(n_eff), t = sharpe/sharpe_se
-    # equals R_w / SE_w, so LCB_w = R_w * (1 - k_rank / t) with t = Phi^-1(PSR).
+    # equals R_w / SE_w, so LCB = R_w * (1 - k/t) with t = Phi^-1(PSR).
     # Modest moments keep the t-stat (~2) inside (0, 1) PSR territory.
     def window(window_id: str) -> FoundationMetric:
         return _metric(
@@ -538,9 +566,34 @@ def test_lcb_cross_check_matches_psr_t_stat():
     assert result.full_train_psr is not None
     t_stat = NormalDist().inv_cdf(result.full_train_psr)
     annualized = 0.02 * _P
-    expected = annualized * (1.0 - 1.0 / t_stat)
-    assert result.score is not None
-    assert abs(result.score - expected) < 1e-9
+    expected = annualized * (1.0 - 2.0 / t_stat)
+    strength = train_strength_floor(result, haircut_se=2.0)
+    assert strength is not None
+    assert abs(strength - expected) < 1e-9
+    assert result.score == 0.05
+
+
+@pytest.mark.parametrize("total_return", [None, float("nan"), float("inf")])
+def test_nonfinite_full_window_total_return_is_non_scoreable(
+    total_return: float | None,
+):
+    base = _foundation()
+    foundation = replace(
+        base,
+        realistic_costs=replace(
+            base.realistic_costs,
+            full_train=replace(
+                base.realistic_costs.full_train,
+                total_return=total_return,
+            ),
+        ),
+    )
+
+    result = score_objective((), _config(), foundation=foundation)
+
+    assert result.score is None
+    assert result.feasible is False
+    assert result.detail == "full_train non-scoreable total_return"
 
 
 def test_unscoreable_window_makes_run_non_scoreable():
@@ -578,47 +631,118 @@ def test_unknown_objective_kind_is_rejected():
         raise AssertionError("expected unknown objective kind to raise")
 
 
+def test_improvement_and_plateau_rules_are_unchanged():
+    config = LoopConfig(
+        plateau_patience=3,
+        max_iterations=10,
+        min_abs_improvement=0.001,
+        min_rel_improvement=0.0,
+        baseline_grace_iterations=3,
+    )
+
+    assert not is_improvement(0.051, 0.05, True, config)
+    assert is_improvement(0.0510001, 0.05, True, config)
+    assert not is_improvement(0.10, 0.05, False, config)
+    assert not plateau_reached(
+        non_improving_since_best=3,
+        feasible_baseline=False,
+        loop=config,
+    )
+    assert plateau_reached(
+        non_improving_since_best=3,
+        feasible_baseline=True,
+        loop=config,
+    )
+
+
 # --- gates -----------------------------------------------------------------
 
 
 def test_default_foundation_passes_all_gates():
     _, _, gates = _evaluate(_foundation())
     assert gates.passed
-    assert gates.by_name["significance"].passed
+    assert gates.by_name["train_strength"].passed
     assert gates.by_name["cost_stress_retention"].passed
     assert gates.by_name["causality"].passed
 
 
-def test_significance_fails_when_deflated_lcb_negative():
-    # Positive point estimate, but the deflated lower bound is negative: not
-    # distinguishable from best-of-N noise, so the significance gate fails.
-    foundation = _foundation(full_train_mean=0.0002, worst_subwindow_mean=0.0002)
+def test_train_strength_t_stat_1_979_fails_fixed_two_se_hurdle():
+    base = _foundation()
+    full_train = _metric(
+        "full_train",
+        mean_return=0.01979,
+        return_volatility=0.10,
+        effective_sample_size=100.0,
+    )
+    foundation = replace(
+        base,
+        realistic_costs=replace(base.realistic_costs, full_train=full_train),
+    )
     objective, _, gates = _evaluate(foundation)
 
-    lcb = deflated_window_floor(objective, k_accept=2.8)
-    assert objective.full_train_return is not None and objective.full_train_return > 0.0
+    lcb = train_strength_floor(objective, haircut_se=2.0)
+    annualized = objective.full_train_at_risk_annualized_return
+    standard_error = objective.full_train_at_risk_annualized_standard_error
+    assert annualized is not None and standard_error is not None
+    assert annualized / standard_error == pytest.approx(1.979)
     assert lcb is not None and lcb < 0.0
-    assert not gates.by_name["significance"].passed
-    # The failed gate does not change the base score.
-    assert objective.score == _lcb(0.0002, 0.0010, 120.0, k=1.0)
+    assert not gates.by_name["train_strength"].passed
+    assert objective.score == 0.05
 
 
-def test_significance_passes_when_deflated_lcb_nonnegative():
-    # A real edge whose deflated LCB is positive but below the old 0.10 materiality
-    # floor now PASSES: significance is gated, materiality is not (it lives in the
-    # run score, which the operator judges).
-    foundation = _foundation(full_train_mean=0.00045, worst_subwindow_mean=0.00045)
-    objective, _, gates = _evaluate(foundation)
+def test_train_strength_passes_at_fixed_two_se_boundary():
+    foundation = _foundation()
+    objective = replace(
+        score_objective((), _config(), foundation=foundation),
+        full_train_at_risk_annualized_return=2.0,
+        full_train_at_risk_annualized_standard_error=1.0,
+    )
+    cost_stress = score_foundation_cost_stress(foundation, _config())
+    gates = evaluate_gates(
+        (),
+        params={},
+        components=("signal",),
+        config=_gate_config(),
+        objective=objective,
+        cost_stress_full_train_at_risk_annualized_return=(
+            cost_stress.full_train_at_risk_annualized_return
+        ),
+        causality_admissible=True,
+        foundation_scenario=foundation.realistic_costs,
+    )
 
-    lcb = deflated_window_floor(objective, k_accept=2.8)
-    assert lcb is not None and 0.0 <= lcb < 0.10
-    assert gates.by_name["significance"].passed
+    lcb = train_strength_floor(objective, haircut_se=2.0)
+    assert lcb == 0.0
+    assert gates.by_name["train_strength"].passed
 
 
 def test_cost_stress_retention_fails_when_weak():
     foundation = _foundation(cost_stress_full_mean=0.0002)  # retention ~0.167
     _, _, gates = _evaluate(foundation)
     assert not gates.by_name["cost_stress_retention"].passed
+
+
+def test_cost_stress_retention_does_not_depend_on_stress_total_return():
+    base = _foundation()
+    foundation = replace(
+        base,
+        cost_stress=replace(
+            base.cost_stress,
+            full_train=replace(
+                base.cost_stress.full_train,
+                total_return=float("nan"),
+            ),
+        ),
+    )
+
+    _, cost_stress, gates = _evaluate(foundation)
+
+    assert cost_stress.score is None
+    assert (
+        cost_stress.full_train_at_risk_annualized_return
+        == 0.0008 * _P
+    )
+    assert gates.by_name["cost_stress_retention"].passed
 
 
 def test_cost_stress_retention_non_binding_when_realistic_nonpositive():
@@ -628,9 +752,9 @@ def test_cost_stress_retention_non_binding_when_realistic_nonpositive():
         cost_stress_full_mean=-0.002,
     )
     objective, _, gates = _evaluate(foundation)
-    assert objective.full_train_return is not None and objective.full_train_return <= 0.0
+    assert objective.full_train_at_risk_annualized_return is not None and objective.full_train_at_risk_annualized_return <= 0.0
     assert gates.by_name["cost_stress_retention"].passed  # non-binding
-    assert not gates.by_name["significance"].passed  # significance is the kill
+    assert not gates.by_name["train_strength"].passed  # train_strength is the kill
 
 
 def test_causality_gate_fails_when_not_admissible():
@@ -662,7 +786,7 @@ def test_failed_gate_does_not_change_score():
     foundation = _foundation()
     objective, _, gates = _evaluate(foundation, causality_admissible=False)
     assert not gates.passed
-    assert objective.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
+    assert objective.score == 0.05
 
 
 def test_breadth_gate_fails_when_foundation_concentration_missing():
@@ -682,6 +806,33 @@ def test_breadth_gate_fails_when_foundation_concentration_missing():
     assert "missing foundation" in gates.by_name["breadth"].detail
 
 
+def test_path_risk_gate_still_binds_on_full_window_drawdown():
+    _, _, gates = _evaluate(_foundation(max_drawdown=-0.25))
+
+    assert not gates.by_name["path_risk"].passed
+
+
+def test_complexity_gate_still_counts_params_and_components():
+    foundation = _foundation()
+    objective = score_objective((), _config(), foundation=foundation)
+    cost_stress = score_foundation_cost_stress(foundation, _config())
+
+    gates = evaluate_gates(
+        (),
+        params={f"p{index}": index for index in range(11)},
+        components=("signal",),
+        config=_gate_config(),
+        objective=objective,
+        cost_stress_full_train_at_risk_annualized_return=(
+            cost_stress.full_train_at_risk_annualized_return
+        ),
+        causality_admissible=True,
+        foundation_scenario=foundation.realistic_costs,
+    )
+
+    assert not gates.by_name["complexity_cap"].passed
+
+
 # --- ledger ----------------------------------------------------------------
 
 
@@ -691,8 +842,8 @@ def _row() -> ResultRow:
         iteration=1,
         status="keep",
         score=0.2037,
-        deflated_return_lcb=0.162,
-        full_train_annualized_return=0.3024,
+        train_strength_lcb=0.162,
+        full_train_at_risk_annualized_return=0.3024,
         cost_stress_return_retention=0.667,
         book_scale=1.5,
         deployed_volatility=0.18,
@@ -701,12 +852,12 @@ def _row() -> ResultRow:
         full_train_psr=0.98,
         worst_subwindow_psr=0.91,
         gates_passed=True,
-        gate_flags="significance=pass",
+        gate_flags="train_strength=pass",
         trade_count=52,
         min_subwindow_trades=12,
-        total_return=0.04,
         max_drawdown=-0.03,
         max_symbol_concentration=0.4,
+        effective_symbol_count=3.0,
         win_rate=0.55,
         profit_factor=1.4,
         avg_trade_net=0.001,
@@ -723,20 +874,30 @@ def _row() -> ResultRow:
     )
 
 
-def test_result_log_round_trips_and_replaces_empty_legacy_header(tmp_path: Path):
-    row = _row()
+def test_result_log_rejects_header_only_legacy_schema(tmp_path: Path):
     header_only = tmp_path / "header_only.tsv"
     header_only.write_text("old\tcolumns\n")
-    assert read_results(header_only) == []
-    append_result(header_only, row)
-    header = header_only.read_text().splitlines()[0].split("\t")
-    assert header == ResultRow.header()
-    assert "deflated_return_lcb" in header
-    assert "book_scale" in header
-    assert "capacity_bound" in header
-    assert "cost_stress_psr" not in header
-    assert "max_gross_utilization" not in header
-    assert read_results(header_only)[0] == row
+
+    with pytest.raises(ValueError, match="legacy results.tsv schema"):
+        read_results(header_only)
+    with pytest.raises(ValueError, match="legacy results.tsv schema"):
+        append_result(header_only, _row())
+
+
+@pytest.mark.parametrize(
+    "initial_text",
+    ["", "\t".join(ResultRow.header()), "\t".join(ResultRow.header()) + "\n"],
+)
+def test_result_log_accepts_new_lifecycle_ledgers(
+    tmp_path: Path,
+    initial_text: str,
+):
+    ledger = tmp_path / "results.tsv"
+    ledger.write_text(initial_text)
+
+    assert read_results(ledger) == []
+    append_result(ledger, _row())
+    assert read_results(ledger) == [_row()]
 
 
 def test_result_log_rejects_nonempty_legacy(tmp_path: Path):
@@ -748,6 +909,43 @@ def test_result_log_rejects_nonempty_legacy(tmp_path: Path):
         assert "legacy results.tsv schema" in str(exc)
     else:
         raise AssertionError("expected legacy non-empty result log to fail")
+
+
+def test_result_log_rejects_previous_harness_header(tmp_path: Path):
+    legacy_header = ResultRow.header()
+    legacy_header[legacy_header.index("train_strength_lcb")] = "deflated_return_lcb"
+    legacy_header[
+        legacy_header.index("full_train_at_risk_annualized_return")
+    ] = "full_train_annualized_return"
+    legacy_header.insert(legacy_header.index("max_drawdown"), "total_return")
+    legacy = tmp_path / "legacy.tsv"
+    legacy.write_text(
+        "\t".join(legacy_header)
+        + "\n"
+        + "\t".join("x" for _ in legacy_header)
+        + "\n"
+    )
+
+    with pytest.raises(ValueError, match="legacy results.tsv schema"):
+        read_results(legacy)
+
+
+def test_printed_outcome_uses_current_schema_names(capsys: pytest.CaptureFixture[str]):
+    outcome = loop.IterationOutcome(
+        status="keep",
+        score=_row().score,
+        gates_passed=True,
+        gates=None,
+        row=_row(),
+    )
+
+    loop._print_outcome(outcome)
+
+    output = capsys.readouterr().out
+    assert "train_strength_lcb:" in output
+    assert "full_train_at_risk_annualized_return:" in output
+    assert "deflated_return_lcb:" not in output
+    assert "\ntotal_return:" not in output
 
 
 # --- run_iteration end to end ----------------------------------------------
@@ -856,19 +1054,32 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     run_card = tmp_path / "results/autoresearch/attempt-0001/run_card.json"
 
     assert outcome.status == "keep"
-    assert rows[0].score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
-    assert rows[0].deflated_return_lcb == _lcb(0.0012, 0.0010, 120.0, k=2.8)
-    assert rows[0].full_train_annualized_return == 0.0012 * _P
+    assert rows[0].score == 0.05
+    assert rows[0].train_strength_lcb == _lcb(0.0012, 0.0010, 120.0, k=2.0)
+    assert rows[0].full_train_at_risk_annualized_return == 0.0012 * _P
     assert rows[0].book_scale == 1.5
     assert rows[0].capacity_bound is False
     assert rows[0].full_train_psr is not None
     assert rows[0].trade_count == 20
     assert rows[0].win_rate == 0.5
     assert rows[0].cost_return_sum == 0.004
+    assert rows[0].effective_symbol_count == 3.0
 
     payload = json.loads(run_card.read_text())
+    score_parts = payload["score_parts"]
+    assert score_parts["full_window_total_return"] == 0.05
+    assert score_parts["train_strength_lcb"] == rows[0].train_strength_lcb
+    assert score_parts["full_train_at_risk_annualized_return"] == 0.0012 * _P
+    assert score_parts["cost_stress_full_window_total_return"] == 0.05
+    assert (
+        score_parts["cost_stress_full_train_at_risk_annualized_return"]
+        == 0.0008 * _P
+    )
     assert len(payload["score_parts"]["windows"]) == 4
-    assert payload["score_parts"]["windows"][0]["t_stat"] is not None
+    full_window = payload["score_parts"]["windows"][0]
+    assert full_window["at_risk_annualized_return"] == 0.0012 * _P
+    assert full_window["at_risk_annualized_standard_error"] is not None
+    assert full_window["t_stat"] is not None
     assert "money_floor_gap" not in payload["score_parts"]["windows"][0]
     assert payload["sizing_report"]["annualization_periods_per_year"] == _P
     realistic = payload["foundation"]["realistic_costs"]
@@ -904,7 +1115,7 @@ def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_p
 
     row = read_results(tmp_path / "results.tsv")[0]
     assert outcome.status == "keep"
-    assert row.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
+    assert row.score == 0.05
     assert row.trade_count == 20
     assert row.win_rate is None
 
@@ -939,20 +1150,20 @@ def test_run_iteration_discards_when_causality_not_admissible(tmp_path: Path):
     )
     assert outcome.status == "discard"
     assert "causality=fail" in row.gate_flags
-    assert row.score == _lcb(0.0012, 0.0010, 120.0, k=1.0)
+    assert row.score == 0.05
     assert run_card["causality"]["admissible"] is False
     assert run_card["causality"]["verified"] is False
     assert run_card["failure_class"] == "causality"
 
 
-def test_run_iteration_discards_when_significance_fails(tmp_path: Path):
+def test_run_iteration_discards_when_train_strength_fails(tmp_path: Path):
     _write_workspace(tmp_path)
     protocol = load_protocol(tmp_path / "protocol.toml")
     result = FakeRunResult(
         succeeded=True,
         economics=FakeEconomics(trades=()),
         foundation=FakeFoundation(
-            _foundation(full_train_mean=0.0002, worst_subwindow_mean=0.0002)
+            _foundation(full_train_mean=0.00018, worst_subwindow_mean=0.00018)
         ),
         evidence=FakeEvidence(causality=FakeCausality()),
     )
@@ -973,8 +1184,8 @@ def test_run_iteration_discards_when_significance_fails(tmp_path: Path):
         (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
     )
     assert outcome.status == "discard"
-    assert "significance=fail" in row.gate_flags
-    assert run_card["failure_class"] == "no_edge"
+    assert "train_strength=fail" in row.gate_flags
+    assert run_card["failure_class"] == "edge_unproven"
 
 
 def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Path):
@@ -987,7 +1198,7 @@ def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Pa
     assert isinstance(realistic, dict)
     full_train = realistic["full_train"]
     assert isinstance(full_train, dict)
-    full_train["mean_return"] = float("inf")
+    full_train["total_return"] = float("inf")
     result = FakeRunResult(
         succeeded=True,
         economics=None,
@@ -1013,7 +1224,7 @@ def test_run_iteration_discards_nonfinite_score_input_without_crash(tmp_path: Pa
     assert outcome.status == "discard"
     assert row.status == "discard"
     assert row.score is None
-    assert "non-scoreable window" in row.note
+    assert "non-scoreable total_return" in row.note
     assert run_card["failure_class"] == "score_unavailable"
 
 
@@ -1115,13 +1326,13 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
 def _gates_with(
     *,
     failed: frozenset[str] = frozenset(),
-    significance_value: float | None = 0.2,
+    train_strength_value: float | None = 0.2,
 ) -> GateSet:
     names = (
         "trade_floor",
         "minimum_evidence",
         "path_risk",
-        "significance",
+        "train_strength",
         "cost_stress_retention",
         "breadth",
         "causality",
@@ -1132,7 +1343,7 @@ def _gates_with(
             GateOutcome(
                 name=name,
                 passed=name not in failed,
-                value=significance_value if name == "significance" else None,
+                value=train_strength_value if name == "train_strength" else None,
                 threshold=None,
             )
             for name in names
@@ -1145,15 +1356,14 @@ def test_failure_class_edge_when_all_gates_pass():
 
 
 def test_failure_class_capacity_bound_is_not_a_failure():
-    # A significant edge (significance gate passes) that is capacity-throttled is a
-    # keeper: capacity is a reported diagnostic, not a failure. A small positive
-    # deflated LCB still classifies as ``edge``.
-    assert loop._failure_class(_gates_with(significance_value=0.05), None) == "edge"
+    # A strength-passing edge that is capacity-throttled is a keeper: capacity is
+    # a reported diagnostic, not a failure.
+    assert loop._failure_class(_gates_with(train_strength_value=0.05), None) == "edge"
 
 
-def test_failure_class_no_edge_when_significance_fails():
-    gates = _gates_with(failed=frozenset({"significance"}), significance_value=-0.5)
-    assert loop._failure_class(gates, None) == "no_edge"
+def test_failure_class_edge_unproven_when_train_strength_fails():
+    gates = _gates_with(failed=frozenset({"train_strength"}), train_strength_value=-0.5)
+    assert loop._failure_class(gates, None) == "edge_unproven"
 
 
 def test_failure_class_breadth_evidence_and_gate_fallback():
@@ -1171,9 +1381,9 @@ def test_failure_class_breadth_evidence_and_gate_fallback():
     )
 
 
-def test_failure_class_causality_takes_precedence_over_significance():
+def test_failure_class_causality_takes_precedence_over_train_strength():
     gates = _gates_with(
-        failed=frozenset({"causality", "significance"}), significance_value=-0.5
+        failed=frozenset({"causality", "train_strength"}), train_strength_value=-0.5
     )
     assert loop._failure_class(gates, None) == "causality"
 

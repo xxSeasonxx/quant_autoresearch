@@ -4,6 +4,22 @@ Development chronology and migration rationale. Active contracts live in the
 owning docs (`program.md`, `protocol.toml`, and the module docstrings); this file
 is history only.
 
+## Full-window total-return score and Train-strength naming
+
+The harness now ranks gate-passing candidates by realistic-cost full-window
+`total_return`. The ranking-only one-SE haircut was removed so candidates with
+different duty cycles are compared by economic return earned over the fixed Train
+window. The ledger's duplicate `total_return` column was removed; `score` is its
+single representation.
+
+The unchanged full-Train at-risk strength calculation was renamed from
+`significance` to `train_strength`:
+`at_risk_annualized_return - train_strength_haircut_se *
+at_risk_annualized_standard_error >= 0`, with a fixed 2-SE hurdle. The names no
+longer imply statistical proof, deflation, or a best-of-N correction. This was a
+hard schema cutover after archiving the existing lifecycle; old protocols and
+ledgers are not translated.
+
 ## Validity-only significance gate (money-to-score)
 
 The money-first redesign (below) added an acceptance gate `deflated_full_train_return >=
@@ -33,8 +49,8 @@ Repurposed to a **validity-only** gate, renamed `significance`:
 - The `deflated_money_floor` results column was renamed `deflated_return_lcb` (same deflated
   return value, now non-gating).
 
-This reverses the "keep `money_floor` and 0.10 as-is; do not split it" recommendation in
-`docs/HARNESS_REVIEW_2026-06-25.md` — a deliberate operator decision, not a rescue: the change
+This reversed the recommendation to keep `money_floor` and 0.10 unchanged — a
+deliberate operator decision, not a rescue: the change
 does not pass the strategy that prompted it (its deflated LCB is ~0, borderline on validity
 too). The score already carried money (`k_rank`, `_K_RANK = 1.0`), so no score change was
 needed, and no upstream `quant_strategies` change — the gate and deflation are consumer-side.

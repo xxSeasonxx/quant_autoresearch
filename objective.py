@@ -5,30 +5,31 @@ and not a per-trade return bag. Aggregate PnL can look strong when one symbol, o
 regime, one large position, or one lucky slice carries the run; the NAV path makes
 the evidence about capital over time.
 
-`return_lcb_subwindow` is the objective: the full-Train deployed-return lower
-confidence bound. Subwindows are computed and reported as diagnostics (regime
-stability), not scored — the score and gate bind on the full-Train window.
+`full_window_total_return` is the objective: realistic-cost total return over the
+full Train window. Subwindows are required diagnostics and minimum-evidence
+inputs, not ranking inputs.
 
 1. Read the upstream `realistic_costs` portfolio-foundation metrics and the
    run-level `annualization_periods_per_year` (`P`) from the sizing report.
-2. For full Train and each configured subwindow, form the deployed annualized
-   return `R_w = mean_return_w * P` and its standard error
-   `SE_w = return_volatility_w * P / sqrt(effective_sample_size_w)`.
-3. Use `min over windows of (R_w - k_rank * SE_w)` as the run score, `k_rank = 1`.
+2. Use `realistic_costs.full_train.total_return` as the run score.
+3. For full Train and each configured subwindow, retain the at-risk annualized
+   return `R_w = mean_return_w * P` and standard error
+   `SE_w = return_volatility_w * P / sqrt(effective_sample_size_w)` for the fixed
+   Train strength hurdle and diagnostics.
 
-The score is denominated in money: scaling the deployed book's return moves it,
-which a scale-invariant ratio (Sharpe, PSR, Calmar) cannot do. The `min(...)` shape
-plus the SE haircut is a robustness filter across the whole Train window, not proof
-of an edge. Binary gates elsewhere own viability constraints (trade count,
-subwindow coverage, evidence, concentration, cost-stress return retention, path
-risk, causality, the deflated money floor, and complexity). A high score with
-failed gates is not a keepable candidate.
+The score is economic return, proportional to dollars earned at a fixed starting
+NAV. Scaling the deployed book's return or changing its duty cycle moves it, which
+a scale-invariant ratio (Sharpe, PSR, Calmar) cannot do. Binary gates elsewhere
+own viability constraints (trade count, subwindow
+coverage, evidence, concentration, cost-stress return retention, path risk,
+causality, Train strength, and complexity). A high score with failed gates is not a
+keepable candidate.
 
 PSR/Sharpe/Calmar are retained only as diagnostics; they are neither the score nor
-a gate. A window the upstream foundation cannot score for money (missing or
-non-finite mean/volatility, non-positive effective sample size, or zero variance)
-yields no lower bound, so the run is non-scoreable rather than assigned a finite
-score.
+a gate. A missing or non-finite full-window total return is non-scoreable. A window
+with missing or non-finite at-risk return inputs, non-positive effective sample
+size, or zero variance is also non-scoreable because the strength and evidence
+diagnostics cannot be evaluated.
 """
 
 from __future__ import annotations
@@ -38,13 +39,6 @@ from datetime import datetime
 from math import isfinite, sqrt
 from statistics import NormalDist
 from typing import Sequence
-
-# Ranking haircut: the per-window SE multiple folded into the run score. A code
-# constant, not operator-tuned; the operator-owned acceptance haircut `k_accept`
-# (`gates.score_haircut_se`) is a separate, stricter multiple used only by the
-# money-floor gate.
-_K_RANK = 1.0
-
 
 @dataclass(frozen=True)
 class LoopConfig:
@@ -60,7 +54,7 @@ class ObjectiveConfig:
     """Configured Train objective.
 
     `kind` is intentionally narrow for active protocol loading. The supported
-    active value is `return_lcb_subwindow`; `subwindows` is the number of
+    active value is `full_window_total_return`; `subwindows` is the number of
     equal-duration slices used to test whether the strategy works across the
     Train window rather than only in one favorable regime. `psr_hurdle_sharpe`
     parameterizes the diagnostic PSR only; it is not the run score or a gate.
@@ -75,9 +69,10 @@ class ObjectiveConfig:
 class FoundationMetric:
     """Upstream-owned portfolio-return metric record used by local scoring.
 
-    `mean_return` and `return_volatility` are the per-period deployed-return
-    moments the money score annualizes; `effective_sample_size` is the
-    autocorrelation-adjusted sample count behind the SE haircut.
+    `mean_return` and `return_volatility` are the per-period at-risk return
+    moments used by the annualized Train-strength diagnostics;
+    `effective_sample_size` is the autocorrelation-adjusted sample count behind
+    the standard error.
     """
 
     window_id: str
@@ -155,23 +150,23 @@ class TradeSample:
 class ObjectiveResult:
     """Result of objective scoring.
 
-    `score` is the full-Train deployed-return lower bound at `k_rank`, `None`
-    when any window cannot yield a lower bound (the run is non-scoreable).
+    `score` is realistic-cost full-window total return, `None` when the total
+    return or required at-risk return diagnostics are non-scoreable.
     `feasible` only means the objective math produced a score; it does not mean
-    all strategy gates passed. `window_returns`/`window_return_ses` are the
-    per-window `R_w`/`SE_w` (full Train first, then each subwindow); the score and
-    the significance gate bind on the full-Train window (index 0), and the subwindow
-    entries are reported as diagnostics. PSR fields are diagnostics only.
+    all strategy gates passed. The window vectors are the per-window at-risk
+    annualized `R_w`/`SE_w` values (full Train first, then each subwindow); only the
+    Train strength gate binds on the full-Train pair. PSR fields are diagnostics.
     """
 
     score: float | None
     feasible: bool
     subwindow_trade_counts: tuple[int, ...] = ()
     window_ids: tuple[str, ...] = ()
-    window_returns: tuple[float, ...] = ()
-    window_return_ses: tuple[float, ...] = ()
-    full_train_return: float | None = None
-    full_train_return_se: float | None = None
+    window_at_risk_annualized_returns: tuple[float, ...] = ()
+    window_at_risk_annualized_standard_errors: tuple[float, ...] = ()
+    full_window_total_return: float | None = None
+    full_train_at_risk_annualized_return: float | None = None
+    full_train_at_risk_annualized_standard_error: float | None = None
     detail: str = ""
     full_train_psr: float | None = None
     subwindow_psrs: tuple[float, ...] = ()
@@ -259,13 +254,16 @@ def _score_foundation_scenario(
             worst_subwindow_id=worst_subwindow_id,
         )
 
+    full_window_total_return = scenario.full_train.total_return
     full_parts = _window_return_se(scenario.full_train, periods_per_year=periods_per_year)
-    full_train_return = None if full_parts is None else full_parts[0]
-    full_train_return_se = None if full_parts is None else full_parts[1]
+    full_train_at_risk_annualized_return = None if full_parts is None else full_parts[0]
+    full_train_at_risk_annualized_standard_error = (
+        None if full_parts is None else full_parts[1]
+    )
 
     window_ids: list[str] = []
-    window_returns: list[float] = []
-    window_return_ses: list[float] = []
+    window_at_risk_annualized_returns: list[float] = []
+    window_at_risk_annualized_standard_errors: list[float] = []
     for metric in (scenario.full_train, *scenario.subwindows):
         parts = _window_return_se(metric, periods_per_year=periods_per_year)
         if parts is None:
@@ -273,7 +271,13 @@ def _score_foundation_scenario(
                 score=None,
                 feasible=False,
                 subwindow_trade_counts=counts,
-                full_train_return=full_train_return,
+                full_window_total_return=full_window_total_return,
+                full_train_at_risk_annualized_return=(
+                    full_train_at_risk_annualized_return
+                ),
+                full_train_at_risk_annualized_standard_error=(
+                    full_train_at_risk_annualized_standard_error
+                ),
                 detail=f"{metric.window_id} non-scoreable window",
                 full_train_psr=full_psr,
                 subwindow_psrs=subwindow_psrs,
@@ -281,23 +285,38 @@ def _score_foundation_scenario(
                 worst_subwindow_id=worst_subwindow_id,
             )
         window_ids.append(metric.window_id)
-        window_returns.append(parts[0])
-        window_return_ses.append(parts[1])
+        window_at_risk_annualized_returns.append(parts[0])
+        window_at_risk_annualized_standard_errors.append(parts[1])
 
-    # Full-Train deployed-return lower bound is the run score and the significance-gate
-    # input (full_train is index 0). It is the binding in-sample robustness
-    # instrument; per-subwindow returns are reported diagnostics, not gated, so
-    # neither the score nor the floor binds on the noisiest short subwindow.
-    score = window_returns[0] - _K_RANK * window_return_ses[0]
+    score = (
+        float(full_window_total_return)
+        if full_window_total_return is not None and isfinite(full_window_total_return)
+        else None
+    )
+
     return ObjectiveResult(
         score=score,
-        feasible=True,
+        feasible=score is not None,
         subwindow_trade_counts=counts,
         window_ids=tuple(window_ids),
-        window_returns=tuple(window_returns),
-        window_return_ses=tuple(window_return_ses),
-        full_train_return=full_train_return,
-        full_train_return_se=full_train_return_se,
+        window_at_risk_annualized_returns=tuple(
+            window_at_risk_annualized_returns
+        ),
+        window_at_risk_annualized_standard_errors=tuple(
+            window_at_risk_annualized_standard_errors
+        ),
+        full_window_total_return=score,
+        full_train_at_risk_annualized_return=(
+            full_train_at_risk_annualized_return
+        ),
+        full_train_at_risk_annualized_standard_error=(
+            full_train_at_risk_annualized_standard_error
+        ),
+        detail=(
+            ""
+            if score is not None
+            else "full_train non-scoreable total_return"
+        ),
         full_train_psr=full_psr,
         subwindow_psrs=subwindow_psrs,
         worst_subwindow_psr=worst_subwindow_psr,
@@ -305,35 +324,33 @@ def _score_foundation_scenario(
     )
 
 
-def deflated_window_floor(
-    objective: ObjectiveResult, *, k_accept: float
+def train_strength_floor(
+    objective: ObjectiveResult, *, haircut_se: float
 ) -> float | None:
-    """Full-Train deployed-return lower bound at the acceptance haircut.
+    """Full-Train at-risk annualized return lower bound for Train strength.
 
-    Reuses the objective's full-Train `R`/`SE`; only the haircut multiple differs
-    from the run score. `None` when the run is non-scoreable. This deflated
-    full-Train floor is the binding in-sample robustness gate; per-subwindow
-    returns are reported diagnostics, not gated.
+    Applies the fixed Train strength hurdle to the objective's full-Train `R`/`SE`.
+    This is a development filter, not statistical proof or a best-of-N correction.
+    Per-subwindow values are diagnostics, not gated.
     """
 
-    if objective.full_train_return is None or objective.full_train_return_se is None:
+    annualized_return = objective.full_train_at_risk_annualized_return
+    standard_error = objective.full_train_at_risk_annualized_standard_error
+    if annualized_return is None or standard_error is None:
         return None
-    if not (
-        isfinite(objective.full_train_return)
-        and isfinite(objective.full_train_return_se)
-    ):
+    if not (isfinite(annualized_return) and isfinite(standard_error)):
         return None
-    return objective.full_train_return - k_accept * objective.full_train_return_se
+    return annualized_return - haircut_se * standard_error
 
 
 def score_foundation_cost_stress(
     foundation: FoundationEvidence,
     config: ObjectiveConfig,
 ) -> ObjectiveResult:
-    """Score the upstream cost-stress scenario with the money-LCB rule.
+    """Compute the cost-stress scenario metrics used by the retention gate.
 
-    Used for the cost-stress return-retention gate (via `full_train_return`) and
-    as a run-card diagnostic; it is not a gated run score on its own.
+    Used for the cost-stress return-retention gate (via the full-Train at-risk
+    annualized return) and as a run-card diagnostic; it is not a gated run score.
     """
 
     return _score_foundation_scenario(
@@ -356,7 +373,7 @@ def score_objective(
     foundation's realistic-costs scenario.
     """
 
-    if config.kind != "return_lcb_subwindow":
+    if config.kind != "full_window_total_return":
         raise ValueError(f"unsupported objective kind: {config.kind}")
     if foundation is None:
         return ObjectiveResult(

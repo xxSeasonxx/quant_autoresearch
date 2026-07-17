@@ -401,19 +401,18 @@ def _train_years(start: object, end: object) -> float | None:
 
 
 def _feasibility_rows(recommended: Mapping[str, Any]) -> list[dict[str, object]]:
-    """Annualized Sharpe needed for the deflated full-Train return to be significant.
+    """Annualized Sharpe implied by the fixed full-Train strength hurdle.
 
-    The `significance` gate requires the deflated return `R - k*SE >= 0`. With best-case
-    dense sampling (effective years ~= calendar years) this is `S_ann >= k/sqrt(Y)`. The
-    full-Train row is the active gate; the per-subwindow row is informational. A held or
-    low-duty-cycle book realizes a lower t than dense sampling implies, so it needs a
-    higher Sharpe than the table shows.
+    The `train_strength` gate requires `R - k*SE >= 0`. With best-case dense
+    sampling (effective years ~= calendar years) this is `S_ann >= k/sqrt(Y)`.
+    The full-Train row is active; the per-subwindow row is informational. A held
+    or low-duty-cycle book needs a higher Sharpe than the table shows.
     """
 
     gates = recommended.get("gates", {})
     objective = recommended.get("objective", {})
     data = recommended.get("data", {})
-    k = gates.get("score_haircut_se")
+    k = gates.get("train_strength_haircut_se")
     subwindows = objective.get("subwindows")
     years = _train_years(data.get("start"), data.get("end"))
     if not (
@@ -427,7 +426,7 @@ def _feasibility_rows(recommended: Mapping[str, Any]) -> list[dict[str, object]]
     full = k / sqrt(years)
     rows.append(
         {
-            "window": "significance (full_train, active)",
+            "window": "train_strength (full_train, active)",
             "years": round(years, 3),
             "required_sharpe": round(full, 2),
         }
@@ -436,7 +435,7 @@ def _feasibility_rows(recommended: Mapping[str, Any]) -> list[dict[str, object]]
     per_sub = k / sqrt(sub_years)
     rows.append(
         {
-            "window": "per-subwindow deflation (reference, not used)",
+            "window": "per-subwindow strength reference (not used)",
             "years": round(sub_years, 3),
             "required_sharpe": round(per_sub, 2),
         }
@@ -451,8 +450,8 @@ def _feasibility_warning(rows: list[dict[str, object]]) -> str | None:
     required = active["required_sharpe"]
     if isinstance(required, (int, float)) and required > 4.0:
         return (
-            f"Feasibility: the deflated return needs annualized Sharpe ~{required} to be "
-            "significant (best-case dense sampling; a held / low-duty book needs more). "
+            f"Feasibility: the Train strength hurdle needs annualized Sharpe ~{required} "
+            "(best-case dense sampling; a held / low-duty book needs more). "
             "That is implausibly high — lengthen the Train window or expect no survivor."
         )
     return None
@@ -466,10 +465,7 @@ def _proposal_payload_without_hash(
     brief: StrategyBrief,
     current: ProtocolConfig,
 ) -> dict[str, object]:
-    # Deliberate acceptance haircut for the deflated full-Train money floor — the
-    # multiple-testing correction for the best-of-N search. Below the best-of-N
-    # bound ~sqrt(2*ln(max_iterations)) but above the noise floor.
-    score_haircut = 2.0
+    train_strength_haircut = 2.0
     current_protocol: dict[str, dict[str, object]] = {
         "data": {
             "kind": current.data.kind,
@@ -517,7 +513,9 @@ def _proposal_payload_without_hash(
             "max_symbol_concentration": current.gates.max_symbol_concentration,
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
-            "score_haircut_se": current.gates.score_haircut_se,
+            "train_strength_haircut_se": (
+                current.gates.train_strength_haircut_se
+            ),
             "max_components": current.gates.max_components,
             "max_params": current.gates.max_params,
         },
@@ -552,7 +550,7 @@ def _proposal_payload_without_hash(
         },
         "output": {"causality_check": "micro"},
         "objective": {
-            "kind": "return_lcb_subwindow",
+            "kind": "full_window_total_return",
             "subwindows": brief.objective_subwindows,
         },
         "loop": {
@@ -569,7 +567,7 @@ def _proposal_payload_without_hash(
             "max_symbol_concentration": brief.max_symbol_concentration,
             "min_cost_stress_return_retention": brief.min_cost_stress_return_retention,
             "max_abs_drawdown": brief.max_abs_drawdown,
-            "score_haircut_se": score_haircut,
+            "train_strength_haircut_se": train_strength_haircut,
             "max_components": brief.max_components,
             "max_params": brief.max_params,
         },
@@ -635,7 +633,7 @@ def _proposal_payload_without_hash(
             "risk_budget.annualization_periods_per_year": "Derive from bar cadence and market calendar; do not tune from returns.",
             "risk_budget.target_volatility": "Map target volatility directly into upstream risk-budget sizing.",
             "output.causality_check": "Keep Train causality on bounded micro replay.",
-            "objective.kind": "Keep the money-first full-Train deflated deployed-return objective.",
+            "objective.kind": "Rank gate-passing candidates by realistic-cost full-window total return.",
             "objective.subwindows": "Set robustness slices from Train window length and thesis horizon.",
             "loop.max_iterations": "Use the approved attempt budget as the hard Train iteration cap.",
             "loop.baseline_grace_iterations": "Use the approved first-baseline grace before declaring Train death.",
@@ -648,7 +646,7 @@ def _proposal_payload_without_hash(
             "gates.max_symbol_concentration": "Set the maximum allowed one-symbol dependence for the claim.",
             "gates.min_cost_stress_return_retention": "Set the minimum cost-stress robustness requirement.",
             "gates.max_abs_drawdown": "Map the maximum tolerable drawdown directly into the path-risk gate.",
-            "gates.score_haircut_se": "Deliberate acceptance haircut (best-of-N multiple-testing correction) for the deflated full-Train significance gate; below sqrt(2 * ln(max_iterations)) but above the noise floor.",
+            "gates.train_strength_haircut_se": "Use a fixed 2-SE Train strength hurdle; it is not statistical proof or a best-of-N correction.",
             "gates.max_components": "Set the maximum signal-component complexity allowed in rationale.md.",
             "gates.max_params": "Set the maximum bounded-parameter complexity allowed in experiment.toml.",
         },
@@ -724,9 +722,9 @@ def _proposal_markdown(proposal: ProtocolProposal) -> str:
         )
         feasibility_section = (
             "\n## Feasibility\n\n"
-            "Annualized Sharpe needed to clear the money floor (best-case dense "
+            "Annualized Sharpe implied by the Train strength hurdle (best-case dense "
             "sampling; a held book needs more). The full_train row is the active "
-            "gate; the per-subwindow row shows why per-window deflation is not used.\n\n"
+            "gate; the per-subwindow row is diagnostic only.\n\n"
             "| Window | Years | Required Sharpe |\n"
             "| --- | --- | --- |\n"
             f"{feasibility_lines}\n"

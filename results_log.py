@@ -21,8 +21,8 @@ class ResultRow:
     iteration: int
     status: str
     score: float | None
-    deflated_return_lcb: float | None
-    full_train_annualized_return: float | None
+    train_strength_lcb: float | None
+    full_train_at_risk_annualized_return: float | None
     cost_stress_return_retention: float | None
     book_scale: float | None
     deployed_volatility: float | None
@@ -34,9 +34,9 @@ class ResultRow:
     gate_flags: str
     trade_count: int
     min_subwindow_trades: int
-    total_return: float | None
     max_drawdown: float | None
     max_symbol_concentration: float | None
+    effective_symbol_count: float | None
     win_rate: float | None
     profit_factor: float | None
     avg_trade_net: float | None
@@ -58,8 +58,8 @@ class ResultRow:
             "iteration",
             "status",
             "score",
-            "deflated_return_lcb",
-            "full_train_annualized_return",
+            "train_strength_lcb",
+            "full_train_at_risk_annualized_return",
             "cost_stress_return_retention",
             "book_scale",
             "deployed_volatility",
@@ -71,9 +71,9 @@ class ResultRow:
             "gate_flags",
             "trade_count",
             "min_subwindow_trades",
-            "total_return",
             "max_drawdown",
             "max_symbol_concentration",
+            "effective_symbol_count",
             "win_rate",
             "profit_factor",
             "avg_trade_net",
@@ -101,8 +101,10 @@ class ResultRow:
             "iteration": str(self.iteration),
             "status": self.status,
             "score": optional(self.score),
-            "deflated_return_lcb": optional(self.deflated_return_lcb),
-            "full_train_annualized_return": optional(self.full_train_annualized_return),
+            "train_strength_lcb": optional(self.train_strength_lcb),
+            "full_train_at_risk_annualized_return": optional(
+                self.full_train_at_risk_annualized_return
+            ),
             "cost_stress_return_retention": optional(self.cost_stress_return_retention),
             "book_scale": optional(self.book_scale),
             "deployed_volatility": optional(self.deployed_volatility),
@@ -114,9 +116,9 @@ class ResultRow:
             "gate_flags": self.gate_flags,
             "trade_count": str(self.trade_count),
             "min_subwindow_trades": str(self.min_subwindow_trades),
-            "total_return": optional(self.total_return),
             "max_drawdown": optional(self.max_drawdown),
             "max_symbol_concentration": optional(self.max_symbol_concentration),
+            "effective_symbol_count": optional(self.effective_symbol_count),
             "win_rate": optional(self.win_rate),
             "profit_factor": optional(self.profit_factor),
             "avg_trade_net": optional(self.avg_trade_net),
@@ -169,8 +171,10 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
             row["status"], name="status", allowed={"keep", "discard", "crash"}
         ),
         score=_parse_float(row["score"]),
-        deflated_return_lcb=_parse_float(row["deflated_return_lcb"]),
-        full_train_annualized_return=_parse_float(row["full_train_annualized_return"]),
+        train_strength_lcb=_parse_float(row["train_strength_lcb"]),
+        full_train_at_risk_annualized_return=_parse_float(
+            row["full_train_at_risk_annualized_return"]
+        ),
         cost_stress_return_retention=_parse_float(row["cost_stress_return_retention"]),
         book_scale=_parse_float(row["book_scale"]),
         deployed_volatility=_parse_float(row["deployed_volatility"]),
@@ -182,9 +186,9 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         gate_flags=row["gate_flags"],
         trade_count=int(row["trade_count"]),
         min_subwindow_trades=int(row["min_subwindow_trades"]),
-        total_return=_parse_float(row["total_return"]),
         max_drawdown=_parse_float(row["max_drawdown"]),
         max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
+        effective_symbol_count=_parse_float(row["effective_symbol_count"]),
         win_rate=_parse_float(row["win_rate"]),
         profit_factor=_parse_float(row["profit_factor"]),
         avg_trade_net=_parse_float(row["avg_trade_net"]),
@@ -233,34 +237,32 @@ def _validate_result_chain(rows: list[ResultRow]) -> None:
         raise ValueError("result iterations must be contiguous from 1")
 
 
-def _existing_header_and_has_rows(path: Path) -> tuple[list[str], bool]:
+def _existing_header(path: Path) -> list[str]:
     with path.open(newline="") as handle:
         reader = csv.reader(handle, dialect="excel-tab")
         try:
-            header = next(reader)
+            return next(reader)
         except StopIteration:
-            return [], False
-        return header, any(any(cell != "" for cell in row) for row in reader)
+            return []
 
 
 def _ensure_writable_schema(path: Path) -> bool:
     if not path.exists() or path.stat().st_size == 0:
         return True
-    header, has_rows = _existing_header_and_has_rows(path)
-    if header == ResultRow.header():
+    if _existing_header(path) == ResultRow.header():
         return False
-    if has_rows:
-        raise ValueError(
-            "legacy results.tsv schema with existing rows; start a new thesis lifecycle"
-        )
-    path.write_text("")
-    return True
+    raise ValueError("legacy results.tsv schema; start a new thesis lifecycle")
 
 
 def append_result(path: str | Path, row: ResultRow) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     needs_header = _ensure_writable_schema(destination)
+    if not needs_header:
+        with destination.open("rb+") as handle:
+            handle.seek(-1, 2)
+            if handle.read(1) not in {b"\n", b"\r"}:
+                handle.write(b"\n")
     with destination.open("a", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -277,6 +279,8 @@ def read_results(path: str | Path) -> list[ResultRow]:
     source = Path(path)
     if not source.exists():
         return []
+    if source.stat().st_size == 0:
+        return []
     # Crash rows can carry verbose multi-line notes (e.g. an observation-audit
     # failure listing every missing row) that exceed Python's default 128 KB CSV
     # field cap; raise it so a large note never wedges the reader.
@@ -285,11 +289,7 @@ def read_results(path: str | Path) -> list[ResultRow]:
         reader = csv.DictReader(handle, dialect="excel-tab")
         raw_rows = list(reader)
     if reader.fieldnames != ResultRow.header():
-        if not raw_rows:
-            return []
-        raise ValueError(
-            "legacy results.tsv schema with existing rows; start a new thesis lifecycle"
-        )
+        raise ValueError("legacy results.tsv schema; start a new thesis lifecycle")
     rows = [_parse_row(row) for row in raw_rows]
     _validate_result_chain(rows)
     return rows

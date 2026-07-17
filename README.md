@@ -20,7 +20,7 @@ checkout comments or strategy names alone.
 | --- | --- |
 | `new-thesis-setup` skill | New-thesis setup workflow (`/new-thesis-setup`); the filled brief lives under `.autoresearch/protocol_briefs/`. |
 | `program.md` | Agent operating contract for one active Train loop. |
-| `docs/score_research.md` | Train money-score rationale and scoring boundaries. |
+| `docs/score_research.md` | Train score, gate, result-ledger, and run-card contract. |
 | `docs/adr/0001-curated-few-research-regime.md` | Research-regime decision. |
 | `docs/templates/oos-drift-review.md` | Downstream one-look OOS drift review template. |
 | `HISTORY.md` | Development chronology and migration rationale. |
@@ -74,30 +74,19 @@ For one thesis:
 3. Modify `strategy.py` or bounded params.
 4. Run a Train quick run through public `quant_strategies.runner.run_config`.
 5. Review diagnostic output and update `rationale.md`.
-6. Score the configured Train portfolio-foundation robustness objective.
-7. Apply binary validity gates, including evidence coverage, cost stress, path risk, breadth, statistical significance (deflated full-Train return > 0), and aggregate trade floor.
-8. Let the loop decide keep/discard with the implemented keep rule:
+6. Apply the Train score and gates defined in `docs/score_research.md`.
+7. Let the loop decide keep/discard with the implemented improvement rule.
 
-   ```text
-   all_gates_pass AND score > best + max(eps, rho * max(1, abs(best)))
-   ```
-
-9. Append one compact row to `results.tsv`; source provenance is preserved in the
+8. Append one compact row to `results.tsv`; source provenance is preserved in the
    attempt snapshot under the row's `artifact_dir`.
-10. Stop on plateau, max iterations, complexity cap, or baseline failure.
+9. Stop on plateau, max iterations, complexity cap, or baseline failure.
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
-`results.tsv` records a compact, human-scannable metric set per attempt:
-deployed-return LCB score, worst-window id and annualized return, deflated return
-LCB, full-Train annualized return, cost-stress return retention, sizing,
-diagnostic PSR fields, gate flags, derived failure class, foundation closed-trade
-count, minimum subwindow trades, total return, max drawdown, max symbol
-concentration, win rate, profit factor, average trade net, cost return sum,
-complexity count, typed failure reason, artifact directory, and lifecycle state. Source provenance is preserved
-in the per-attempt snapshot; richer vectors, gate details, foundation warnings,
-and causality evidence live in the per-attempt `run_card.json` under the generated
-artifact directory. Only `keep` updates the best Train survivor; ordinary
+`results.tsv` records one compact, human-scannable row per attempt. The exact
+ledger and run-card fields are defined in
+`docs/score_research.md#results-and-run-cards`. Source provenance is preserved in
+the per-attempt snapshot. Only `keep` updates the best Train survivor; ordinary
 discarded variants may still remain useful working bases for thesis-guided
 follow-up edits. The complexity gate counts validated bounded params and signal
 components declared in `rationale.md` under `### Component:` headings.

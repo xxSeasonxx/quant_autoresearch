@@ -75,8 +75,8 @@ class RiskBudgetConfig:
     Upstream owns the sizing math; this is the operator-frozen config passed
     through. `calibrate_vol` sizes the book to `target_volatility`; `fixed_scale`
     applies `book_scale` to the normalized shape. `annualization_periods_per_year`
-    must match the bar cadence and is the run-level `P` the money score reads back
-    from the sizing report.
+    must match the bar cadence and is the run-level `P` the Train-strength
+    diagnostics read back from the sizing report.
     """
 
     mode: str
@@ -376,6 +376,11 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
     raw_loop = _required(data, "loop")
     raw_objective = _required(data, "objective")
     raw_gates = _required(data, "gates")
+    if "score_haircut_se" in raw_gates:
+        raise ValueError(
+            "gates.score_haircut_se is no longer supported; "
+            "remove it and use gates.train_strength_haircut_se"
+        )
     symbols = _symbols(_required(raw_data, "symbols"))
     fill_price = str(_required(raw_fill, "price"))
     entry_lag_bars = _positive_int(
@@ -383,7 +388,7 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         name="fill_model.entry_lag_bars",
     )
     objective_kind = str(_required(raw_objective, "kind"))
-    if objective_kind != "return_lcb_subwindow":
+    if objective_kind != "full_window_total_return":
         raise ValueError(f"objective.kind unsupported: {objective_kind}")
     subwindows = _positive_int(
         _required(raw_objective, "subwindows"), name="objective.subwindows"
@@ -533,13 +538,11 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_gates, "max_abs_drawdown"),
                 name="gates.max_abs_drawdown",
             ),
-            # Acceptance haircut k_accept for the deflated full-Train significance
-            # gate — the multiple-testing correction for the best-of-N search. It sits
-            # below the best-of-N bound ~sqrt(2 * ln N) (~2.8 at N=50) but above the
-            # noise floor. Explicit, not derived from loop.max_iterations.
-            score_haircut_se=_positive_float(
-                _required(raw_gates, "score_haircut_se"),
-                name="gates.score_haircut_se",
+            # Fixed Train strength hurdle. It is explicit, independent of the
+            # attempt cap, and is not statistical proof or a best-of-N correction.
+            train_strength_haircut_se=_positive_float(
+                _required(raw_gates, "train_strength_haircut_se"),
+                name="gates.train_strength_haircut_se",
             ),
             max_components=_positive_int(
                 _required(raw_gates, "max_components"),

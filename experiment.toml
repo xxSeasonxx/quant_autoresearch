@@ -3,28 +3,31 @@ funding_lookback_events = 5
 funding_decay = 0.0
 return_lookback_minutes = 120
 decision_interval_minutes = 240
-entry_twap_bars = 20
-exit_twap_bars = 30
+entry_twap_bars = 30
+exit_twap_bars = 60
 decision_lag_minutes = 1
 session_start_hour = 0
 session_end_hour = 24
 top_n = 5
-min_cross_section = 4
+min_cross_section = 5
 min_abs_funding_bps = 1.0
 min_abs_return_bps = 0.0
 include_positive_funding_shorts = false
 include_negative_funding_longs = true
-min_same_sign_funding_events = 1
+min_same_sign_funding_events = 3
 min_latest_abs_funding_bps = 0.0
 recent_return_lookback_minutes = 60
 max_recent_same_direction_return_bps = 1000.0
+long_max_market_down_bps = 1000.0
 min_idiosyncratic_return_bps = 2.5
 idiosyncratic_mode = "raw"
 min_idiosyncratic_sigma = 0.5
+short_signal_multiplier = 2.5
 selection_score = "combined"
-cross_section_reference = "mean"
-weighting = "dislocation"
-dislocation_weight_power = 3.0
+cross_section_reference = "median"
+weighting = "capacity_dislocation"
+dislocation_weight_power = 4.0
+liquidity_weight_power = 2.0
 vol_lookback_minutes = 1440
 long_hold_minutes = 720
 short_hold_minutes = 720
@@ -73,11 +76,11 @@ max = 24
 
 [bounds.top_n]
 min = 1
-max = 8
+max = 14
 
 [bounds.min_cross_section]
 min = 2
-max = 8
+max = 12
 
 [bounds.min_abs_funding_bps]
 min = 0.0
@@ -107,6 +110,10 @@ max = 2880
 min = 0.0
 max = 1000.0
 
+[bounds.long_max_market_down_bps]
+min = 0.0
+max = 1000.0
+
 [bounds.min_idiosyncratic_return_bps]
 min = 0.0
 max = 50.0
@@ -114,6 +121,10 @@ max = 50.0
 [bounds.min_idiosyncratic_sigma]
 min = 0.0
 max = 3.0
+
+[bounds.short_signal_multiplier]
+min = 1.0
+max = 6.0
 
 [bounds.long_hold_minutes]
 min = 120
@@ -134,6 +145,10 @@ max = 2.0
 [bounds.dislocation_weight_power]
 min = 1.0
 max = 6.0
+
+[bounds.liquidity_weight_power]
+min = 0.0
+max = 2.0
 
 [bounds.take_profit_frac]
 min = 0.0

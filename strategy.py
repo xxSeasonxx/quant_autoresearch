@@ -29,6 +29,7 @@ _REQUIRED_FIELDS = {
     "timestamp",
     "available_at",
     "close",
+    "volume",
     "funding_timestamp",
     "funding_rate",
     "has_funding_event",
@@ -53,13 +54,16 @@ _DEFAULT_PARAMS: dict[str, object] = {
     "min_latest_abs_funding_bps": 0.0,
     "recent_return_lookback_minutes": 60,
     "max_recent_same_direction_return_bps": 250.0,
+    "long_max_market_down_bps": 1000.0,
     "min_idiosyncratic_return_bps": 2.5,
     "idiosyncratic_mode": "raw",
     "min_idiosyncratic_sigma": 0.5,
+    "short_signal_multiplier": 1.0,
     "selection_score": "combined",
     "cross_section_reference": "mean",
     "weighting": "equal",
     "dislocation_weight_power": 1.0,
+    "liquidity_weight_power": 0.0,
     "vol_lookback_minutes": 1440,
     "long_hold_minutes": 720,
     "short_hold_minutes": 480,
@@ -78,6 +82,7 @@ class _BarRow:
     timestamp: datetime
     available_at: datetime
     close: float
+    volume: float
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,7 @@ class _Candidate:
     return_extension_bps: float
     recent_return_bps: float
     volatility: float | None = None
+    dollar_volume: float | None = None
     recent_row: _BarRow | None = None
 
 
@@ -183,6 +189,9 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
             merged["max_recent_same_direction_return_bps"],
             "max_recent_same_direction_return_bps",
         ),
+        "long_max_market_down_bps": _non_negative_float(
+            merged["long_max_market_down_bps"], "long_max_market_down_bps"
+        ),
         "min_idiosyncratic_return_bps": _non_negative_float(
             merged["min_idiosyncratic_return_bps"],
             "min_idiosyncratic_return_bps",
@@ -191,12 +200,18 @@ def validate_params(params: Mapping[str, object]) -> dict[str, object]:
         "min_idiosyncratic_sigma": _non_negative_float(
             merged["min_idiosyncratic_sigma"], "min_idiosyncratic_sigma"
         ),
+        "short_signal_multiplier": _positive_float(
+            merged["short_signal_multiplier"], "short_signal_multiplier"
+        ),
         "selection_score": _selection_score(merged["selection_score"]),
         "cross_section_reference": _cross_section_reference(
             merged["cross_section_reference"]
         ),
         "dislocation_weight_power": _positive_float(
             merged["dislocation_weight_power"], "dislocation_weight_power"
+        ),
+        "liquidity_weight_power": _non_negative_float(
+            merged["liquidity_weight_power"], "liquidity_weight_power"
         ),
         "weighting": _weighting(merged["weighting"]),
         "vol_lookback_minutes": _positive_int(
@@ -294,6 +309,7 @@ def generate_decisions(
             n_universe,
             weighting,
             _param_float(validated, "dislocation_weight_power"),
+            _param_float(validated, "liquidity_weight_power"),
         )
         reference_volatility = _reference_volatility(selections)
         reference_idiosyncratic = _reference_idiosyncratic(selections)
@@ -393,8 +409,9 @@ def _ramped_decisions(
     equal delta per bar, spreading entry and exit participation instead of pinning
     one bar against the capacity cap. Entry and exit spread independently, so the
     exit ramp can be lengthened to relieve the synchronized fixed-horizon unwind
-    without changing entry timing. ``twap_bars == 1`` reproduces a single-bar
-    entry. Entry steps carry the signal-bar ``as_of``; the exit is the
+    without changing entry timing. The minute schedule is fixed when the signal is
+    observed and does not inspect future rows. ``twap_bars == 1`` reproduces a
+    single-bar entry. Entry steps carry the signal-bar ``as_of``; the exit is the
     fixed-horizon unwind scheduled at entry, so its steps carry the entry time as
     ``as_of``.
     """
@@ -439,12 +456,14 @@ def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRo
         timestamp = _datetime_value(bar["timestamp"], "timestamp")
         available_at = _datetime_value(bar["available_at"], "available_at")
         close = _positive_float(bar["close"], "close")
+        volume = _non_negative_float(bar["volume"], "volume")
         grouped_bars.setdefault(symbol, []).append(
             _BarRow(
                 symbol=symbol,
                 timestamp=timestamp,
                 available_at=available_at,
                 close=close,
+                volume=volume,
             )
         )
 
@@ -562,6 +581,11 @@ def _candidate_at_signal_time(
         return_extension_bps=return_extension_bps,
         recent_return_bps=recent_return_bps,
         volatility=_realized_volatility(rows, signal_index, vol_lookback_minutes),
+        dollar_volume=(
+            signal_row.close * signal_row.volume
+            if signal_row.volume > 0.0
+            else None
+        ),
         recent_row=recent_row,
     )
 
@@ -623,6 +647,7 @@ def _select_candidates(
     min_latest_funding = _param_float(params, "min_latest_abs_funding_bps")
     min_same_sign = _param_int(params, "min_same_sign_funding_events")
     max_recent = _param_float(params, "max_recent_same_direction_return_bps")
+    long_max_market_down = _param_float(params, "long_max_market_down_bps")
     selection_score = _param_str(params, "selection_score")
 
     # Idiosyncratic dislocation is the name's price extension measured against the
@@ -655,6 +680,11 @@ def _select_candidates(
             betas = _cross_section_betas(candidates)
 
     selections: list[_Selection] = []
+    short_signal_multiplier = _param_float(params, "short_signal_multiplier")
+    short_min_funding = min_funding * short_signal_multiplier
+    short_min_return = min_return * short_signal_multiplier
+    short_min_latest_funding = min_latest_funding * short_signal_multiplier
+    short_min_idio = min_idio * short_signal_multiplier
     for candidate in candidates:
         dislocation = dislocations[candidate.symbol]
         if dislocation is None:
@@ -671,6 +701,7 @@ def _select_candidates(
             and abs(candidate.latest_funding_bps) >= min_latest_funding
             and candidate.same_sign_funding_events >= min_same_sign
             and candidate.recent_return_bps >= -max_recent
+            and market_return_bps >= -long_max_market_down
             and idio_long >= min_idio
         ):
             selections.append(
@@ -683,12 +714,12 @@ def _select_candidates(
             )
         if (
             _param_bool(params, "include_positive_funding_shorts")
-            and candidate.funding_pressure_bps >= min_funding
-            and candidate.return_extension_bps >= min_return
-            and abs(candidate.latest_funding_bps) >= min_latest_funding
+            and candidate.funding_pressure_bps >= short_min_funding
+            and candidate.return_extension_bps >= short_min_return
+            and abs(candidate.latest_funding_bps) >= short_min_latest_funding
             and candidate.same_sign_funding_events >= min_same_sign
             and candidate.recent_return_bps <= max_recent
-            and idio_short >= min_idio
+            and idio_short >= short_min_idio
         ):
             selections.append(
                 _Selection(
@@ -715,6 +746,7 @@ def _selection_targets(
     n_universe: int,
     weighting: str,
     dislocation_weight_power: float = 1.0,
+    liquidity_weight_power: float = 0.0,
 ) -> list[float]:
     """Per-selection target magnitudes (before the signed side is applied).
 
@@ -725,16 +757,20 @@ def _selection_targets(
     preserved while high-vol names carry proportionally less. ``dislocation``
     reshapes the same budget in proportion to each name's idiosyncratic
     dislocation magnitude — conviction weighting that leans into the biggest
-    capitulations. Both reshaping modes preserve gross per decision and fall back
-    to equal weight on a degenerate set.
+    capitulations. ``capacity_dislocation`` keeps that conviction signal but
+    multiplies it by causal signal-bar dollar volume, shifting weight toward
+    names the capacity model can size. All reshaping modes preserve gross per
+    decision and fall back to equal weight on a degenerate set.
     """
 
     base = 1.0 / n_universe
     if weighting == "equal":
         return [base] * len(selections)
 
-    if weighting in {"dislocation", "combined", "capitulation"}:
+    if weighting in {"dislocation", "combined", "capitulation", "capacity_dislocation"}:
         if weighting == "dislocation":
+            signal = lambda s: s.idiosyncratic  # noqa: E731
+        elif weighting == "capacity_dislocation":
             signal = lambda s: s.idiosyncratic  # noqa: E731
         elif weighting == "combined":
             signal = lambda s: s.score  # noqa: E731
@@ -744,24 +780,45 @@ def _selection_targets(
             max(0.0, signal(selection)) ** dislocation_weight_power
             for selection in selections
         ]
+        if weighting == "capacity_dislocation" and liquidity_weight_power > 0.0:
+            liquidities = [
+                selection.candidate.dollar_volume for selection in selections
+            ]
+            known = [value for value in liquidities if value is not None]
+            if known:
+                mean_liquidity = sum(known) / len(known)
+                if mean_liquidity > 0.0:
+                    weights = [
+                        weight
+                        * (
+                            (
+                                (liquidity if liquidity is not None else mean_liquidity)
+                                / mean_liquidity
+                            )
+                            ** liquidity_weight_power
+                        )
+                        for weight, liquidity in zip(weights, liquidities)
+                    ]
         mean_weight = sum(weights) / len(weights) if weights else 0.0
         if mean_weight <= 0.0:
             return [base] * len(selections)
         return [base * value / mean_weight for value in weights]
 
-    inverse = [
+    inverse: list[float | None] = [
         1.0 / selection.candidate.volatility
         if selection.candidate.volatility
         else None
         for selection in selections
     ]
-    known = [value for value in inverse if value is not None]
-    if not known:
+    known_inverse: list[float] = [
+        value for value in inverse if value is not None
+    ]
+    if not known_inverse:
         return [base] * len(selections)
-    fill = sum(known) / len(known)
-    inverse = [value if value is not None else fill for value in inverse]
-    mean_inverse = sum(inverse) / len(inverse)
-    return [base * value / mean_inverse for value in inverse]
+    fill = sum(known_inverse) / len(known_inverse)
+    filled_inverse = [value if value is not None else fill for value in inverse]
+    mean_inverse = sum(filled_inverse) / len(filled_inverse)
+    return [base * value / mean_inverse for value in filled_inverse]
 
 
 def _cross_section_betas(candidates: Sequence[_Candidate]) -> dict[str, float]:
@@ -922,6 +979,12 @@ def _observations(candidate: _Candidate) -> tuple[ObservationRef, ...]:
             field="close",
             source="crypto_perp_1min_with_funding",
         ),
+        ObservationRef(
+            symbol=candidate.symbol,
+            timestamp=candidate.signal_row.timestamp,
+            field="volume",
+            source="crypto_perp_1min_with_funding",
+        ),
         *(
             (
                 ObservationRef(
@@ -1070,9 +1133,16 @@ def _cross_section_reference(value: object) -> str:
 
 def _weighting(value: object) -> str:
     parsed = str(value)
-    if parsed not in {"equal", "inverse_vol", "dislocation", "combined", "capitulation"}:
+    if parsed not in {
+        "equal",
+        "inverse_vol",
+        "dislocation",
+        "combined",
+        "capitulation",
+        "capacity_dislocation",
+    }:
         raise ValueError(
             "weighting must be one of: equal, inverse_vol, dislocation, combined, "
-            "capitulation"
+            "capitulation, capacity_dislocation"
         )
     return parsed

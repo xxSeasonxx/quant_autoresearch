@@ -122,6 +122,17 @@ thesis starts or explicitly approves the change.
 The thesis identity frozen for the lifecycle is the mechanism, the falsifier, and
 the `protocol.toml` evaluation (data, costs, fills, capacity, leverage budget,
 objective, gates, stop rules). That identity is what makes attempts comparable.
+
+State the mechanism and falsifier as the **invariant economic hypothesis** — the
+causal edge and what would disprove it — at the most general level that still keeps
+attempts comparable. They must not embed a lever this contract lists as editable
+(side logic, hold or exit horizon, cadence, allocation shape, weighting, selection
+thresholds, or a specific carried implementation win): naming one in the identity
+accidentally freezes it, forcing a reseed to change what should be an ordinary loop
+edit. Because restricting a lever (e.g. trading one side only) is always an in-loop
+edit while widening one embedded in the identity is a reseed, freeze the widest
+defensible mechanism and let the loop restrict from there.
+
 The `experiment.toml` search space is not part of it: bounds and params are yours
 to set and revise mid-run. The hard attempt cap bounds Train search pressure but
 does not turn the fixed Train strength hurdle into statistical proof or a
@@ -153,6 +164,16 @@ thresholds tuned until only the historically winning names ever trade is exactly
 that. Symbol-specific normalization, ranking, scaling, side treatment, and causal
 eligibility rules remain valid when they express the thesis and are visible in
 `rationale.md`.
+
+The universe is a researcher degree of freedom the Train score does not price. The
+hard attempt cap bounds only the searched `experiment.toml`/`strategy.py` space;
+the universe is frozen outside it. Trying several return-blind universes and
+keeping whichever lifecycle scores best is additional, unpriced multiple testing
+— luck that reads as skill. Guard it by direction of flow: universe
+*generalization* is resolved only downstream, OOS on the frozen survivor across
+return-blind universe definitions, never by comparing Train scores across universe
+lifecycles. Within a lifecycle the single frozen universe stands; its sensitivity
+is a reseed input recorded in the Reseed Log, not a Train metric.
 
 Generated artifacts under `.autoresearch/` and `results/` are evidence, not
 source. Use the latest diagnostics to choose the next Train edit, but do not

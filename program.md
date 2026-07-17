@@ -12,10 +12,9 @@ and OOS contamination can easily create false edges.
 ## North Star
 
 Your job is to push for the strongest real, tradeable economic return this Train
-thesis can support under the fixed protocol. The run score is the deployed
-annualized return, uncertainty-haircut: the full-Train deflated lower bound on the
-book's annualized return at its upstream-sized book, subject to robustness and
-practicality gates. A Train survivor is a candidate for Season's downstream OOS,
+thesis can support under the fixed protocol. The harness ranks attempts and
+filters keepers under the score and gates defined in `docs/score_research.md`. A
+Train survivor is a candidate for Season's downstream OOS,
 paper, and small-live review, not proof of deployability. Think like a skeptical
 quant: every change must be causal, feasible, auditable, and explainable from the
 target book, diagnostics, and sampled trades. The score and gates are evidence
@@ -124,10 +123,10 @@ The thesis identity frozen for the lifecycle is the mechanism, the falsifier, an
 the `protocol.toml` evaluation (data, costs, fills, capacity, leverage budget,
 objective, gates, stop rules). That identity is what makes attempts comparable.
 The `experiment.toml` search space is not part of it: bounds and params are yours
-to set and revise mid-run. Multiple-testing honesty comes from the hard attempt
-cap and the per-attempt score deflation, which price best-of-N regardless of how
-wide the search space is — so widening or tightening a bound is an ordinary loop
-edit, not a reseed.
+to set and revise mid-run. The hard attempt cap bounds Train search pressure but
+does not turn the fixed Train strength hurdle into statistical proof or a
+best-of-N correction. Widening or tightening a bound is an ordinary loop edit,
+not a reseed.
 
 Build within the operator-frozen leverage budget and capacity model; intended
 exposure beyond the budget fails closed upstream (see Target Book Rules).
@@ -178,7 +177,7 @@ A target book is a standing portfolio, not a stream of trade tickets.
   the deployed money the *shape* earns at the upstream-sized book; improve the
   edge's shape, breadth, and robustness, not a scale multiplier. Leverage is
   magnitude too: it scales return and risk together without changing the edge, so
-  levering up flatters the money score without improving the alpha — it is not a
+  levering up flatters full-window return without improving the alpha — it is not a
   knob you turn. If a different leverage budget is genuinely right, that is a
   reseed case for Season, not a mid-run change.
 - If capacity, financing, or execution cannot be priced by the engine, record the
@@ -207,7 +206,7 @@ Before each structural edit after the baseline, state:
 - falsifier: what result would kill it;
 - book effect: expected change to gross, net, turnover, concentration, capacity,
   and exits;
-- failure mode targeted: no edge, too sparse, too costly, side asymmetry, symbol
+- failure mode targeted: edge unproven, too sparse, too costly, side asymmetry, symbol
   concentration, time/regime dependence, exit mismatch, implementation limit, or
   data limit.
 

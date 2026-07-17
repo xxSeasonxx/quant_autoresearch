@@ -453,8 +453,8 @@ def _make_crash_row(
         iteration=iteration,
         status="crash",
         score=None,
-        deflated_return_lcb=None,
-        full_train_annualized_return=None,
+        train_strength_lcb=None,
+        full_train_at_risk_annualized_return=None,
         cost_stress_return_retention=None,
         book_scale=None,
         deployed_volatility=None,
@@ -466,9 +466,9 @@ def _make_crash_row(
         gate_flags="run_config=fail",
         trade_count=0,
         min_subwindow_trades=0,
-        total_return=None,
         max_drawdown=None,
         max_symbol_concentration=None,
+        effective_symbol_count=None,
         win_rate=None,
         profit_factor=None,
         avg_trade_net=None,
@@ -513,8 +513,10 @@ def _scored_result_row(
         iteration=iteration,
         status=status,
         score=objective.score,
-        deflated_return_lcb=_gate_value(gates, "significance"),
-        full_train_annualized_return=objective.full_train_return,
+        train_strength_lcb=_gate_value(gates, "train_strength"),
+        full_train_at_risk_annualized_return=(
+            objective.full_train_at_risk_annualized_return
+        ),
         cost_stress_return_retention=_gate_value(gates, "cost_stress_retention"),
         book_scale=None if sizing is None else sizing.book_scale,
         deployed_volatility=None if sizing is None else sizing.deployed_volatility,
@@ -528,13 +530,13 @@ def _scored_result_row(
         gate_flags=gates.flags(),
         trade_count=_reported_trade_count(trades, foundation_scenario),
         min_subwindow_trades=_min_subwindow_trades(objective),
-        total_return=None if full is None else full.total_return,
         max_drawdown=None if full is None else full.max_drawdown,
         max_symbol_concentration=(
             symbol_concentration(trades)
             if foundation_scenario is None and trades
             else (None if full is None else full.max_symbol_concentration)
         ),
+        effective_symbol_count=None if full is None else full.effective_symbol_count,
         win_rate=(
             sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
             if trades
@@ -659,15 +661,15 @@ def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, 
     payload: list[dict[str, object]] = []
     for window_id, annualized, standard_error in zip(
         objective.window_ids,
-        objective.window_returns,
-        objective.window_return_ses,
+        objective.window_at_risk_annualized_returns,
+        objective.window_at_risk_annualized_standard_errors,
     ):
         t_stat = annualized / standard_error if standard_error else None
         payload.append(
             {
                 "window_id": window_id,
-                "annualized_return": annualized,
-                "standard_error": standard_error,
+                "at_risk_annualized_return": annualized,
+                "at_risk_annualized_standard_error": standard_error,
                 "t_stat": t_stat,
             }
         )
@@ -751,11 +753,11 @@ def _failure_class(
     """Derived, human-legible reason an attempt is not a keeper (``edge`` if it is).
 
     A pure post-hoc classifier over already-computed gate outcomes — it forks no gate
-    logic. The ``significance`` gate is the key economic signal: a failure means the
-    deflated full-Train return is below zero — the edge is not distinguishable from
-    best-of-N noise (``no_edge``). Capacity throttling is not a failure: a significant
-    but capacity-limited edge passes, and its low deployed scale shows in the run score
-    and the ``capacity_bound`` diagnostic. Precedence is most-fundamental first:
+    logic. The ``train_strength`` gate is the key edge-strength signal: a failure means
+    the fixed full-Train at-risk return hurdle was not cleared (``edge_unproven``).
+    Capacity throttling is not a failure: a strength-passing but capacity-limited edge
+    passes, and its low deployed scale shows in the run score and the
+    ``capacity_bound`` diagnostic. Precedence is most-fundamental first:
     measurement validity, then the economic verdict, then breadth, then evidence, then
     any other failed gate.
     """
@@ -777,8 +779,8 @@ def _failure_class(
 
     if failed("causality"):
         return "causality"
-    if failed("significance"):
-        return "no_edge"
+    if failed("train_strength"):
+        return "edge_unproven"
     if failed("breadth"):
         return "breadth_bound"
     if failed("minimum_evidence"):
@@ -804,19 +806,25 @@ def _write_run_card(
     payload = {
         "score": None if objective is None else objective.score,
         "score_parts": {
-            "full_train_annualized_return": None
+            "full_window_total_return": None
             if objective is None
-            else objective.full_train_return,
-            "deflated_return_lcb": _gate_value(gates, "significance")
+            else objective.full_window_total_return,
+            "train_strength_lcb": _gate_value(gates, "train_strength")
             if gates is not None
             else None,
+            "full_train_at_risk_annualized_return": None
+            if objective is None
+            else objective.full_train_at_risk_annualized_return,
             "cost_stress_return_retention": _gate_value(gates, "cost_stress_retention")
             if gates is not None
             else None,
             "windows": _window_return_payload(objective),
-            "cost_stress_full_train_annualized_return": None
+            "cost_stress_full_window_total_return": None
             if cost_stress is None
-            else cost_stress.full_train_return,
+            else cost_stress.full_window_total_return,
+            "cost_stress_full_train_at_risk_annualized_return": None
+            if cost_stress is None
+            else cost_stress.full_train_at_risk_annualized_return,
             "diagnostics": {
                 "full_train_psr": None if objective is None else objective.full_train_psr,
                 "subwindow_psrs": []
@@ -836,7 +844,7 @@ def _write_run_card(
                 if objective is None
                 else sum(
                     1
-                    for value in objective.window_returns[1:]
+                    for value in objective.window_at_risk_annualized_returns[1:]
                     if not (isfinite(value) and value >= 0.0)
                 ),
             },
@@ -1245,7 +1253,9 @@ def run_iteration(
         components=components,
         config=protocol.gates,
         objective=objective,
-        cost_stress_full_train_return=stress.full_train_return,
+        cost_stress_full_train_at_risk_annualized_return=(
+            stress.full_train_at_risk_annualized_return
+        ),
         causality_admissible=_causality_admissible(result),
         foundation_scenario=foundation_scenario,
     )

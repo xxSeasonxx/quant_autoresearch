@@ -12,7 +12,7 @@ one comparable metric, one loop.
 
 This repo keeps that skeleton — a `program.md` runbook, a bounded editable surface,
 a keep-or-kill loop — but is deliberately more comprehensive and complex: upstream
-consumer contracts, honest-evidence gates, money-denominated scoring, causality and
+consumer contracts, honest-evidence gates, economic-return scoring, causality and
 capacity constraints, and configured stop rules. It trades autoresearch's minimalism
 for the rigor a skeptical quant researcher requires, using it as inspiration rather
 than template.
@@ -25,8 +25,11 @@ repo.
 You work on one human-seeded thesis at a time; every research decision serves that
 thesis — sharpen it, test it, learn why it fails, or kill it fast.
 
-For Train experiments, follow `program.md`; it is the authoritative runbook for
-setup, editable surface, evidence boundaries, loop behavior, and stop behavior.
+For Train experiments, follow the live `program.md`; it is the authoritative
+runbook for setup, editable surface, evidence boundaries, loop behavior, and stop
+behavior. Do not paraphrase it from memory, improvise around it, or relax it to
+make the run progress. When uncertain, reread it; if a rule looks wrong, use *If
+Instructions Conflict* below.
 
 ## Upstream Consumer Docs
 

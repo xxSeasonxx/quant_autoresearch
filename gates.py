@@ -4,17 +4,14 @@ Gates are separate from the run score: a high score with a failed gate is not a
 keepable candidate, and a failed gate never changes the score. The validity gates
 are:
 
-- ``significance``: the full-Train deployed-return lower bound, deflated at the
-  acceptance haircut ``k_accept`` (``gates.score_haircut_se``), must be positive —
-  i.e. the edge is statistically real after the best-of-N multiple-testing
-  correction (equivalently, the full-Train t-stat clears ``k_accept``). Materiality
-  (how much money the edge deploys) is not gated; it lives in the run score, which
-  the operator judges. A failed ``significance`` gate means the edge is not
-  distinguishable from best-of-N noise, not that it is merely small.
+- ``train_strength``: full-Train at-risk annualized return minus the configured
+  standard-error haircut must be nonnegative. This is a fixed Train development
+  hurdle, not statistical proof or a best-of-N correction. Materiality lives in
+  the full-window total-return score.
 - ``cost_stress_retention``: the cost-stress full-Train annualized return must
   retain at least ``min_cost_stress_return_retention`` of the realistic
   full-Train return, evaluated only when the realistic return is positive (a
-  non-positive realistic return is the money floor's kill, so retention is then
+  non-positive realistic return makes the ratio non-binding, so retention is then
   non-binding).
 - ``causality``: upstream replay evidence must be score-admissible. A bounded
   micro replay can be admissible for Train scoring without being retention-
@@ -26,10 +23,10 @@ complexity cap) constrain the evidence behind the score.
 Per-subwindow trade counts and per-slice returns are reported diagnostics, not
 gates: per-window sample sufficiency is owned by ``minimum_evidence`` (return
 samples and effective sample size, the latter autocorrelation-adjusted), and the
-binding in-sample robustness gate is the full-Train deflated ``significance`` gate.
+binding in-sample robustness gate is the full-Train ``train_strength`` gate.
 Per-slice return sign on contiguous, autocorrelated calendar slices is not gated
 — it cannot test regime independence (the firewalled OOS stage does that) and
-double-counts the full-Train deflation.
+duplicates the full-Train strength calculation.
 """
 
 from __future__ import annotations
@@ -42,7 +39,7 @@ from objective import (
     FoundationScenario,
     ObjectiveResult,
     TradeSample,
-    deflated_window_floor,
+    train_strength_floor,
 )
 
 
@@ -54,7 +51,7 @@ class GateConfig:
     max_symbol_concentration: float
     min_cost_stress_return_retention: float
     max_abs_drawdown: float
-    score_haircut_se: float
+    train_strength_haircut_se: float
     max_components: int
     max_params: int
 
@@ -112,7 +109,7 @@ def evaluate_gates(
     components: Sequence[str],
     config: GateConfig,
     objective: ObjectiveResult,
-    cost_stress_full_train_return: float | None,
+    cost_stress_full_train_at_risk_annualized_return: float | None,
     causality_admissible: bool | None,
     foundation_scenario: FoundationScenario | None = None,
 ) -> GateSet:
@@ -165,15 +162,15 @@ def evaluate_gates(
             and max_drawdown <= 0.0
             and max_drawdown >= -config.max_abs_drawdown
         )
-        significance_value = deflated_window_floor(
-            objective, k_accept=config.score_haircut_se
+        train_strength_value = train_strength_floor(
+            objective, haircut_se=config.train_strength_haircut_se
         )
-        significance_passed = (
-            significance_value is not None
-            and isfinite(significance_value)
-            and significance_value >= 0.0
+        train_strength_passed = (
+            train_strength_value is not None
+            and isfinite(train_strength_value)
+            and train_strength_value >= 0.0
         )
-        realistic_full_return = objective.full_train_return
+        realistic_full_return = objective.full_train_at_risk_annualized_return
         retention_binding = (
             realistic_full_return is not None
             and isfinite(realistic_full_return)
@@ -182,19 +179,22 @@ def evaluate_gates(
         if retention_binding:
             assert realistic_full_return is not None  # narrowed by retention_binding
             if (
-                cost_stress_full_train_return is None
-                or not isfinite(cost_stress_full_train_return)
+                cost_stress_full_train_at_risk_annualized_return is None
+                or not isfinite(cost_stress_full_train_at_risk_annualized_return)
             ):
                 retention_value: float | None = None
                 retention_passed = False
             else:
-                retention_value = cost_stress_full_train_return / realistic_full_return
+                retention_value = (
+                    cost_stress_full_train_at_risk_annualized_return
+                    / realistic_full_return
+                )
                 retention_passed = (
                     retention_value >= config.min_cost_stress_return_retention
                 )
         else:
-            # Non-binding: a non-positive realistic full-Train return is the money
-            # floor's economic kill, and the retention ratio's sign is ambiguous.
+            # Non-binding: the ratio's sign is ambiguous when the realistic
+            # full-Train at-risk annualized return is non-positive.
             retention_value = None
             retention_passed = True
         outcomes.extend(
@@ -216,13 +216,13 @@ def evaluate_gates(
                     threshold=-config.max_abs_drawdown,
                 ),
                 GateOutcome(
-                    name="significance",
-                    passed=significance_passed,
-                    value=significance_value,
+                    name="train_strength",
+                    passed=train_strength_passed,
+                    value=train_strength_value,
                     threshold=0.0,
                     detail=(
-                        f"k_accept={config.score_haircut_se}, full_train, "
-                        "deflated return > 0"
+                        f"haircut_se={config.train_strength_haircut_se}, "
+                        "full_train at-risk annualized return LCB >= 0"
                     ),
                 ),
                 GateOutcome(
@@ -231,7 +231,7 @@ def evaluate_gates(
                     value=retention_value,
                     threshold=config.min_cost_stress_return_retention,
                     detail=(
-                        "non-binding: realistic full-Train return <= 0"
+                        "non-binding: realistic full-Train at-risk annualized return <= 0"
                         if not retention_binding
                         else ""
                     ),

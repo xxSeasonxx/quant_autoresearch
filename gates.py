@@ -18,7 +18,11 @@ are:
   verified for downstream deployment review.
 
 The remaining gates (trade floor, minimum evidence, path risk, breadth,
-complexity cap) constrain the evidence behind the score.
+effective symbol count, complexity cap) constrain the evidence behind the score.
+``effective_symbol_count`` is a loose degeneracy floor: the inverse-HHI effective
+number of names carrying realized PnL must be at least
+``min_effective_symbol_count``, so a book cannot concentrate into one or two names
+while staying under the single-name ``breadth`` ceiling.
 
 Per-subwindow trade counts and per-slice returns are reported diagnostics, not
 gates: per-window sample sufficiency is owned by ``minimum_evidence`` (return
@@ -49,6 +53,7 @@ class GateConfig:
     min_return_sample_count: int
     min_effective_sample_size: float
     max_symbol_concentration: float
+    min_effective_symbol_count: float
     min_cost_stress_return_retention: float
     max_abs_drawdown: float
     train_strength_haircut_se: float
@@ -150,6 +155,12 @@ def evaluate_gates(
                 valid_effective_values.append(value)
         min_effective_sample_size = min(valid_effective_values, default=0.0)
         max_drawdown = foundation_scenario.full_train.max_drawdown
+        effective_symbol_count = foundation_scenario.full_train.effective_symbol_count
+        effective_symbol_count_passed = (
+            _finite_nonnegative(effective_symbol_count)
+            and effective_symbol_count is not None
+            and effective_symbol_count >= config.min_effective_symbol_count
+        )
         minimum_evidence_passed = (
             all(metric.return_sample_count >= 0 for metric in metrics)
             and min_return_sample_count >= config.min_return_sample_count
@@ -233,6 +244,17 @@ def evaluate_gates(
                     detail=(
                         "non-binding: realistic full-Train at-risk annualized return <= 0"
                         if not retention_binding
+                        else ""
+                    ),
+                ),
+                GateOutcome(
+                    name="effective_symbol_count",
+                    passed=effective_symbol_count_passed,
+                    value=effective_symbol_count,
+                    threshold=config.min_effective_symbol_count,
+                    detail=(
+                        "missing foundation effective_symbol_count"
+                        if effective_symbol_count is None
                         else ""
                     ),
                 ),

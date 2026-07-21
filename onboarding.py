@@ -292,6 +292,13 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
     adv_min_observations = _positive_int(data, "adv_min_observations")
     if adv_min_observations > adv_lookback_bars:
         raise ValueError("adv_min_observations must be <= adv_lookback_bars")
+    max_iterations = _iterations(data)
+    baseline_grace_iterations = _positive_int(data, "baseline_grace_iterations")
+    plateau_patience = _positive_int(data, "plateau_patience")
+    if plateau_patience > max_iterations:
+        raise ValueError("plateau_patience must be <= max_iterations")
+    if baseline_grace_iterations > max_iterations:
+        raise ValueError("baseline_grace_iterations must be <= max_iterations")
     return StrategyBrief(
         mechanism=_required_text(data, "mechanism"),
         observable=_required_text(data, "observable"),
@@ -334,9 +341,9 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         min_cost_stress_return_retention=_fraction(
             data, "min_cost_stress_return_retention"
         ),
-        max_iterations=_iterations(data),
-        baseline_grace_iterations=_positive_int(data, "baseline_grace_iterations"),
-        plateau_patience=_positive_int(data, "plateau_patience"),
+        max_iterations=max_iterations,
+        baseline_grace_iterations=baseline_grace_iterations,
+        plateau_patience=plateau_patience,
         min_abs_improvement=_nonnegative_float(data, "min_abs_improvement"),
         min_rel_improvement=_nonnegative_float(data, "min_rel_improvement"),
         max_components=_positive_int(data, "max_components"),
@@ -466,6 +473,9 @@ def _proposal_payload_without_hash(
     current: ProtocolConfig,
 ) -> dict[str, object]:
     train_strength_haircut = 2.0
+    # Universe-bounded: a floor above the eligible name count can never pass, so a
+    # single-instrument thesis gets 1.0 and a cross-section gets the 2.0 default.
+    min_effective_symbol_count = 1.0 if len(brief.symbols) <= 1 else 2.0
     current_protocol: dict[str, dict[str, object]] = {
         "data": {
             "kind": current.data.kind,
@@ -475,6 +485,7 @@ def _proposal_payload_without_hash(
             "end": current.data.end,
             "load_start": current.data.load_start,
             "load_end": current.data.load_end,
+            "universe_resolver_sha256": current.data.universe_resolver_sha256,
         },
         "capacity_model": {
             "portfolio_notional": current.capacity_model.portfolio_notional,
@@ -511,6 +522,7 @@ def _proposal_payload_without_hash(
             "min_return_sample_count": current.gates.min_return_sample_count,
             "min_effective_sample_size": current.gates.min_effective_sample_size,
             "max_symbol_concentration": current.gates.max_symbol_concentration,
+            "min_effective_symbol_count": current.gates.min_effective_symbol_count,
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
             "train_strength_haircut_se": (
@@ -529,6 +541,7 @@ def _proposal_payload_without_hash(
             "end": brief.train_end,
             "load_start": brief.load_start or None,
             "load_end": brief.load_end or None,
+            "universe_resolver_sha256": brief.universe_resolver_sha256,
         },
         "capacity_model": {
             "portfolio_notional": brief.capital_notional,
@@ -565,6 +578,7 @@ def _proposal_payload_without_hash(
             "min_return_sample_count": brief.min_return_sample_count,
             "min_effective_sample_size": brief.min_effective_sample_size,
             "max_symbol_concentration": brief.max_symbol_concentration,
+            "min_effective_symbol_count": min_effective_symbol_count,
             "min_cost_stress_return_retention": brief.min_cost_stress_return_retention,
             "max_abs_drawdown": brief.max_abs_drawdown,
             "train_strength_haircut_se": train_strength_haircut,
@@ -620,6 +634,7 @@ def _proposal_payload_without_hash(
             "data.end": "Set the Train end before any result is inspected; OOS remains outside the loop.",
             "data.load_start": "Use only as an execution/data-readiness buffer, not as scored Train evidence.",
             "data.load_end": "Use only as an execution/data-readiness buffer, not as scored Train evidence.",
+            "data.universe_resolver_sha256": "Bind the return-blind resolver artifact hash; leave empty only for a Season-approved explicit symbol list.",
             "capacity_model.portfolio_notional": "Map the mandate capital/notional directly into the capacity envelope.",
             "capacity_model.adv_lookback_bars": "Use the approved liquidity-history window for ADV capacity checks.",
             "capacity_model.adv_min_observations": "Require enough liquidity observations before capacity is trusted.",
@@ -644,6 +659,7 @@ def _proposal_payload_without_hash(
             "gates.min_return_sample_count": "Require enough portfolio-return observations in each scored window.",
             "gates.min_effective_sample_size": "Require enough autocorrelation-adjusted evidence in each scored window.",
             "gates.max_symbol_concentration": "Set the maximum allowed one-symbol dependence for the claim.",
+            "gates.min_effective_symbol_count": "Set the minimum effective number of names carrying PnL (inverse-HHI); use 1.0 for a single-instrument thesis, 2-3 for a cross-sectional book.",
             "gates.min_cost_stress_return_retention": "Set the minimum cost-stress robustness requirement.",
             "gates.max_abs_drawdown": "Map the maximum tolerable drawdown directly into the path-risk gate.",
             "gates.train_strength_haircut_se": "Use a fixed 2-SE Train strength hurdle; it is not statistical proof or a best-of-N correction.",

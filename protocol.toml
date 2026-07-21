@@ -15,6 +15,7 @@ start = "2025-03-01"
 end = "2025-12-31"
 load_start = "2025-03-01"
 load_end = "2026-01-07"
+universe_resolver_sha256 = "af86c54906b2fa89af4ad62007fe47dcdfbca563c0806e2ee706df2c92f9b82b"
 
 [fill_model]
 price = "close"
@@ -55,11 +56,11 @@ foundation_subwindows = 6
 foundation_cost_stress_multiplier = 2.0
 
 [loop]
-plateau_patience = 50
-max_iterations = 50
+plateau_patience = 30
+max_iterations = 30
 min_abs_improvement = 0.001
 min_rel_improvement = 0.0
-baseline_grace_iterations = 50
+baseline_grace_iterations = 30
 
 [objective]
 kind = "full_window_total_return"
@@ -71,6 +72,7 @@ min_trades = 120
 min_return_sample_count = 100
 min_effective_sample_size = 50.0
 max_symbol_concentration = 0.70
+min_effective_symbol_count = 2.0
 min_cost_stress_return_retention = 0.50
 max_abs_drawdown = 0.25
 train_strength_haircut_se = 2.0

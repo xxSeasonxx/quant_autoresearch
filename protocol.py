@@ -21,6 +21,7 @@ class DataConfig:
     end: str
     load_start: str | None = None
     load_end: str | None = None
+    universe_resolver_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +405,22 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
         name="output.foundation_cost_stress_multiplier",
         minimum=1.0,
     )
+    plateau_patience = _positive_int(
+        _required(raw_loop, "plateau_patience"), name="loop.plateau_patience"
+    )
+    max_iterations = _positive_int(
+        _required(raw_loop, "max_iterations"), name="loop.max_iterations"
+    )
+    baseline_grace_iterations = _positive_int(
+        raw_loop.get("baseline_grace_iterations", plateau_patience),
+        name="loop.baseline_grace_iterations",
+    )
+    if plateau_patience > max_iterations:
+        raise ValueError("loop.plateau_patience must be <= loop.max_iterations")
+    if baseline_grace_iterations > max_iterations:
+        raise ValueError(
+            "loop.baseline_grace_iterations must be <= loop.max_iterations"
+        )
 
     return ProtocolConfig(
         strategy_path=str(_required(data, "strategy_path")),
@@ -416,6 +433,9 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             end=str(_required(raw_data, "end")),
             load_start=_optional_text(raw_data.get("load_start")),
             load_end=_optional_text(raw_data.get("load_end")),
+            universe_resolver_sha256=_optional_text(
+                raw_data.get("universe_resolver_sha256")
+            ),
         ),
         fill_model=FillModel(
             price=fill_price,
@@ -484,14 +504,8 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             foundation_cost_stress_multiplier=foundation_cost_stress_multiplier,
         ),
         loop=LoopConfig(
-            plateau_patience=_positive_int(
-                _required(raw_loop, "plateau_patience"),
-                name="loop.plateau_patience",
-            ),
-            max_iterations=_positive_int(
-                _required(raw_loop, "max_iterations"),
-                name="loop.max_iterations",
-            ),
+            plateau_patience=plateau_patience,
+            max_iterations=max_iterations,
             min_abs_improvement=_nonnegative_float(
                 _required(raw_loop, "min_abs_improvement"),
                 name="loop.min_abs_improvement",
@@ -500,10 +514,7 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 _required(raw_loop, "min_rel_improvement"),
                 name="loop.min_rel_improvement",
             ),
-            baseline_grace_iterations=_positive_int(
-                raw_loop.get("baseline_grace_iterations", raw_loop["plateau_patience"]),
-                name="loop.baseline_grace_iterations",
-            ),
+            baseline_grace_iterations=baseline_grace_iterations,
         ),
         objective=ObjectiveConfig(
             kind=objective_kind,
@@ -529,6 +540,11 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
             max_symbol_concentration=_fraction(
                 _required(raw_gates, "max_symbol_concentration"),
                 name="gates.max_symbol_concentration",
+            ),
+            min_effective_symbol_count=_min_float(
+                _required(raw_gates, "min_effective_symbol_count"),
+                name="gates.min_effective_symbol_count",
+                minimum=1.0,
             ),
             min_cost_stress_return_retention=_fraction(
                 _required(raw_gates, "min_cost_stress_return_retention"),

@@ -78,6 +78,7 @@ min_trades = 10
 min_return_sample_count = 100
 min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
+min_effective_symbol_count = 2.0
 min_cost_stress_return_retention = 0.5
 max_abs_drawdown = 0.2
 train_strength_haircut_se = 2.0
@@ -228,6 +229,7 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert recommended["gates"]["min_return_sample_count"] == 200
     assert recommended["gates"]["min_effective_sample_size"] == 80.0
     assert recommended["gates"]["max_symbol_concentration"] == 0.60
+    assert recommended["gates"]["min_effective_symbol_count"] == 2.0
     assert recommended["gates"]["min_cost_stress_return_retention"] == 0.55
     assert recommended["gates"]["max_components"] == 4
     assert recommended["gates"]["max_params"] == 12
@@ -274,6 +276,10 @@ def test_protocol_proposal_accepts_universe_artifact_without_explicit_symbols(
     ]
     assert proposal.thesis["universe_artifact"] == str(artifact_path)
     assert proposal.thesis["universe_resolver_sha256"] == artifact_hash
+    assert (
+        proposal.recommended_protocol["data"]["universe_resolver_sha256"]
+        == artifact_hash
+    )
     assert any("eligibility-based" in warning for warning in proposal.warnings)
 
 
@@ -367,6 +373,19 @@ def test_protocol_proposal_rejects_malformed_universe_artifact(tmp_path: Path):
         build_protocol_proposal(brief_path, protocol_path=protocol_path)
 
 
+def test_recommended_effective_symbol_floor_is_one_for_single_instrument(
+    tmp_path: Path,
+):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(_protocol_text())
+    brief_path = tmp_path / "brief.md"
+    brief_path.write_text(_brief_text(symbols='"BTC-PERP"'))
+
+    proposal = build_protocol_proposal(brief_path, protocol_path=protocol_path)
+
+    assert proposal.recommended_protocol["gates"]["min_effective_symbol_count"] == 1.0
+
+
 @pytest.mark.parametrize(
     ("brief", "message"),
     [
@@ -383,6 +402,16 @@ def test_protocol_proposal_rejects_malformed_universe_artifact(tmp_path: Path):
         (
             _brief_text().replace("objective_subwindows = 6", "objective_subwindows = 0"),
             "objective_subwindows must be > 0",
+        ),
+        (
+            _brief_text().replace("plateau_patience = 30", "plateau_patience = 60"),
+            "plateau_patience must be <= max_iterations",
+        ),
+        (
+            _brief_text().replace(
+                "baseline_grace_iterations = 40", "baseline_grace_iterations = 60"
+            ),
+            "baseline_grace_iterations must be <= max_iterations",
         ),
     ],
 )

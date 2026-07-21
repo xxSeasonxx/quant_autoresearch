@@ -57,7 +57,6 @@ class AttemptProvenance:
 @dataclass(frozen=True)
 class RationaleComponentParse:
     components: tuple[str, ...]
-    warnings: tuple[str, ...]
 
 
 def validate_thesis(mechanism: str, falsifier: str) -> str | None:
@@ -102,17 +101,11 @@ def _parse_rationale_components(
     if not components:
         path_name = Path(path).name
         if found_section:
-            warning = (
-                f"{path_name} Signal Components section has no Component headings; "
-                "assuming zero declared components"
+            raise ValueError(
+                f"{path_name} Signal Components section has no '### Component:' headings"
             )
-        else:
-            warning = (
-                f"{path_name} has no Signal Components section; "
-                "assuming zero declared components"
-            )
-        return RationaleComponentParse(components=(), warnings=(warning,))
-    return RationaleComponentParse(components=tuple(components), warnings=())
+        raise ValueError(f"{path_name} has no '## Signal Components' section")
+    return RationaleComponentParse(components=tuple(components))
 
 
 def components_from_rationale(path: str | Path = "rationale.md") -> tuple[str, ...]:
@@ -188,6 +181,7 @@ def _ensure_active_thesis_lock(
     falsifier: str,
     protocol_sha256: str,
     results_path: str | Path,
+    universe_resolver_sha256: str | None = None,
 ) -> None:
     lock_path = _lock_path(root)
     normalized_mechanism = _normalize_thesis_text(mechanism)
@@ -204,6 +198,7 @@ def _ensure_active_thesis_lock(
             "mechanism": normalized_mechanism,
             "falsifier": normalized_falsifier,
             "protocol_sha256": protocol_sha256,
+            "universe_resolver_sha256": universe_resolver_sha256,
             "results_path": result_path_text,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -469,6 +464,7 @@ def _make_crash_row(
         max_drawdown=None,
         max_symbol_concentration=None,
         effective_symbol_count=None,
+        max_positive_subwindow_return_share=None,
         win_rate=None,
         profit_factor=None,
         avg_trade_net=None,
@@ -488,6 +484,31 @@ def _make_crash_row(
 def _gate_value(gates: GateSet, name: str) -> float | None:
     outcome = gates.by_name.get(name)
     return None if outcome is None else outcome.value
+
+
+def _max_positive_subwindow_return_share(
+    foundation_scenario: FoundationScenario | None,
+) -> float | None:
+    """Largest single subwindow's share of total positive subwindow return.
+
+    A reported time-concentration diagnostic, never a gate: subwindow
+    ``total_return`` is a compounded return ratio, not currency PnL, so this is a
+    crude proxy for whether the edge is earned in one slice. ``None`` when no
+    subwindow has a positive return.
+    """
+    if foundation_scenario is None:
+        return None
+    positive = [
+        metric.total_return
+        for metric in foundation_scenario.subwindows
+        if metric.total_return is not None
+        and isfinite(metric.total_return)
+        and metric.total_return > 0.0
+    ]
+    total = sum(positive)
+    if total <= 0.0:
+        return None
+    return max(positive) / total
 
 
 def _scored_result_row(
@@ -537,6 +558,9 @@ def _scored_result_row(
             else (None if full is None else full.max_symbol_concentration)
         ),
         effective_symbol_count=None if full is None else full.effective_symbol_count,
+        max_positive_subwindow_return_share=_max_positive_subwindow_return_share(
+            foundation_scenario
+        ),
         win_rate=(
             sum(1 for trade in trades if trade.net_return > 0.0) / len(trades)
             if trades
@@ -847,6 +871,11 @@ def _write_run_card(
                     for value in objective.window_at_risk_annualized_returns[1:]
                     if not (isfinite(value) and value >= 0.0)
                 ),
+                "max_positive_subwindow_return_share": (
+                    _max_positive_subwindow_return_share(
+                        None if foundation is None else foundation.realistic_costs
+                    )
+                ),
             },
         },
         "sizing_report": _sizing_payload(foundation),
@@ -1040,7 +1069,7 @@ def _finalize_crash(
     cost_stress: ObjectiveResult | None,
     gates: GateSet | None,
     foundation: FoundationEvidence | None,
-    warnings: Sequence[str],
+    warnings: Sequence[str] = (),
     strategy_path: str | Path,
     protocol_path: str | Path,
     experiment_path: str | Path,
@@ -1119,7 +1148,6 @@ def run_iteration(
     protocol_path: str | Path = "protocol.toml",
     experiment_path: str | Path = "experiment.toml",
     rationale_path: str | Path = "rationale.md",
-    component_warnings: Sequence[str] = (),
 ) -> IterationOutcome:
     start = time.monotonic()
     root = Path(workdir)
@@ -1180,7 +1208,6 @@ def run_iteration(
             cost_stress=None,
             gates=None,
             foundation=None,
-            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1206,7 +1233,6 @@ def run_iteration(
             cost_stress=None,
             gates=None,
             foundation=None,
-            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1239,7 +1265,6 @@ def run_iteration(
             cost_stress=stress,
             gates=None,
             foundation=foundation,
-            warnings=component_warnings,
             strategy_path=protocol.strategy_path,
             protocol_path=protocol_path,
             experiment_path=experiment_path,
@@ -1267,7 +1292,6 @@ def run_iteration(
         cost_stress=stress,
         gates=gates,
         foundation=foundation,
-        warnings=component_warnings,
     )
     keep = is_improvement(objective.score, best_score, gates.passed, protocol.loop)
     status = "keep" if keep else "discard"
@@ -1375,13 +1399,10 @@ def climb_once(
     )
     _ensure_can_attempt(rows, snapshot, root=Path("."))
     experiment = load_experiment(params_path)
-    component_warnings: tuple[str, ...] = ()
     if components is not None:
         declared_components = tuple(components)
     else:
-        parsed_components = _parse_rationale_components("rationale.md")
-        declared_components = parsed_components.components
-        component_warnings = parsed_components.warnings
+        declared_components = components_from_rationale("rationale.md")
     _ensure_active_thesis_lock(
         Path("."),
         rows=rows,
@@ -1389,6 +1410,7 @@ def climb_once(
         falsifier=falsifier,
         protocol_sha256=snapshot["protocol_sha256"],
         results_path=results_path,
+        universe_resolver_sha256=cfg.data.universe_resolver_sha256,
     )
     params = experiment.params
     best_score = max(
@@ -1408,7 +1430,6 @@ def climb_once(
         protocol_path=protocol_path,
         experiment_path=params_path,
         rationale_path="rationale.md",
-        component_warnings=component_warnings,
     )
 
 

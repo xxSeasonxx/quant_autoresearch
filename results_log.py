@@ -37,6 +37,7 @@ class ResultRow:
     max_drawdown: float | None
     max_symbol_concentration: float | None
     effective_symbol_count: float | None
+    max_positive_subwindow_return_share: float | None
     win_rate: float | None
     profit_factor: float | None
     avg_trade_net: float | None
@@ -74,6 +75,7 @@ class ResultRow:
             "max_drawdown",
             "max_symbol_concentration",
             "effective_symbol_count",
+            "max_positive_subwindow_return_share",
             "win_rate",
             "profit_factor",
             "avg_trade_net",
@@ -119,6 +121,9 @@ class ResultRow:
             "max_drawdown": optional(self.max_drawdown),
             "max_symbol_concentration": optional(self.max_symbol_concentration),
             "effective_symbol_count": optional(self.effective_symbol_count),
+            "max_positive_subwindow_return_share": optional(
+                self.max_positive_subwindow_return_share
+            ),
             "win_rate": optional(self.win_rate),
             "profit_factor": optional(self.profit_factor),
             "avg_trade_net": optional(self.avg_trade_net),
@@ -189,6 +194,9 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         max_drawdown=_parse_float(row["max_drawdown"]),
         max_symbol_concentration=_parse_float(row["max_symbol_concentration"]),
         effective_symbol_count=_parse_float(row["effective_symbol_count"]),
+        max_positive_subwindow_return_share=_parse_float(
+            row["max_positive_subwindow_return_share"]
+        ),
         win_rate=_parse_float(row["win_rate"]),
         profit_factor=_parse_float(row["profit_factor"]),
         avg_trade_net=_parse_float(row["avg_trade_net"]),

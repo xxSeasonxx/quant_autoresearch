@@ -410,20 +410,3 @@ def is_improvement(
         loop.min_rel_improvement * max(1.0, abs(best_score)),
     )
     return score > best_score + threshold
-
-
-def plateau_reached(
-    *,
-    non_improving_since_best: int,
-    feasible_baseline: bool,
-    loop: LoopConfig,
-) -> bool:
-    """Return whether non-improving attempts have exhausted patience."""
-
-    return feasible_baseline and non_improving_since_best >= loop.plateau_patience
-
-
-def max_iterations_reached(*, completed_iterations: int, loop: LoopConfig) -> bool:
-    """Return whether the configured hard iteration cap has been reached."""
-
-    return completed_iterations >= loop.max_iterations

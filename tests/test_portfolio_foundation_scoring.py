@@ -23,7 +23,6 @@ from objective import (
     ObjectiveResult,
     TradeSample,
     is_improvement,
-    plateau_reached,
     train_strength_floor,
     score_foundation_cost_stress,
     score_objective,
@@ -260,6 +259,7 @@ def _gate_config() -> GateConfig:
         min_return_sample_count=100,
         min_effective_sample_size=50.0,
         max_symbol_concentration=0.75,
+        min_effective_symbol_count=2.0,
         min_cost_stress_return_retention=0.5,
         max_abs_drawdown=0.2,
         train_strength_haircut_se=2.0,
@@ -301,6 +301,7 @@ dataset = "equity_1min"
 symbols = ["SPY"]
 start = "2025-01-01"
 end = "2025-01-31"
+universe_resolver_sha256 = "resolver-test-hash"
 
 [fill_model]
 price = "close"
@@ -350,6 +351,7 @@ min_trades = 10
 min_return_sample_count = 100
 min_effective_sample_size = 50.0
 max_symbol_concentration = 0.75
+min_effective_symbol_count = 2.0
 min_cost_stress_return_retention = 0.5
 max_abs_drawdown = 0.2
 train_strength_haircut_se = 2.0
@@ -371,6 +373,7 @@ def test_protocol_materializes_money_objective_and_micro(tmp_path: Path):
     assert isinstance(output, Mapping)
 
     assert protocol.output.causality_check == "micro"
+    assert protocol.data.universe_resolver_sha256 == "resolver-test-hash"
     assert protocol.objective.kind == "full_window_total_return"
     assert protocol.gates.train_strength_haircut_se == 2.0
     assert protocol.gates.min_cost_stress_return_retention == 0.5
@@ -449,6 +452,30 @@ def test_train_strength_haircut_is_independent_of_max_iterations(tmp_path: Path)
     bigger.write_text(_protocol_text().replace("max_iterations = 10", "max_iterations = 500"))
 
     assert load_protocol(base).gates.train_strength_haircut_se == load_protocol(bigger).gates.train_strength_haircut_se
+
+
+def test_protocol_rejects_plateau_patience_above_max_iterations(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        _protocol_text().replace("plateau_patience = 5", "plateau_patience = 20")
+    )
+    with pytest.raises(
+        ValueError, match="loop.plateau_patience must be <= loop.max_iterations"
+    ):
+        load_protocol(protocol_path)
+
+
+def test_protocol_rejects_baseline_grace_above_max_iterations(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        _protocol_text().replace(
+            "baseline_grace_iterations = 3", "baseline_grace_iterations = 20"
+        )
+    )
+    with pytest.raises(
+        ValueError, match="loop.baseline_grace_iterations must be <= loop.max_iterations"
+    ):
+        load_protocol(protocol_path)
 
 
 # --- money score -----------------------------------------------------------
@@ -631,7 +658,7 @@ def test_unknown_objective_kind_is_rejected():
         raise AssertionError("expected unknown objective kind to raise")
 
 
-def test_improvement_and_plateau_rules_are_unchanged():
+def test_improvement_rule_unchanged():
     config = LoopConfig(
         plateau_patience=3,
         max_iterations=10,
@@ -643,15 +670,76 @@ def test_improvement_and_plateau_rules_are_unchanged():
     assert not is_improvement(0.051, 0.05, True, config)
     assert is_improvement(0.0510001, 0.05, True, config)
     assert not is_improvement(0.10, 0.05, False, config)
-    assert not plateau_reached(
-        non_improving_since_best=3,
-        feasible_baseline=False,
-        loop=config,
+
+
+def _stop_rows(statuses: tuple[tuple[int, str], ...]) -> list[ResultRow]:
+    return [
+        replace(
+            _row(),
+            iteration=iteration,
+            status=status,
+            score=(0.05 if status == "keep" else None),
+        )
+        for iteration, status in statuses
+    ]
+
+
+def test_stop_reason_after_attempt_covers_all_branches():
+    config = LoopConfig(
+        plateau_patience=3,
+        max_iterations=10,
+        min_abs_improvement=0.001,
+        min_rel_improvement=0.0,
+        baseline_grace_iterations=3,
     )
-    assert plateau_reached(
-        non_improving_since_best=3,
-        feasible_baseline=True,
-        loop=config,
+    passing = _gates_with()
+    complexity_failed = _gates_with(failed=frozenset({"complexity_cap"}))
+
+    # Continue: a keep with neither a plateau nor the cap reached.
+    live = _stop_rows(((1, "keep"), (2, "discard")))
+    assert loop._stop_reason_after_attempt(live, gates=passing, loop_config=config) == ""
+
+    # complexity_exhausted takes precedence over every other reason.
+    assert (
+        loop._stop_reason_after_attempt(
+            live, gates=complexity_failed, loop_config=config
+        )
+        == "complexity_exhausted"
+    )
+
+    # baseline_failure: no keep and the grace window is reached.
+    no_keep = _stop_rows(tuple((i, "discard") for i in range(1, 4)))
+    assert (
+        loop._stop_reason_after_attempt(no_keep, gates=passing, loop_config=config)
+        == "baseline_failure"
+    )
+
+    # plateau: a keep followed by patience non-improving attempts, below the cap.
+    plateau = _stop_rows(((1, "keep"), (2, "discard"), (3, "discard"), (4, "discard")))
+    assert (
+        loop._stop_reason_after_attempt(plateau, gates=passing, loop_config=config)
+        == "plateau"
+    )
+
+    # max_iterations: a keep near the cap without enough non-improving for plateau.
+    near_cap = _stop_rows(
+        tuple((i, "discard") for i in range(1, 8))
+        + ((8, "keep"), (9, "discard"), (10, "discard"))
+    )
+    assert (
+        loop._stop_reason_after_attempt(near_cap, gates=passing, loop_config=config)
+        == "max_iterations"
+    )
+
+    # plateau is checked before max_iterations when both hold.
+    plateau_at_cap = _stop_rows(
+        ((1, "keep"),) + tuple((i, "discard") for i in range(2, 11))
+    )
+    assert (
+        loop._stop_reason_after_attempt(
+            plateau_at_cap, gates=passing, loop_config=config
+        )
+        == "plateau"
     )
 
 
@@ -806,6 +894,42 @@ def test_breadth_gate_fails_when_foundation_concentration_missing():
     assert "missing foundation" in gates.by_name["breadth"].detail
 
 
+def test_effective_symbol_count_gate_passes_balanced_and_fails_degenerate():
+    _, _, gates = _evaluate(_foundation())  # full_train effective_symbol_count is 3.0
+    assert gates.by_name["effective_symbol_count"].passed
+    assert gates.by_name["effective_symbol_count"].threshold == 2.0
+
+    base = _foundation()
+    degenerate = replace(
+        base,
+        realistic_costs=replace(
+            base.realistic_costs,
+            full_train=replace(
+                base.realistic_costs.full_train, effective_symbol_count=1.0
+            ),
+        ),
+    )
+    _, _, gates_bad = _evaluate(degenerate)
+    assert not gates_bad.by_name["effective_symbol_count"].passed
+    assert gates_bad.by_name["effective_symbol_count"].value == 1.0
+
+
+def test_effective_symbol_count_gate_fails_when_foundation_missing():
+    base = _foundation()
+    missing = replace(
+        base,
+        realistic_costs=replace(
+            base.realistic_costs,
+            full_train=replace(
+                base.realistic_costs.full_train, effective_symbol_count=None
+            ),
+        ),
+    )
+    _, _, gates = _evaluate(missing)
+    assert not gates.by_name["effective_symbol_count"].passed
+    assert "missing foundation" in gates.by_name["effective_symbol_count"].detail
+
+
 def test_path_risk_gate_still_binds_on_full_window_drawdown():
     _, _, gates = _evaluate(_foundation(max_drawdown=-0.25))
 
@@ -833,6 +957,36 @@ def test_complexity_gate_still_counts_params_and_components():
     assert not gates.by_name["complexity_cap"].passed
 
 
+def test_max_positive_subwindow_return_share_diagnostic():
+    assert loop._max_positive_subwindow_return_share(None) is None
+
+    base = _foundation()
+    # Default subwindows each have total_return 0.05: share = 0.05 / 0.15.
+    assert loop._max_positive_subwindow_return_share(
+        base.realistic_costs
+    ) == pytest.approx(1 / 3)
+
+    # One dominant positive subwindow, the rest non-positive → share ~1.0.
+    concentrated = replace(
+        base.realistic_costs,
+        subwindows=(
+            replace(base.realistic_costs.subwindows[0], total_return=0.20),
+            replace(base.realistic_costs.subwindows[1], total_return=-0.01),
+            replace(base.realistic_costs.subwindows[2], total_return=0.0),
+        ),
+    )
+    assert loop._max_positive_subwindow_return_share(concentrated) == pytest.approx(1.0)
+
+    # No positive subwindow → None (not scoreable as a share).
+    all_negative = replace(
+        base.realistic_costs,
+        subwindows=tuple(
+            replace(sw, total_return=-0.02) for sw in base.realistic_costs.subwindows
+        ),
+    )
+    assert loop._max_positive_subwindow_return_share(all_negative) is None
+
+
 # --- ledger ----------------------------------------------------------------
 
 
@@ -858,6 +1012,7 @@ def _row() -> ResultRow:
         max_drawdown=-0.03,
         max_symbol_concentration=0.4,
         effective_symbol_count=3.0,
+        max_positive_subwindow_return_share=0.6,
         win_rate=0.55,
         profit_factor=1.4,
         avg_trade_net=0.001,
@@ -958,12 +1113,30 @@ def _write_workspace(tmp_path: Path) -> None:
     (tmp_path / "rationale.md").write_text("## Signal Components\n\n### Component: signal\n")
 
 
-def test_climb_once_warns_and_runs_when_rationale_components_missing(
+def test_climb_once_fails_closed_when_rationale_components_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     _write_workspace(tmp_path)
     (tmp_path / "rationale.md").write_text("# Rationale\n\n## Thesis\nNo components yet.\n")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="no '## Signal Components' section"):
+        loop.climb_once(
+            mechanism="Funding pressure mean reverts.",
+            falsifier="No post-cost robustness.",
+            runner=lambda *args, **kwargs: None,
+        )
+
+    # Fail closed: no attempt is logged when the components section is malformed.
+    assert not (tmp_path / "results/autoresearch/attempt-0001").exists()
+
+
+def test_climb_once_records_universe_resolver_hash_in_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write_workspace(tmp_path)
     result = FakeRunResult(
         succeeded=True,
         economics=None,
@@ -972,28 +1145,22 @@ def test_climb_once_warns_and_runs_when_rationale_components_missing(
     )
     monkeypatch.chdir(tmp_path)
 
-    outcome = loop.climb_once(
+    loop.climb_once(
         mechanism="Funding pressure mean reverts.",
         falsifier="No post-cost robustness.",
         runner=lambda *args, **kwargs: result,
     )
 
-    row = read_results(tmp_path / "results.tsv")[0]
-    run_card = json.loads(
-        (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
-    )
-    assert outcome.status == "keep"
-    assert row.complexity_count == 0
-    assert run_card["warnings"] == [
-        "rationale.md has no Signal Components section; assuming zero declared components"
-    ]
+    lock = json.loads((tmp_path / ".autoresearch" / "thesis_lock.json").read_text())
+    assert lock["universe_resolver_sha256"] == "resolver-test-hash"
 
 
-def test_rationale_components_empty_section_is_empty_metadata(tmp_path: Path):
+def test_rationale_components_empty_section_fails_closed(tmp_path: Path):
     rationale = tmp_path / "rationale.md"
     rationale.write_text("# Rationale\n\n## Signal Components\n\n## Variant Log\n")
 
-    assert loop.components_from_rationale(rationale) == ()
+    with pytest.raises(ValueError, match="no '### Component:' headings"):
+        loop.components_from_rationale(rationale)
 
 
 def test_rationale_components_reject_blank_or_duplicate_headings(tmp_path: Path):
@@ -1064,6 +1231,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert rows[0].win_rate == 0.5
     assert rows[0].cost_return_sum == 0.004
     assert rows[0].effective_symbol_count == 3.0
+    assert rows[0].max_positive_subwindow_return_share == pytest.approx(1 / 3)
 
     payload = json.loads(run_card.read_text())
     score_parts = payload["score_parts"]
@@ -1076,6 +1244,9 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
         == 0.0008 * _P
     )
     assert len(payload["score_parts"]["windows"]) == 4
+    assert payload["score_parts"]["diagnostics"][
+        "max_positive_subwindow_return_share"
+    ] == pytest.approx(1 / 3)
     full_window = payload["score_parts"]["windows"][0]
     assert full_window["at_risk_annualized_return"] == 0.0012 * _P
     assert full_window["at_risk_annualized_standard_error"] is not None
@@ -1334,6 +1505,7 @@ def _gates_with(
         "path_risk",
         "train_strength",
         "cost_stress_retention",
+        "effective_symbol_count",
         "breadth",
         "causality",
         "complexity_cap",

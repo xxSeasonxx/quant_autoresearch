@@ -52,17 +52,12 @@ details.
 
 ## Research Rules
 
-- Be bold about strategy research and conservative about evidence.
-- Inside the active contract, do whatever honest quant research requires to make a
-  strategy work, but never weaken the evidence needed to believe it.
-- Treat Train robustness as a development filter, not deployability evidence.
-- Do not run or wire OOS evaluation inside auto-research.
-- Keep strategy logic simple, causal, and auditable.
-- Do not hide data, fill, cost, or engine limitations in strategy code.
-- Build within the operator-frozen leverage budget and capacity model; intended
-  exposure beyond the budget is a non-scoreable feasibility verdict, not a low score.
-- Treat generated artifacts as evidence, not source.
+- Be bold about strategy research and conservative about evidence: inside the
+  active contract, do whatever honest quant research requires, but never weaken the
+  evidence needed to believe the result.
 - Do not use any skills during a Train experiment.
+- `program.md` governs the loop — editable surface, evidence boundary, target-book
+  rules, scoring, and stop behavior. Do not restate its rules here.
 
 ## If Instructions Conflict
 
@@ -70,6 +65,6 @@ Prefer the more specific active contract in `program.md`, `protocol.toml`, and
 the current thesis files.
 
 Do not change protocol-owned research assumptions unless the active contract or
-Season explicitly allows it. If one looks wrong, note it in `rationale.md` and
+Season explicitly allows it. If one looks wrong, note it in `reseed_log.md` and
 keep the run inside the current contract; an unworkable contract should die
 through the configured Train stop rules.

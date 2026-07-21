@@ -101,7 +101,3 @@ count, and the weakest subwindow before choosing one thesis-driven edit.
 
 - Baseline pending under the current score, schema, strategy schedule, universe,
   and causality budget.
-
-## Reseed Log
-
-- _Empty at lifecycle start._

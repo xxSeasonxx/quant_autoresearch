@@ -25,13 +25,19 @@ checkout comments or strategy names alone.
 | `docs/templates/oos-drift-review.md` | Downstream one-look OOS drift review template. |
 | `HISTORY.md` | Development chronology and migration rationale. |
 
+On any conflict between documents, `program.md` and `protocol.toml` govern — except
+the score, gate, and result-ledger contract, which `docs/score_research.md` owns.
+
 ## Editable Surface
 
 The agent may edit:
 
 - `strategy.py`
-- `experiment.toml` `[params]`, within the existing `[bounds.*]`
+- `experiment.toml` `[params]` and their `[bounds.*]` ranges — the agent owns the
+  search space and may widen or tighten a bound as the mechanism demands (an
+  ordinary loop edit, not a reseed)
 - `rationale.md` when variants are tried or signal components change
+- `reseed_log.md` — append-only reseed evidence; write during the loop, read at stop
 
 The agent does not edit during an active thesis loop:
 
@@ -55,7 +61,7 @@ symbol list into the recommendation table but does not edit `protocol.toml`.
 
 During an active thesis loop, the agent's active loop inputs are:
 
-- `program.md`, `protocol.toml`, `experiment.toml`, `strategy.py`, and `rationale.md`
+- `program.md`, `protocol.toml`, `docs/score_research.md`, `experiment.toml`, `strategy.py`, and `rationale.md`
 - recent `results.tsv`
 - the latest quick-run artifact directory recorded in `results.tsv`, especially diagnostics needed to choose the next Train edit
 
@@ -77,9 +83,11 @@ For one thesis:
 6. Apply the Train score and gates defined in `docs/score_research.md`.
 7. Let the loop decide keep/discard with the implemented improvement rule.
 
-8. Append one compact row to `results.tsv`; source provenance is preserved in the
-   attempt snapshot under the row's `artifact_dir`.
-9. Stop on plateau, max iterations, complexity cap, or baseline failure.
+8. Confirm `climb` appended exactly one row to `results.tsv`; do not write it
+   yourself. Source provenance is preserved in the attempt snapshot under the row's
+   `artifact_dir`.
+9. Stop when a configured rule fires; `program.md` (Stop) owns the authoritative
+   stop taxonomy.
 
 A Train survivor is only a handoff for Season. OOS, paper, and small-live review are outside this loop. Use `docs/templates/oos-drift-review.md` for a one-look downstream OOS comparison, and `docs/adr/0001-curated-few-research-regime.md` for the current research-regime decision.
 
@@ -110,8 +118,8 @@ validates an approved proposal before the first attempt, then uses the normal
 climb path. The `climb` command runs the current candidate once and logs the
 attempt. The `reset` command archives generated lifecycle state only:
 `results.tsv`, `.autoresearch/thesis_lock.json`, and `.autoresearch/quick/`.
-It does not edit `strategy.py`, `protocol.toml`, `experiment.toml`, or
-`rationale.md`. The autonomous editing loop is driven by the agent contract in
+It does not edit `strategy.py`, `protocol.toml`, `experiment.toml`,
+`rationale.md`, or `reseed_log.md`. The autonomous editing loop is driven by the agent contract in
 `program.md`.
 
 The configured local environment can reach `quant_data` for real quick-run smoke checks, but data freshness and runtime still depend on the selected dataset/window. Generated run artifacts live under `results/` and are not source.

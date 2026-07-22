@@ -16,6 +16,12 @@ idle time, overlapping positions, fills, fees, slippage, funding, capacity impac
 and realized duty cycle. A missing or non-finite full-window `total_return` makes
 the attempt non-scoreable.
 
+The ranking score is a raw point estimate — no standard-error or variance haircut is
+applied to it. Robustness is enforced by the gate battery, not by deflating the
+ranking, so a low-duty-cycle or capacity-relieving book is compared on the economic
+return it earns over the fixed Train window rather than penalized for its higher
+return variance.
+
 Only candidates that pass every gate can become a keeper. Among those candidates,
 the existing improvement rule applies:
 
@@ -124,7 +130,11 @@ Each `run_card.json` adds:
 
 A `train_strength` failure maps to `failure_class = edge_unproven`. Gate
 precedence remains causality, Train strength, breadth, minimum evidence, then the
-first remaining failed gate.
+first remaining failed gate. A hard leverage- or capacity-budget breach is a distinct
+economic verdict, not a harness error: it maps to `failure_class = infeasible`. A
+harness exception maps to `run_error`, or to `foundation_unavailable` or
+`score_unavailable` when it is raised while parsing or scoring the foundation. The
+ledger row and run card carry the same class for an attempt.
 
 ## Ownership Boundary
 

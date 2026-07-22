@@ -6,6 +6,7 @@ from math import sqrt
 import json
 from pathlib import Path
 from statistics import NormalDist
+from types import SimpleNamespace
 from typing import Mapping
 
 import pytest
@@ -1155,6 +1156,74 @@ def test_climb_once_records_universe_resolver_hash_in_lock(
     assert lock["universe_resolver_sha256"] == "resolver-test-hash"
 
 
+def test_resolve_climb_identity_uses_explicit_args_when_provided(tmp_path: Path):
+    assert loop._resolve_climb_identity("mech", "fals", root=tmp_path) == ("mech", "fals")
+
+
+def test_resolve_climb_identity_sources_from_lock_when_omitted(tmp_path: Path):
+    lock = tmp_path / ".autoresearch" / "thesis_lock.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(json.dumps({"mechanism": "locked mech", "falsifier": "locked fals"}))
+    # After the lock exists, climb need not re-pass the identity (F26).
+    assert loop._resolve_climb_identity(None, None, root=tmp_path) == (
+        "locked mech",
+        "locked fals",
+    )
+
+
+def test_resolve_climb_identity_requires_lock_or_args(tmp_path: Path):
+    with pytest.raises(ValueError, match="no active thesis lock"):
+        loop._resolve_climb_identity(None, None, root=tmp_path)
+
+
+def test_resolve_climb_identity_rejects_partial_identity(tmp_path: Path):
+    with pytest.raises(ValueError, match="both --mechanism and --falsifier"):
+        loop._resolve_climb_identity("mech", None, root=tmp_path)
+
+
+def test_active_thesis_lock_still_rejects_changed_identity(tmp_path: Path):
+    # Making climb's identity args optional must not disable the lock's guard against a
+    # genuinely changed (paraphrased) identity (F26).
+    loop._ensure_active_thesis_lock(
+        tmp_path,
+        rows=(),
+        mechanism="crowded funding mean reverts",
+        falsifier="no post-cost robustness",
+        protocol_sha256="hash",
+        results_path="results.tsv",
+    )
+    with pytest.raises(ValueError, match="thesis identity changed"):
+        loop._ensure_active_thesis_lock(
+            tmp_path,
+            rows=(),
+            mechanism="crowded funding pressure mean reverts",
+            falsifier="no post-cost robustness",
+            protocol_sha256="hash",
+            results_path="results.tsv",
+        )
+
+
+def test_reset_lifecycle_archives_attempt_tree(tmp_path: Path):
+    (tmp_path / "results.tsv").write_text("run_id\tstatus\n")
+    lock = tmp_path / ".autoresearch" / "thesis_lock.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("{}\n")
+    attempt = tmp_path / "results" / "autoresearch" / "attempt-0001"
+    attempt.mkdir(parents=True)
+    (attempt / "run_card.json").write_text("{}\n")
+
+    archive_dir = loop.reset_lifecycle(
+        confirm=loop.RESET_CONFIRMATION,
+        root=tmp_path,
+        results_path="results.tsv",
+    )
+
+    # The attempt-artifact tree is moved out of the live path into the archive (F28).
+    assert not (tmp_path / "results" / "autoresearch").exists()
+    assert (archive_dir / "autoresearch" / "attempt-0001" / "run_card.json").exists()
+    assert (archive_dir / "results.tsv").exists()
+
+
 def test_rationale_components_empty_section_fails_closed(tmp_path: Path):
     rationale = tmp_path / "rationale.md"
     rationale.write_text("# Rationale\n\n## Signal Components\n\n## Variant Log\n")
@@ -1492,6 +1561,48 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
     assert row.continuation == "repair_required"
     assert "missing portfolio foundation" in row.note
     assert run_card["failure_class"] == "foundation_unavailable"
+    # Ledger row and run card must agree on the crash class (F24).
+    assert row.failure_class == run_card["failure_class"]
+
+
+def test_run_iteration_feasibility_breach_classes_as_infeasible(tmp_path: Path):
+    _write_workspace(tmp_path)
+    protocol = load_protocol(tmp_path / "protocol.toml")
+    # A non-succeeded run carrying a typed economic breach reason — not a Python
+    # exception — must class as `infeasible`, not `run_error` (F23).
+    result = SimpleNamespace(
+        succeeded=False,
+        message="intended gross exceeds budget",
+        feasibility=SimpleNamespace(
+            reason="leverage_budget_breach",
+            observed_gross=1.4,
+            observed_net=1.4,
+            detail=None,
+        ),
+        outcome=SimpleNamespace(failure_stage="feasibility"),
+    )
+
+    outcome = run_iteration(
+        protocol,
+        params={},
+        components=("signal",),
+        results_path=tmp_path / "results.tsv",
+        iteration=1,
+        best_score=None,
+        runner=lambda *args, **kwargs: result,
+        workdir=tmp_path,
+    )
+
+    row = read_results(tmp_path / "results.tsv")[0]
+    run_card = json.loads(
+        (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
+    )
+    assert outcome.status == "crash"
+    assert row.failure_class == "infeasible"
+    assert run_card["failure_class"] == "infeasible"
+    # The typed reason still lands in the dedicated column, and the two artifacts agree.
+    assert row.failure_reason == "leverage_budget_breach"
+    assert row.failure_class == run_card["failure_class"]
 
 
 def _gates_with(
@@ -1570,3 +1681,35 @@ def test_failure_class_error_states():
         loop._failure_class(None, ObjectiveResult(score=None, feasible=False))
         == "score_unavailable"
     )
+
+
+def test_failure_class_infeasible_precedes_other_classes():
+    # A hard feasibility breach is an economic verdict, not a harness bug, and takes
+    # precedence over every other class (F23).
+    assert (
+        loop._failure_class(None, None, feasibility_reason="capacity_limit_breach")
+        == "infeasible"
+    )
+    assert (
+        loop._failure_class(
+            None,
+            None,
+            error="portfolio foundation unavailable",
+            feasibility_reason="leverage_budget_breach",
+        )
+        == "infeasible"
+    )
+
+
+def test_failure_class_crash_fallback_is_run_error():
+    # A crash carrying a valid-score objective (e.g. a cost-stress exception raised
+    # after scoring succeeded) still classes as run_error, never an empty class that
+    # would drop out of failure_class triage.
+    assert (
+        loop._failure_class(
+            None, ObjectiveResult(score=0.05, feasible=True), error="cost stress boom"
+        )
+        == "run_error"
+    )
+    # An exception with an empty message also classes as run_error, not "".
+    assert loop._failure_class(None, None, error="") == "run_error"

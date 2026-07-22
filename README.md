@@ -107,7 +107,7 @@ conda run -n quant python -m loop resolve-universe --data-kind crypto_perp_fundi
 conda run -n quant python -m loop propose-protocol --brief .autoresearch/protocol_briefs/latest.md --out .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop baseline --mechanism "<why it should work>" --falsifier "<what kills it>" --approved-proposal .autoresearch/protocol_proposals/latest.json
 conda run -n quant python -m loop status
-conda run -n quant python -m loop climb --mechanism "<why it should work>" --falsifier "<what kills it>"
+conda run -n quant python -m loop climb
 conda run -n quant python -m loop reset --confirm RESET-LIFECYCLE
 ```
 
@@ -116,8 +116,11 @@ catalog/readiness metadata only. The `propose-protocol` command writes proposal
 artifacts only; it does not edit `protocol.toml`. The `baseline` command
 validates an approved proposal before the first attempt, then uses the normal
 climb path. The `climb` command runs the current candidate once and logs the
-attempt. The `reset` command archives generated lifecycle state only:
-`results.tsv`, `.autoresearch/thesis_lock.json`, and `.autoresearch/quick/`.
+attempt; the frozen thesis identity is sourced from the lock, so `climb` no longer
+requires `--mechanism`/`--falsifier` (they stay optional, for an explicit re-check
+against the lock). The `reset` command archives generated lifecycle state only:
+`results.tsv`, `.autoresearch/thesis_lock.json`, `.autoresearch/quick/`, and the
+`results/autoresearch/` attempt-artifact tree.
 It does not edit `strategy.py`, `protocol.toml`, `experiment.toml`,
 `rationale.md`, or `reseed_log.md`. The autonomous editing loop is driven by the agent contract in
 `program.md`.

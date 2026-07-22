@@ -207,19 +207,19 @@ are exactly what the loop is for.
 Run one ordinary Train attempt with `climb`:
 
 ```bash
-conda run -n quant python -m loop climb \
-  --mechanism "<why it should work>" \
-  --falsifier "<what kills it>"
+conda run -n quant python -m loop climb
 ```
 
 `climb` runs one candidate, writes the artifact directory and `run_card.json`,
 appends one row to `results.tsv`, and prints the latest result fields as parseable
 key/value lines. Read the printed summary and the attempt's `run_card.json`.
 
-`--mechanism` and `--falsifier` carry the frozen thesis identity, not the per-attempt
-idea: pass the same text verbatim on every attempt. The harness matches them against
-the thesis lock and refuses a changed identity. Put the per-attempt hypothesis in
-`rationale.md`.
+The thesis identity is frozen at baseline and stored in the thesis lock, so ordinary
+`climb` attempts do not re-pass it: omit `--mechanism`/`--falsifier` and the harness
+sources the identity from the lock. Passing both is still accepted and checked against
+the lock, which refuses a changed identity — but never re-type it just to satisfy the
+command, since a paraphrase that clears the whitespace check would hard-stop the run.
+Put the per-attempt hypothesis in `rationale.md`.
 
 ## Experiment Loop
 

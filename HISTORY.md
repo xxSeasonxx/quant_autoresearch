@@ -1,8 +1,8 @@
 # History
 
 Development chronology and migration rationale. Active contracts live in the
-owning docs (`program.md`, `protocol.toml`, and the module docstrings); this file
-is history only.
+owning docs (`program.md`, `protocol.toml`, `docs/score_research.md`, and the module
+docstrings); this file is history only.
 
 ## Full-window total-return score and Train-strength naming
 
@@ -34,20 +34,21 @@ overridden.
 
 Repurposed to a **validity-only** gate, renamed `significance`:
 
-- **Gate** → `significance`: `R_full - k_accept * SE_full >= 0` — the edge is statistically
-  real after the best-of-N deflation (equivalently the full-Train t-stat clears `k_accept`).
-  The `k_accept` (`gates.score_haircut_se`) deflation — the multiple-testing correction — is
-  retained, so overfit protection is unchanged; only the materiality threshold is dropped.
-- **Money → score.** Materiality (how much money) lives entirely in the run score
-  (`R - k_rank * SE`, the deployed-return LCB the loop ranks on) and is the operator's
+- **Gate** → `significance`: `R_full - k_accept * SE_full >= 0` — the edge was treated as
+  statistically real after the best-of-N deflation (equivalently the full-Train t-stat clearing
+  `k_accept`). The `k_accept` (`gates.score_haircut_se`) deflation — the multiple-testing
+  correction — was retained, so overfit protection was unchanged; only the materiality threshold
+  was dropped.
+- **Money → score.** Materiality (how much money) lived entirely in the run score
+  (`R - k_rank * SE`, the deployed-return LCB the loop then ranked on) and was the operator's
   judgment, not a hard floor. `min_annualized_return` (0.10) was removed from config, parser,
   brief, and proposal payload (no orphan config).
-- **`capacity_bound` stops being a `failure_class`:** a significant but capacity-throttled
-  edge now passes (`failure_class = edge`); its low deployed scale shows in the score and the
-  `capacity_bound` diagnostic column. A `significance` failure means the edge is not
+- **`capacity_bound` stopped being a `failure_class`:** a significant but capacity-throttled
+  edge then passed (`failure_class = edge`); its low deployed scale showed in the score and the
+  `capacity_bound` diagnostic column. A `significance` failure meant the edge was not
   distinguishable from best-of-N noise (`no_edge`).
 - The `deflated_money_floor` results column was renamed `deflated_return_lcb` (same deflated
-  return value, now non-gating).
+  return value, non-gating).
 
 This reversed the recommendation to keep `money_floor` and 0.10 unchanged — a
 deliberate operator decision, not a rescue: the change

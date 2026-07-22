@@ -163,6 +163,22 @@ def _lock_path(root: Path) -> Path:
     return root / ".autoresearch" / "thesis_lock.json"
 
 
+def _read_thesis_lock(root: Path) -> Mapping[str, Any] | None:
+    """Return the active thesis lock payload, or None when no lock exists."""
+    lock_path = _lock_path(root)
+    if not lock_path.exists():
+        return None
+    try:
+        payload = json.loads(lock_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "active thesis lock is unreadable; start a new thesis lifecycle"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("active thesis lock is malformed; start a new thesis lifecycle")
+    return payload
+
+
 def _normalize_lock_path(root: Path, path: str | Path) -> str:
     candidate = Path(path)
     if candidate.is_absolute():
@@ -205,10 +221,9 @@ def _ensure_active_thesis_lock(
         lock_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         return
 
-    try:
-        payload = json.loads(lock_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("active thesis lock is unreadable; start a new thesis lifecycle") from exc
+    payload = _read_thesis_lock(root)
+    if payload is None:
+        raise ValueError("active thesis lock is unreadable; start a new thesis lifecycle")
 
     if payload.get("mechanism") != normalized_mechanism or payload.get("falsifier") != normalized_falsifier:
         raise ValueError("active thesis identity changed; start a new thesis lifecycle")
@@ -424,12 +439,25 @@ def _failure_reason(result: object) -> str:
     the failure stage (e.g. `strategy_import`); empty when neither is set.
     """
 
-    feasibility = getattr(result, "feasibility", None)
-    reason = getattr(feasibility, "reason", None) if feasibility is not None else None
+    reason = _feasibility_breach_reason(result)
     if reason:
-        return str(reason)
+        return reason
     failure_stage = getattr(getattr(result, "outcome", None), "failure_stage", None)
     return str(failure_stage) if failure_stage else ""
+
+
+def _feasibility_breach_reason(result: object) -> str:
+    """The engine's economic feasibility-breach reason, or empty when none.
+
+    Distinct from `_failure_reason`, which also falls back to the failure stage: a
+    feasibility breach (e.g. `leverage_budget_breach`, `capacity_limit_breach`) is an
+    economic verdict, not a harness error, so it classifies as `infeasible` rather than
+    `run_error`.
+    """
+
+    feasibility = getattr(result, "feasibility", None)
+    reason = getattr(feasibility, "reason", None) if feasibility is not None else None
+    return str(reason) if reason else ""
 
 
 def _make_crash_row(
@@ -441,6 +469,7 @@ def _make_crash_row(
     elapsed_seconds: float,
     note: str,
     failure_reason: str,
+    failure_class: str,
     stop_reason: str,
 ) -> ResultRow:
     return ResultRow(
@@ -470,7 +499,7 @@ def _make_crash_row(
         avg_trade_net=None,
         cost_return_sum=None,
         complexity_count=max(len(params), len(tuple(components))),
-        failure_class="run_error",
+        failure_class=failure_class,
         failure_reason=failure_reason,
         best_status="unchanged",
         continuation="terminal" if stop_reason else "repair_required",
@@ -773,18 +802,22 @@ def _failure_class(
     objective: ObjectiveResult | None,
     *,
     error: str = "",
+    feasibility_reason: str = "",
 ) -> str:
     """Derived, human-legible reason an attempt is not a keeper (``edge`` if it is).
 
     A pure post-hoc classifier over already-computed gate outcomes — it forks no gate
-    logic. The ``train_strength`` gate is the key edge-strength signal: a failure means
-    the fixed full-Train at-risk return hurdle was not cleared (``edge_unproven``).
-    Capacity throttling is not a failure: a strength-passing but capacity-limited edge
-    passes, and its low deployed scale shows in the run score and the
-    ``capacity_bound`` diagnostic. Precedence is most-fundamental first:
-    measurement validity, then the economic verdict, then breadth, then evidence, then
-    any other failed gate.
+    logic. A hard feasibility breach (``infeasible``) is an economic verdict, not a
+    harness bug, and takes precedence over every other class. The ``train_strength``
+    gate is the key edge-strength signal: a failure means the fixed full-Train at-risk
+    return hurdle was not cleared (``edge_unproven``). Capacity *throttling* is not a
+    failure: a strength-passing but capacity-limited edge passes, and its low deployed
+    scale shows in the run score and the ``capacity_bound`` diagnostic. Precedence is
+    most-fundamental first: feasibility, then measurement validity, then the economic
+    verdict, then breadth, then evidence, then any other failed gate.
     """
+    if feasibility_reason:
+        return "infeasible"
     if "portfolio foundation" in error:
         return "foundation_unavailable"
     if error and objective is None and gates is None:
@@ -792,7 +825,9 @@ def _failure_class(
     if objective is not None and objective.score is None:
         return "score_unavailable"
     if gates is None:
-        return ""
+        # gates is None only on a crash path; a crash always warrants a class, so
+        # fall back to run_error rather than an empty (untriageable) failure_class.
+        return "run_error"
     if gates.passed:
         return "edge"
     by_name = gates.by_name
@@ -824,6 +859,7 @@ def _write_run_card(
     foundation: FoundationEvidence | None,
     error: str = "",
     warnings: Sequence[str] = (),
+    failure_class: str | None = None,
 ) -> None:
     destination = root / artifact_dir / "run_card.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -889,11 +925,9 @@ def _write_run_card(
             else _scenario_payload(foundation.cost_stress),
         },
         "causality": {} if result is None else _causality_payload(result),
-        "failure_class": _failure_class(
-            gates,
-            objective,
-            error=error,
-        ),
+        "failure_class": failure_class
+        if failure_class is not None
+        else _failure_class(gates, objective, error=error),
         "error": error,
         "warnings": list(warnings),
     }
@@ -1070,11 +1104,15 @@ def _finalize_crash(
     gates: GateSet | None,
     foundation: FoundationEvidence | None,
     warnings: Sequence[str] = (),
+    feasibility_reason: str = "",
     strategy_path: str | Path,
     protocol_path: str | Path,
     experiment_path: str | Path,
     rationale_path: str | Path,
 ) -> IterationOutcome:
+    failure_class = _failure_class(
+        gates, objective, error=note, feasibility_reason=feasibility_reason
+    )
     _write_run_card(
         root,
         artifact_dir=provenance.artifact_dir,
@@ -1085,6 +1123,7 @@ def _finalize_crash(
         foundation=foundation,
         error=note,
         warnings=warnings,
+        failure_class=failure_class,
     )
     temp_row = _make_crash_row(
         provenance=provenance,
@@ -1094,6 +1133,7 @@ def _finalize_crash(
         elapsed_seconds=elapsed_seconds,
         note=note,
         failure_reason=failure_reason,
+        failure_class=failure_class,
         stop_reason="",
     )
     stop_reason = _stop_reason_after_attempt(
@@ -1109,6 +1149,7 @@ def _finalize_crash(
         elapsed_seconds=elapsed_seconds,
         note=note,
         failure_reason=failure_reason,
+        failure_class=failure_class,
         stop_reason=stop_reason,
     )
     _append_crash(results_path=results_path, row=crash_row)
@@ -1228,6 +1269,7 @@ def run_iteration(
             elapsed_seconds=elapsed,
             note=_feasibility_note(result),
             failure_reason=_failure_reason(result),
+            feasibility_reason=_feasibility_breach_reason(result),
             result=result,
             objective=None,
             cost_stress=None,
@@ -1496,10 +1538,12 @@ def reset_lifecycle(
     result_source = Path(results_path)
     if not result_source.is_absolute():
         result_source = root_path / result_source
+    attempt_tree = root_path / "results" / "autoresearch"
     sources = (
         result_source,
         _lock_path(root_path),
         root_path / ".autoresearch" / "quick",
+        attempt_tree,
     )
     if not any(source.exists() for source in sources):
         raise ValueError("no lifecycle state to reset")
@@ -1510,6 +1554,7 @@ def reset_lifecycle(
         root_path / ".autoresearch" / "quick",
         archive_dir / "quick",
     )
+    _archive_if_present(attempt_tree, archive_dir / "autoresearch")
     return archive_dir
 
 
@@ -1522,6 +1567,43 @@ def baseline_once(
     _load_approved_proposal(approved_proposal)
     _ensure_no_active_lifecycle()
     return climb_once(mechanism=mechanism, falsifier=falsifier)
+
+
+def _resolve_climb_identity(
+    mechanism: str | None,
+    falsifier: str | None,
+    *,
+    root: Path = Path("."),
+) -> tuple[str, str]:
+    """Resolve the thesis identity for a ``climb``.
+
+    After the first attempt the identity is frozen in the thesis lock, so ``climb``
+    need not re-pass it: omit both ``--mechanism``/``--falsifier`` and they are sourced
+    from the lock, which removes the hazard of an autonomous caller paraphrasing the
+    free-text identity and hard-stopping its own run. Passing both keeps the explicit
+    verification path (the lock still rejects a genuinely changed identity). The first
+    attempt has no lock, so it must set the identity — via ``baseline`` or by passing
+    both.
+    """
+    if mechanism is not None and falsifier is not None:
+        return mechanism, falsifier
+    if mechanism is not None or falsifier is not None:
+        raise ValueError(
+            "pass both --mechanism and --falsifier, or neither to reuse the active thesis lock"
+        )
+    lock = _read_thesis_lock(root)
+    if lock is None:
+        raise ValueError(
+            "no active thesis lock; the first attempt sets the identity — "
+            "run baseline or pass --mechanism and --falsifier"
+        )
+    locked_mechanism = lock.get("mechanism")
+    locked_falsifier = lock.get("falsifier")
+    if not isinstance(locked_mechanism, str) or not isinstance(locked_falsifier, str):
+        raise ValueError(
+            "active thesis lock is missing mechanism/falsifier; start a new thesis lifecycle"
+        )
+    return locked_mechanism, locked_falsifier
 
 
 def _print_status(summary: Mapping[str, object]) -> None:
@@ -1568,8 +1650,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     reset = subparsers.add_parser("reset")
     reset.add_argument("--confirm", required=True)
     climb = subparsers.add_parser("climb")
-    climb.add_argument("--mechanism", required=True)
-    climb.add_argument("--falsifier", required=True)
+    climb.add_argument("--mechanism")
+    climb.add_argument("--falsifier")
     args = parser.parse_args(argv)
 
     if args.command == "status":
@@ -1618,7 +1700,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"archive_dir: {archive_dir}")
         return 0
     if args.command == "climb":
-        outcome = climb_once(mechanism=args.mechanism, falsifier=args.falsifier)
+        mechanism, falsifier = _resolve_climb_identity(args.mechanism, args.falsifier)
+        outcome = climb_once(mechanism=mechanism, falsifier=falsifier)
         _print_outcome(outcome)
         return 0
     raise AssertionError(args.command)

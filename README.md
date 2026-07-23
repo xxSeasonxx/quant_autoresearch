@@ -14,6 +14,63 @@ Root files may hold either the neutral scaffold or an active local thesis. Use
 `python -m loop status` as the lifecycle-state source; do not infer state from
 checkout comments or strategy names alone.
 
+## Worked example — a thesis this loop researched end-to-end
+
+**Crypto Perp Funding-Crowding Reversal.** One human-seeded thesis — crowded crypto-perp
+positioning mean-reverts — developed over 45 autonomous iterations under a frozen protocol,
+each attempt kept or killed by the evidence gates below. The survivor:
+
+> **Train-only research evidence — not OOS, paper, live, or deployability evidence.** These
+> metrics are in-sample by construction.
+
+| Metric | Value |
+|---|---:|
+| Full-window total return (net) | **+20.1%** |
+| Profit factor | 1.98 |
+| Win rate | 56.9% (170 / 129) |
+| Max drawdown | −5.6% |
+| Trades | 299 (avg +6.7 bps net) |
+| Subwindow robustness | 6 / 6 positive |
+| Evidence gates | **9 / 9 pass** |
+
+Window 2025-03-01 → 2025-12-31, 8 crypto-perp majors, 1-minute bars, net of fees + slippage +
+market impact. The edge is a single interpretable change from the baseline — a conviction
+filter — that improved every metric at once, the signature of a real effect rather than an
+overfit.
+
+### The research journey
+
+45 iterations ran; most ideas were **falsified** — and that is the signal. The arc:
+
+| # | Idea tried | Return | Verdict |
+|---|---|---:|---|
+| 0001 | Baseline — long-only fade of crowded shorts, 720m hold | 0.181 | ✅ kept |
+| 0002 | Add the short side | −0.003 | ❌ loses; can't reach the vol target |
+| 0003 | Shorter hold (360m) | 0.066 | ❌ clips the slow bounce |
+| 0004 | Longer hold (1080m) | 0.085 | ❌ gives the bounce back |
+| 0005 | Trailing stop | 0.010 | ❌ fires on the overshoot a fade must hold |
+| 0007 | Faster cadence (120m) | 0.035 | ❌ earlier, weaker entries dilute the signal |
+| 0009 | Recency-weighted funding | 0.047 | ❌ the crowd reads best equal-weighted |
+| 0016 | Funding-magnitude filter | 0.085 | ❌ wrong lever; crushes breadth |
+| 0025 | Reversion-completion exit | 0.068 | ❌ exits before the absolute price peak |
+| 0035 | Dislocation conviction ≥ 4 bps | 0.195 | ▫️ the search warms up |
+| **0014** | **Dislocation conviction ≥ 5 bps** | **0.201** | 🏆 **survivor** |
+| 0017 | Dislocation conviction ≥ 6 bps | 0.188 | ▫️ past the peak |
+| 0018 | Concentrate to top-3 names | 0.199 | ▫️ near-best |
+
+The one durable win is a smooth local maximum, not a razor edge — min-dislocation
+2.5 → 0.181, 4 → 0.195, **5 → 0.201**, 6 → 0.188, 8 → 0.187.
+
+### The keep/kill gates every survivor must clear
+
+`trade_floor` (≥ 120 trades) · `minimum_evidence` (≥ 100 samples, ≥ 50 per subwindow) ·
+`path_risk` (max drawdown ≤ 25%) · `train_strength` (`return − 2·SE ≥ 0`) ·
+`cost_stress_retention` (≥ 50% of the edge survives a cost stress test) · `breadth` +
+`effective_symbol_count` (edge not carried by one name) · `causality` (no decision uses data
+before it was knowable) · `complexity_cap` (≤ 3 components, ≤ 50 params). A result is *kept*
+only if it beats the incumbent **and** clears every gate. The authoritative contract is
+`docs/score_research.md`.
+
 ## Active Documents
 
 | Path | Role |

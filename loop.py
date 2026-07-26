@@ -8,6 +8,7 @@ import hashlib
 import json
 from math import isfinite
 import time
+import tomllib
 from typing import Any, Callable, Mapping, Sequence
 
 from gates import GateSet, evaluate_gates, symbol_concentration
@@ -968,6 +969,38 @@ def _best_row(rows: Sequence[ResultRow]) -> ResultRow | None:
     return max(kept, key=lambda row: row.score if row.score is not None else float("-inf"))
 
 
+def _param_drift_vs_best(
+    root: Path,
+    *,
+    params: Mapping[str, object],
+    prior_rows: Sequence[ResultRow],
+) -> tuple[str, tuple[str, ...]]:
+    """Report how this attempt's params differ from the frozen best survivor's.
+
+    `experiment.toml` persists across attempts, so a lever set for one attempt stays
+    on until it is reverted. An unintended carry-over silently confounds every later
+    attempt, so name the delta before the run: one entry is the attempt's lever, more
+    than one needs a reason.
+    """
+    best = _best_row(prior_rows)
+    if best is None:
+        return "", ()
+    snapshot = _attempt_snapshot_dir(root, best.artifact_dir) / "experiment.toml"
+    try:
+        recorded = tomllib.loads(snapshot.read_text()).get("params", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        return best.run_id, ()
+    if not isinstance(recorded, Mapping):
+        return best.run_id, ()
+    baseline: Mapping[str, object] = recorded
+    drift = tuple(
+        f"{key}: {baseline.get(key)!r} -> {params.get(key)!r}"
+        for key in sorted(set(baseline) | set(params))
+        if baseline.get(key) != params.get(key)
+    )
+    return best.run_id, drift
+
+
 def _copy_if_present(source: Path, destination: Path) -> str | None:
     try:
         content = source.read_bytes()
@@ -1455,6 +1488,12 @@ def climb_once(
         universe_resolver_sha256=cfg.data.universe_resolver_sha256,
     )
     params = experiment.params
+    best_run_id, drift = _param_drift_vs_best(Path("."), params=params, prior_rows=rows)
+    if best_run_id:
+        print(
+            f"param_delta_vs_best[{best_run_id}]: {'; '.join(drift) if drift else 'none'}",
+            flush=True,
+        )
     best_score = max(
         (row.score for row in rows if row.status == "keep" and row.score is not None),
         default=None,

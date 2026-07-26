@@ -126,3 +126,39 @@ setup brief. It maps the resolved symbols into the recommended protocol table an
 records the resolver hash in the proposal. The resolver does not edit
 `protocol.toml`, run Train, or inspect PnL, returns, score diagnostics, prior
 attempts, `results.tsv`, run cards, or generated Train artifacts.
+
+## Lifecycle 1–2 — 2025 10-month window (2025-03-01 → 2025-12-31)
+
+The thesis first ran on a 0.83-year Train window. Two budget-only reseeds occurred
+(no evidence gate changed): `max_iterations` 30→40, then the full fixed-budget stop
+config (`max_iterations = baseline_grace_iterations = plateau_patience = 40`, after
+discovering `baseline_grace_iterations=10` would force-stop at attempt 10). The
+40-budget lifecycle ran 30 climb attempts; full results/run-cards are archived under
+`.autoresearch/lifecycle_archive/`.
+
+**What was found.** Baseline (30d vol_scaled, daily, two-sided) was negative
+(t = −0.24) and capacity-strangled. A real edge was then built and characterized:
+
+- **Best config:** two-sided per-instrument sign-TSMOM, 30d formation, daily,
+  `take_profit=0.20`, `ma_gate_days=45`, `top_n=8`, TWAP `ramp_bars=30`.
+  Full-window **t = 1.60 (Sharpe ≈ 1.75)**, 4–5/6 subwindows positive, both legs
+  profitable, all gates pass except `train_strength`.
+- **Mechanism:** crypto majors show short-horizon *reversal of extremes* —
+  (1) equal-weight `sign` beats vol-scaling (vol_scaled is anti-predictive: it loads
+  the strong movers that revert); (2) `take_profit=0.20` monetizes the reversal
+  (this one lever lifted t from ~0 to 1.14); (3) a 45d MA-gate filters unconfirmed
+  entries; (4) a balanced two-sided book halves return variance. Robust — every
+  lever sits on a smooth plateau, not a razor spike.
+- **Why no keeper:** `train_strength` is full-window t≥2 (Sharpe ≈ 2.19) and is
+  scale-invariant. Per-instrument momentum topped at Sharpe ~1.75 across the entire
+  lever space (signal form, three formation measures, all exit types+levels,
+  selection, horizon, side, cadence, capacity), so it never cleared the bar. The
+  0.83-year window made the hurdle (`2/√years`) implausibly high; separately, the
+  13-name universe ADV capped deployable vol at ~7% of target (~1.6% return on $1M).
+  Both binding constraints were protocol-level, not the edge.
+
+This directly motivated the reseed to a 4-year window (below): the same edge clears
+a `2/√4 ≈ 1.0` hurdle, and the longer window is the honest regime-robustness test.
+`strategy.py` carries the levers discovered here (`signal` incl. `ma_trend`,
+`skip_days`, `stop_loss_pct`, `take_profit_pct`, `trailing_pct`, `top_n`,
+`stagger_minutes`, `ramp_bars`); the best config above is the prior-to-beat.

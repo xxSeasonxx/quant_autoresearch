@@ -1,79 +1,167 @@
-"""Crypto perp funding crowding reversal.
+"""Strategy: crypto_perp_tsmom_majors
 
-Thesis:
-Realized same-sign funding pressure plus same-direction price extension can mark
-crowded perp positioning. After the signal bar is observable, the strategy takes
-the other side of the crowded move and exits through an explicit fixed-horizon
-flat target.
+Family A — per-symbol time-series momentum (trend following) applied independently to a
+small a-priori set of the deepest crypto-perp majors (BTC/ETH/SOL), sized by the engine's
+volatility target. The alpha lives in each name's own directional trend signal; the book
+combines the per-name signals into one standing portfolio and book-level volatility
+targeting is the operator's free service, not part of the edge, so the strategy emits a
+clean signed shape per name and lets the frozen risk budget size the whole book. How NAV
+is split across the active names is a strategy-owned allocation-shape lever, not a
+separate alpha: `weighting` chooses equal (each name at most 1/N of NAV, so a fully-long
+N-name book grosses to <= 1.0), inverse-volatility (risk parity across names), or
+conviction (vol-adjusted trend strength); `top_n` optionally caps the active book to the
+strongest-trending names. Every weighting redistributes within the same active-set gross,
+so it reshapes the book without changing magnitude, which the vol target washes out anyway.
+`gross_mode` is the one allocation lever that does change magnitude, and only its
+breadth-conditional profile — how hard the book leans on the fraction of the universe voting:
+`universe` is linear (an idle sleeve stays in cash), `active` is flat (full budget at any
+breadth), `tilted` is quadratic (risk leans into cross-name agreement). A single global book
+scale cannot wash that out, because it reallocates risk across time rather than resizing the
+whole book.
+
+Source / provenance:
+Time-series momentum construction: Moskowitz, Ooi & Pedersen, "Time Series
+Momentum", Journal of Financial Economics 104(2) 2012,
+doi:10.1016/j.jfineco.2011.11.003
+(https://www.sciencedirect.com/science/article/abs/pii/S0304405X11002613).
+Crypto replication: Liu & Tsyvinski, "Risks and Returns of Cryptocurrency", Review
+of Financial Studies 34(6) 2021, doi:10.1093/rfs/hhaa113 (daily/weekly time-series
+momentum in BTC/ETH). "A Decade of Evidence of Trend Following in Cryptocurrencies"
+(2020), arXiv:2009.12155 (multi-timescale sign blend). Grayscale Research, "The
+Trend is Your Friend" (2023). Shortlist and Family-A specification:
+internal_note docs/research/crypto_majors_btc_eth_sol_perp_strategies.md (Family A,
+verified 2026-07-23) citing the sources above.
+
+Market rationale:
+Crypto perpetuals are retail-heavy, sentiment-driven, and weakly arbitraged, so an
+instrument under-reacts to information and then over-reacts, producing positively
+autocorrelated returns at weekly-to-quarterly horizons. Each symbol's own trailing
+return therefore predicts the sign of its next-horizon return. The signal is
+computed from a single name's own history, so it depends on no cross-section and
+dodges the survivorship bias that inflates cross-sectional crypto claims.
+
+Required observables:
+Symbol, timezone-aware bar timestamp, available_at, and close for crypto-perp bars.
+Funding is not read for the signal; the book runs under the financed data kind only
+so a multi-day hold pays or collects realized funding honestly. With vol_scale on, the
+decision also reads the symbol's own trailing daily closes to estimate recent realized
+volatility. A row is used only when its available_at is at or before the emitted
+decision_time.
+
+Decision rule:
+On a fixed UTC rebalance clock, for each symbol form the trailing return
+r = close(formation_end) / close(formation_end - lookback_days) - 1, where
+formation_end is skip_days before the rebalance (skip_days=0 uses the rebalance bar;
+a positive skip excludes the reversal-prone most-recent move, a gap-momentum
+formation). With trend_method="ma_cross" the reference denominator is instead the mean
+daily close over the lookback window (a moving-average crossover) — a whole-path trend
+robust to the two-endpoint noise of a point-to-point return. signal="sign" targets
++1 / -1 on the sign of r; signal="long_flat"
+targets +1 / 0 (no shorts). With signal_band > 0 the sign decision carries a no-trade band
+(hysteresis): a name takes the trend direction only when its formation return clears
++/-signal_band and holds its prior standing vote inside the band, so whipsaw round-trips
+through zero collapse into holds — cutting turnover (and its capacity participation) without
+slowing the formation horizon. With blend=true the per-horizon vote is averaged over a
+fixed multi-timescale lookback set, giving a graded target in [-1, 1] from how many
+horizons agree. When confirm_lookback_days > 0 the target is gated by a slow regime
+trend measured over that horizon (same formation_end): a long survives only in a slow
+uptrend and a short only in a slow downtrend, so the book stands flat when the fast
+signal and the slow regime disagree — trading with the major trend and sitting out
+whipsaw regimes rather than fighting them. When vol_scale is on **and weighting is equal**,
+each entry's weight is scaled by min(1, ref_vol / recent_vol) using the symbol's own trailing
+daily-return volatility over vol_lookback_days against a fixed a-priori reference, de-risking
+entries made in high-volatility regimes; the size is set at entry and held until the trend vote
+changes, so a drifting vol estimate does not churn the standing book. The lever is inert under
+inverse_vol and conviction weighting, which already size from the same volatility estimate and
+would otherwise apply it twice. Across names, the
+active book is those with a non-zero vote, optionally capped by top_n to the
+strongest-trending names (ranked by vol-adjusted trend magnitude), and NAV is split across
+them by the weighting mode within the gross that gross_mode sets from breadth (linear, so
+idle sleeves sit in cash; flat, so gross holds at the full budget at any breadth; or
+quadratic, leaning into cross-name agreement); the selection and cross-name weights are
+recomputed only when
+some name's trend vote changes and held otherwise, so drifting vol or trend strength does
+not churn the standing book. Emit one signed
+weight-of-NAV target per
+symbol whenever it changes from the last emitted value (including a zero target to
+flatten), so the standing book rebalances by netting. When position_smoothing > 1, the
+emitted book steps only 1/position_smoothing of the way toward each newly desired target per
+rebalance, spreading one position change across that many rebalance days so its turnover lands
+in that many separate daily capacity windows (the cross-name weights are still fixed at the
+vote change). When execution_bars > 1, each emitted step is additionally ramped across that
+many consecutive one-minute bars (TWAP) so no single decision minute pins participation; every
+step uses the same signal known at the rebalance, so it stays causal. The only exit is the
+formation vote turning, emitted as an explicit zero target: the book carries no faster-horizon
+exit and no declared price-path barrier, because every such device was falsified on clean Train
+evidence — a shorter-horizon exit and a trailing barrier both sell into the short-horizon
+reversals this edge is paid for holding through, a take-profit truncates the minority of large
+continuing trends that carry the return, and a fixed stop leaves portfolio drawdown untouched
+because that drawdown is a correlated cross-sectional move rather than an accumulation of
+per-name losses from entry. Book volatility targeting and the leverage ceiling are the engine's
+operator-frozen risk budget, not strategy knobs.
+
+Assumptions:
+Input bars are timezone-aware and ordered by causal availability through
+available_at. The rebalance clock fires at UTC midnight every rebalance_days days;
+each decision fires at the first real bar at or after the signal bar's available_at
+plus decision_lag_minutes, so it is never look-ahead. Warmup happens inside the
+decision window: a rebalance without enough lookback history simply emits no target.
+
+Falsifier:
+If net return after realistic costs and ADV/impact capacity is not positive across
+the bounded lookbacks, or is not materially above a volatility-matched buy-and-hold
+of the same symbol, or all return is concentrated in a single mega-trend window (for
+example the 2020-21 bull) rather than pervasive across subwindows, reject the thesis
+rather than adding filters or per-window exceptions.
 """
 
-from bisect import bisect_left, bisect_right
+import math
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-import math
-from typing import Any, cast
+from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from quant_strategies.decisions import (
     InstrumentRef,
     ObservationRef,
-    RiskRule,
     TargetDecision,
 )
 
 __all__ = ["generate_decisions", "validate_params"]
 
-_STRATEGY_ID = "crypto_perp_funding_crowding_reversal"
-_REQUIRED_FIELDS = {
-    "symbol",
-    "timestamp",
-    "available_at",
-    "close",
-    "volume",
-    "funding_timestamp",
-    "funding_rate",
-    "has_funding_event",
-}
+_STRATEGY_ID = "crypto_perp_tsmom_majors"
+_SOURCE = "crypto_perp_1min_with_funding"
+_REQUIRED_FIELDS = {"symbol", "timestamp", "available_at", "close"}
+# Coarse, documented multi-timescale grid for the optional sign blend. Fixed by the
+# research spec (a decade-of-trend-following ensemble), not a tuning surface.
+_BLEND_LOOKBACKS: tuple[int, ...] = (20, 50, 100, 200)
+# Reference annualized volatility for ex-ante vol scaling. A fixed a-priori anchor for a
+# crypto major's long-run realized volatility (BTC ≈ 0.65 annualized), not a tuning
+# surface. The engine renormalizes book scale globally, so this constant only sets where
+# the gross cap binds — it de-risks periods whose recent vol runs above a major's norm.
+_VOL_SCALE_REF_ANNUAL = 0.65
+_VOL_MIN_RETURNS = 10
+_PERIODS_PER_YEAR_DAILY = 365.0
 _DEFAULT_PARAMS: dict[str, object] = {
-    "funding_lookback_events": 5,
-    "funding_decay": 0.0,
-    "return_lookback_minutes": 120,
-    "decision_interval_minutes": 240,
-    "entry_twap_bars": 1,
-    "exit_twap_bars": 0,
+    "lookback_days": 30,
+    "signal": "sign",
+    "blend": False,
+    "skip_days": 0,
+    "rebalance_days": 1,
     "decision_lag_minutes": 1,
-    "session_start_hour": 0,
-    "session_end_hour": 24,
-    "top_n": 5,
-    "min_cross_section": 4,
-    "min_abs_funding_bps": 1.0,
-    "min_abs_return_bps": 0.0,
-    "include_positive_funding_shorts": True,
-    "include_negative_funding_longs": True,
-    "min_same_sign_funding_events": 3,
-    "min_latest_abs_funding_bps": 0.0,
-    "recent_return_lookback_minutes": 60,
-    "max_recent_same_direction_return_bps": 250.0,
-    "long_max_market_down_bps": 1000.0,
-    "min_idiosyncratic_return_bps": 2.5,
-    "idiosyncratic_mode": "raw",
-    "min_idiosyncratic_sigma": 0.5,
-    "short_signal_multiplier": 1.0,
-    "selection_score": "combined",
-    "cross_section_reference": "mean",
+    "confirm_lookback_days": 0,
+    "vol_scale": False,
+    "vol_lookback_days": 30,
+    "trend_method": "return",
     "weighting": "equal",
-    "dislocation_weight_power": 1.0,
-    "liquidity_weight_power": 0.0,
-    "vol_lookback_minutes": 1440,
-    "long_hold_minutes": 720,
-    "short_hold_minutes": 480,
-    "hold_vol_scaling": 0.0,
-    "hold_dislocation_scaling": 0.0,
-    "take_profit_frac": 0.0,
+    "gross_mode": "universe",
+    "top_n": 0,
+    "execution_bars": 1,
+    "signal_band": 0.0,
+    "position_smoothing": 1,
 }
-
-_HOLD_MIN_MINUTES = 120
-_HOLD_MAX_MINUTES = 1440
+_MA_MIN_DAILY = 5
 
 
 @dataclass(frozen=True)
@@ -82,931 +170,570 @@ class _BarRow:
     timestamp: datetime
     available_at: datetime
     close: float
-    volume: float
-
-
-@dataclass(frozen=True)
-class _FundingEvent:
-    timestamp: datetime
-    bar_timestamp: datetime
-    available_at: datetime
-    rate: float
 
 
 @dataclass(frozen=True)
 class _SymbolRows:
     bars: tuple[_BarRow, ...]
     timestamps: tuple[datetime, ...]
-    funding_events: tuple[_FundingEvent, ...]
-    funding_available_at: tuple[datetime, ...]
+    daily_bars: tuple[_BarRow, ...]
+    daily_times: tuple[datetime, ...]
 
 
 @dataclass(frozen=True)
-class _Candidate:
-    symbol: str
+class _Eval:
+    """One symbol's evaluation at a rebalance: its trend vote, the timing/anchor bar,
+    the bars its decision reads, the primary-horizon formation return (bps) for the
+    trade tape, the ex-ante vol scale (1.0 unless vol_scale), and recent annualized
+    volatility (``None`` during warmup) used by cross-name weighting and selection."""
+
+    raw_target: float
+    scale: float
     signal_row: _BarRow
-    lookback_row: _BarRow
-    funding_events: tuple[_FundingEvent, ...]
-    funding_pressure_bps: float
-    latest_funding_bps: float
-    same_sign_funding_events: int
-    return_extension_bps: float
-    recent_return_bps: float
-    volatility: float | None = None
-    dollar_volume: float | None = None
-    recent_row: _BarRow | None = None
-
-
-@dataclass(frozen=True)
-class _Selection:
-    candidate: _Candidate
-    side: int
-    score: float
-    idiosyncratic: float = 0.0
+    observation_bars: tuple[_BarRow, ...]
+    formation_bps: float
+    recent_vol: float | None
 
 
 def validate_params(params: Mapping[str, object]) -> dict[str, object]:
-    """Validate the bounded thesis parameters used by the strategy."""
+    """Validate the bounded time-series-momentum parameters."""
 
     unknown = set(params) - set(_DEFAULT_PARAMS)
     if unknown:
         raise ValueError(f"unknown params: {sorted(unknown)}")
 
     merged = {**_DEFAULT_PARAMS, **dict(params)}
-    validated: dict[str, object] = {
-        "funding_lookback_events": _positive_int(
-            merged["funding_lookback_events"], "funding_lookback_events"
-        ),
-        "funding_decay": _non_negative_float(
-            merged["funding_decay"], "funding_decay"
-        ),
-        "return_lookback_minutes": _positive_int(
-            merged["return_lookback_minutes"], "return_lookback_minutes"
-        ),
-        "decision_interval_minutes": _positive_int(
-            merged["decision_interval_minutes"], "decision_interval_minutes"
-        ),
-        "entry_twap_bars": _positive_int(
-            merged["entry_twap_bars"], "entry_twap_bars"
-        ),
-        "exit_twap_bars": _non_negative_int(
-            merged["exit_twap_bars"], "exit_twap_bars"
-        ),
+    return {
+        "lookback_days": _positive_int(merged["lookback_days"], "lookback_days"),
+        "signal": _signal(merged["signal"]),
+        "blend": _bool_param(merged["blend"], "blend"),
+        "skip_days": _non_negative_int(merged["skip_days"], "skip_days"),
+        "rebalance_days": _positive_int(merged["rebalance_days"], "rebalance_days"),
         "decision_lag_minutes": _non_negative_int(
             merged["decision_lag_minutes"], "decision_lag_minutes"
         ),
-        "session_start_hour": _hour(merged["session_start_hour"], "session_start_hour"),
-        "session_end_hour": _session_end_hour(merged["session_end_hour"]),
-        "top_n": _positive_int(merged["top_n"], "top_n"),
-        "min_cross_section": _positive_int(
-            merged["min_cross_section"], "min_cross_section"
+        "confirm_lookback_days": _non_negative_int(
+            merged["confirm_lookback_days"], "confirm_lookback_days"
         ),
-        "min_abs_funding_bps": _non_negative_float(
-            merged["min_abs_funding_bps"], "min_abs_funding_bps"
+        "vol_scale": _bool_param(merged["vol_scale"], "vol_scale"),
+        "vol_lookback_days": _positive_int(
+            merged["vol_lookback_days"], "vol_lookback_days"
         ),
-        "min_abs_return_bps": _non_negative_float(
-            merged["min_abs_return_bps"], "min_abs_return_bps"
-        ),
-        "include_positive_funding_shorts": _bool_param(
-            merged["include_positive_funding_shorts"],
-            "include_positive_funding_shorts",
-        ),
-        "include_negative_funding_longs": _bool_param(
-            merged["include_negative_funding_longs"],
-            "include_negative_funding_longs",
-        ),
-        "min_same_sign_funding_events": _non_negative_int(
-            merged["min_same_sign_funding_events"], "min_same_sign_funding_events"
-        ),
-        "min_latest_abs_funding_bps": _non_negative_float(
-            merged["min_latest_abs_funding_bps"], "min_latest_abs_funding_bps"
-        ),
-        "recent_return_lookback_minutes": _non_negative_int(
-            merged["recent_return_lookback_minutes"],
-            "recent_return_lookback_minutes",
-        ),
-        "max_recent_same_direction_return_bps": _non_negative_float(
-            merged["max_recent_same_direction_return_bps"],
-            "max_recent_same_direction_return_bps",
-        ),
-        "long_max_market_down_bps": _non_negative_float(
-            merged["long_max_market_down_bps"], "long_max_market_down_bps"
-        ),
-        "min_idiosyncratic_return_bps": _non_negative_float(
-            merged["min_idiosyncratic_return_bps"],
-            "min_idiosyncratic_return_bps",
-        ),
-        "idiosyncratic_mode": _idiosyncratic_mode(merged["idiosyncratic_mode"]),
-        "min_idiosyncratic_sigma": _non_negative_float(
-            merged["min_idiosyncratic_sigma"], "min_idiosyncratic_sigma"
-        ),
-        "short_signal_multiplier": _positive_float(
-            merged["short_signal_multiplier"], "short_signal_multiplier"
-        ),
-        "selection_score": _selection_score(merged["selection_score"]),
-        "cross_section_reference": _cross_section_reference(
-            merged["cross_section_reference"]
-        ),
-        "dislocation_weight_power": _positive_float(
-            merged["dislocation_weight_power"], "dislocation_weight_power"
-        ),
-        "liquidity_weight_power": _non_negative_float(
-            merged["liquidity_weight_power"], "liquidity_weight_power"
-        ),
+        "trend_method": _trend_method(merged["trend_method"]),
         "weighting": _weighting(merged["weighting"]),
-        "vol_lookback_minutes": _positive_int(
-            merged["vol_lookback_minutes"], "vol_lookback_minutes"
-        ),
-        "long_hold_minutes": _positive_int(
-            merged["long_hold_minutes"], "long_hold_minutes"
-        ),
-        "short_hold_minutes": _positive_int(
-            merged["short_hold_minutes"], "short_hold_minutes"
-        ),
-        "hold_vol_scaling": _non_negative_float(
-            merged["hold_vol_scaling"], "hold_vol_scaling"
-        ),
-        "hold_dislocation_scaling": _non_negative_float(
-            merged["hold_dislocation_scaling"], "hold_dislocation_scaling"
-        ),
-        "take_profit_frac": _non_negative_float(
-            merged["take_profit_frac"], "take_profit_frac"
+        "gross_mode": _gross_mode(merged["gross_mode"]),
+        "top_n": _non_negative_int(merged["top_n"], "top_n"),
+        "execution_bars": _positive_int(merged["execution_bars"], "execution_bars"),
+        "signal_band": _non_negative_fraction(merged["signal_band"], "signal_band"),
+        "position_smoothing": _positive_int(
+            merged["position_smoothing"], "position_smoothing"
         ),
     }
-    if _param_int(validated, "session_start_hour") >= _param_int(
-        validated, "session_end_hour"
-    ):
-        raise ValueError("session_start_hour must be < session_end_hour")
-    if not (
-        validated["include_positive_funding_shorts"]
-        or validated["include_negative_funding_longs"]
-    ):
-        raise ValueError("at least one side must be enabled")
-    return validated
 
 
 def generate_decisions(
     bars: Sequence[Mapping[str, object]], params: Mapping[str, object]
 ) -> list[TargetDecision]:
-    """Emit standing crypto-perp target decisions for the funding reversal thesis."""
+    """Emit standing per-symbol time-series-momentum target decisions."""
 
     if not bars:
         return []
     validated = validate_params(params)
     rows_by_symbol = _rows_by_symbol(bars)
-    if len(rows_by_symbol) < _param_int(validated, "min_cross_section"):
+    if not rows_by_symbol:
         return []
-
-    signal_times = _cadence_signal_times(rows_by_symbol, validated)
+    # Equal-weight the book across the whole eligible universe: each name carries at most
+    # 1/N of NAV, so a fully-long N-name book grosses to <= 1.0 within the frozen budget.
+    # Relative per-name weights are equal; the engine's vol target sets overall scale.
     n_universe = len(rows_by_symbol)
+
+    blend = _param_bool(validated, "blend")
+    lookback_days = _param_int(validated, "lookback_days")
+    lookbacks = _BLEND_LOOKBACKS if blend else (lookback_days,)
+    skip_days = _param_int(validated, "skip_days")
+    rebalance_days = _param_int(validated, "rebalance_days")
+    signal = _param_str(validated, "signal")
+    lag = _param_int(validated, "decision_lag_minutes")
+    confirm_lookback_days = _param_int(validated, "confirm_lookback_days")
+    vol_scale = _param_bool(validated, "vol_scale")
+    vol_lookback_days = _param_int(validated, "vol_lookback_days")
+    trend_method = _param_str(validated, "trend_method")
     weighting = _param_str(validated, "weighting")
-    twap_bars = _param_int(validated, "entry_twap_bars")
-    exit_twap_bars = _param_int(validated, "exit_twap_bars") or twap_bars
-    take_profit_frac = _param_float(validated, "take_profit_frac")
-    risk_rule = (
-        RiskRule(take_profit=take_profit_frac) if take_profit_frac > 0.0 else None
-    )
-    active_until: dict[str, datetime] = {}
+    gross_mode = _param_str(validated, "gross_mode")
+    top_n = _param_int(validated, "top_n")
+    execution_bars = _param_int(validated, "execution_bars")
+    signal_band = _param_float(validated, "signal_band")
+    position_smoothing = _param_int(validated, "position_smoothing")
+    # Cross-name weighting and top_n selection both need each name's recent volatility;
+    # compute it whenever a lever consumes it (and, as before, when vol_scale is on).
+    need_vol = vol_scale or top_n > 0 or weighting in ("inverse_vol", "conviction")
+
+    rebalance_times = _rebalance_times(rows_by_symbol, rebalance_days)
+    last_vote: dict[str, float] = {}
+    last_target: dict[str, float] = {}
+    # Desired book per symbol, set (weights held) at each trend-vote change; the emitted
+    # book ramps toward it over position_smoothing rebalances so a flip's turnover is
+    # spread across that many daily capacity windows.
+    desired_target: dict[str, float] = {}
+    # Standing trend vote per symbol, updated every rebalance; only consumed by the
+    # hysteresis band (signal_band > 0) to hold the prior vote inside the no-trade zone.
+    standing_vote: dict[str, float] = {}
     decisions: list[TargetDecision] = []
+    seen_keys: set[tuple[str, datetime]] = set()
 
-    for signal_time in signal_times:
-        candidates = [
-            candidate
-            for rows in rows_by_symbol.values()
-            if (
-                candidate := _candidate_at_signal_time(
-                    rows,
-                    signal_time,
-                    funding_lookback_events=_param_int(
-                        validated, "funding_lookback_events"
-                    ),
-                    funding_decay=_param_float(validated, "funding_decay"),
-                    return_lookback_minutes=_param_int(
-                        validated, "return_lookback_minutes"
-                    ),
-                    recent_return_lookback_minutes=_param_int(
-                        validated, "recent_return_lookback_minutes"
-                    ),
-                    vol_lookback_minutes=_param_int(
-                        validated, "vol_lookback_minutes"
-                    ),
-                )
+    for signal_time in rebalance_times:
+        evaluated: dict[str, _Eval] = {}
+        for symbol in sorted(rows_by_symbol):
+            result = _symbol_target(
+                rows=rows_by_symbol[symbol],
+                signal_time=signal_time,
+                lookbacks=lookbacks,
+                skip_days=skip_days,
+                signal=signal,
+                confirm_lookback_days=confirm_lookback_days,
+                vol_scale=vol_scale,
+                need_vol=need_vol,
+                vol_lookback_days=vol_lookback_days,
+                trend_method=trend_method,
+                signal_band=signal_band,
+                prev_vote=standing_vote.get(symbol, 0.0),
             )
-            is not None
-        ]
-        if len(candidates) < _param_int(validated, "min_cross_section"):
+            if result is not None:
+                evaluated[symbol] = result
+        if not evaluated:
             continue
 
-        market_return_bps = _cross_section_reference_bps(
-            [candidate.return_extension_bps for candidate in candidates],
-            _param_str(validated, "cross_section_reference"),
-        )
-        selections = _select_candidates(candidates, market_return_bps, validated)
-        if not selections:
-            continue
-        magnitudes = _selection_targets(
-            selections,
-            n_universe,
-            weighting,
-            _param_float(validated, "dislocation_weight_power"),
-            _param_float(validated, "liquidity_weight_power"),
-        )
-        reference_volatility = _reference_volatility(selections)
-        reference_idiosyncratic = _reference_idiosyncratic(selections)
-
-        cross_section_available_at = max(
-            candidate.signal_row.available_at for candidate in candidates
-        )
-        earliest_decision_time = cross_section_available_at + timedelta(
-            minutes=_param_int(validated, "decision_lag_minutes")
-        )
-
-        decision_time = earliest_decision_time
-        for selection, magnitude in zip(selections, magnitudes):
-            candidate = selection.candidate
-            symbol = candidate.symbol
-            if (
-                active_until.get(symbol, datetime.min.replace(tzinfo=timezone.utc))
-                >= decision_time
-            ):
-                continue
-
-            base_hold = (
-                _param_int(validated, "long_hold_minutes")
-                if selection.side > 0
-                else _param_int(validated, "short_hold_minutes")
+        # Recompute the active book only when the raw trend-vote vector changes; between
+        # changes the standing selection and cross-name weights hold, so drifting vol or
+        # trend strength does not churn the book. Under equal weighting with vol_scale
+        # off this reproduces the per-name "emit on own vote change" behavior exactly.
+        votes = {symbol: ev.raw_target for symbol, ev in evaluated.items()}
+        # Carry the standing vote forward every rebalance so the hysteresis hold has the
+        # prior vote available even on rebalances that emit nothing.
+        standing_vote.update(votes)
+        # Recompute the desired book (with held cross-name weights) only on a vote change.
+        if votes != last_vote:
+            desired_target.update(
+                _assign_targets(evaluated, weighting, gross_mode, top_n, n_universe)
             )
-            if _param_float(validated, "hold_vol_scaling") > 0.0:
-                hold_minutes = _scaled_hold_minutes(
-                    base_hold,
-                    candidate.volatility,
-                    reference_volatility,
-                    _param_float(validated, "hold_vol_scaling"),
-                )
-            elif _param_float(validated, "hold_dislocation_scaling") > 0.0:
-                hold_minutes = _conviction_scaled_hold(
-                    base_hold,
-                    selection.idiosyncratic,
-                    reference_idiosyncratic,
-                    _param_float(validated, "hold_dislocation_scaling"),
-                )
+            last_vote = votes
+
+        # Every rebalance, step the emitted book toward the desired book. With
+        # position_smoothing=1 the step jumps straight to desired (so the book only moves
+        # on a vote change — unchanged behavior); with >1 it covers 1/N of the remaining
+        # gap per rebalance, spreading each flip's turnover across N daily windows.
+        for symbol in sorted(evaluated):
+            ev = evaluated[symbol]
+            desired = desired_target.get(symbol, 0.0)
+            previous = last_target.get(symbol, 0.0)
+            if position_smoothing > 1:
+                target = previous + (desired - previous) / position_smoothing
+                if abs(desired - target) < 1e-4:
+                    target = desired
             else:
-                hold_minutes = base_hold
-            exit_time = decision_time + timedelta(minutes=hold_minutes)
-
-            target = selection.side * magnitude
-            decisions.extend(
-                _ramped_decisions(
-                    symbol=symbol,
-                    entry_time=decision_time,
-                    exit_time=exit_time,
-                    target=target,
-                    twap_bars=twap_bars,
-                    exit_twap_bars=exit_twap_bars,
-                    entry_as_of=candidate.signal_row.timestamp,
-                    risk_rule=risk_rule,
-                    observations=_observations(candidate),
-                    metadata={
-                        "signal_family": _STRATEGY_ID,
-                        "funding_pressure_bps": candidate.funding_pressure_bps,
-                        "latest_funding_bps": candidate.latest_funding_bps,
-                        "return_extension_bps": candidate.return_extension_bps,
-                        "recent_return_bps": candidate.recent_return_bps,
-                        "market_return_bps": market_return_bps,
-                        "side": "long" if selection.side > 0 else "short",
-                        "selection_score": selection.score,
-                    },
+                target = desired
+            if _close(target, previous):
+                continue
+            # decision_time is a computed clock time — the signal bar's availability
+            # plus the causal lag — not a bar looked up in ``rows``. Causal replay
+            # truncates visible rows to ``available_at <= decision_time``, which drops
+            # the decision bar itself (published one minute later), so a bar lookup
+            # could not be reconstructed on the truncated prefix. Recomputing the clock
+            # value from the (visible) signal bar reproduces identically. Every observed
+            # close is available by decision_time; as_of_time is the signal bar's time.
+            base_time = ev.signal_row.available_at + timedelta(minutes=lag)
+            # Spread the target change linearly across ``execution_bars`` consecutive
+            # one-minute bars (TWAP), so no single decision minute pins participation.
+            # Each ramp step reads the same signal known at the rebalance, so every step
+            # is causal; execution_bars=1 emits a single decision at base_time (unchanged).
+            for step in range(1, execution_bars + 1):
+                if step == execution_bars:
+                    step_target = target
+                else:
+                    step_target = previous + (target - previous) * (step / execution_bars)
+                decision_time = base_time + timedelta(minutes=step - 1)
+                key = (symbol, decision_time)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                decisions.append(
+                    TargetDecision(
+                        strategy_id=_STRATEGY_ID,
+                        instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
+                        decision_time=decision_time,
+                        as_of_time=ev.signal_row.timestamp,
+                        target=step_target,
+                        observations=_observations(symbol, ev.observation_bars),
+                        metadata={
+                            "signal_family": _STRATEGY_ID,
+                            "signal": signal,
+                            "blend": blend,
+                            "weighting": weighting,
+                            "formation_return_bps": ev.formation_bps,
+                        },
+                    )
                 )
-            )
-            active_until[symbol] = exit_time + timedelta(minutes=exit_twap_bars - 1)
+            last_target[symbol] = target
 
     return sorted(
         decisions,
-        key=lambda decision: (
-            decision.decision_time,
-            decision.instrument.symbol,
-            decision.target,
-        ),
+        key=lambda decision: (decision.decision_time, decision.instrument.symbol),
     )
 
 
-def _ramped_decisions(
-    *,
-    symbol: str,
-    entry_time: datetime,
-    exit_time: datetime,
-    target: float,
-    twap_bars: int,
-    exit_twap_bars: int,
-    entry_as_of: datetime,
-    risk_rule: RiskRule | None,
-    observations: tuple[ObservationRef, ...],
-    metadata: Mapping[str, object],
-) -> list[TargetDecision]:
-    """Ramp a position in over ``twap_bars`` and out over ``exit_twap_bars`` bars.
+def _assign_targets(
+    evaluated: Mapping[str, _Eval],
+    weighting: str,
+    gross_mode: str,
+    top_n: int,
+    n_universe: int,
+) -> dict[str, float]:
+    """Signed weight-of-NAV target per symbol for one rebalance.
 
-    Each standing target steps the cumulative NAV weight so the engine trades an
-    equal delta per bar, spreading entry and exit participation instead of pinning
-    one bar against the capacity cap. Entry and exit spread independently, so the
-    exit ramp can be lengthened to relieve the synchronized fixed-horizon unwind
-    without changing entry timing. The minute schedule is fixed when the signal is
-    observed and does not inspect future rows. ``twap_bars == 1`` reproduces a
-    single-bar entry. Entry steps carry the signal-bar ``as_of``; the exit is the
-    fixed-horizon unwind scheduled at entry, so its steps carry the entry time as
-    ``as_of``.
+    The active book is the non-zero votes, optionally capped by ``top_n`` to the
+    strongest (vol-adjusted trend magnitude) names. ``equal`` weighting gives each
+    active name an equal share, ``inverse_vol`` (risk parity) and ``conviction``
+    (vol-adjusted trend strength) redistribute NAV within the same active-set gross,
+    so weighting reshapes the book without changing its magnitude. A degenerate metric
+    total (warmup with no volatility yet) falls back to equal shares.
+
+    ``gross_mode`` sets how the book's gross responds to breadth — the fraction of the
+    universe voting — which is the only thing here that varies risk across time rather
+    than across names. ``universe`` is linear in breadth: an idle sleeve stays in cash, so
+    one name voting deploys a third of the budget. ``active`` is flat: gross holds at the
+    full budget at any breadth. ``tilted`` is quadratic, treating breadth as conviction in
+    a common trend, so risk leans into cross-name agreement and backs further out of
+    single-name signals.
     """
 
-    decisions: list[TargetDecision] = []
-    for step in range(twap_bars):
-        decisions.append(
-            TargetDecision(
-                strategy_id=_STRATEGY_ID,
-                instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
-                decision_time=entry_time + timedelta(minutes=step),
-                as_of_time=entry_as_of,
-                target=target * (step + 1) / twap_bars,
-                risk_rule=risk_rule,
-                observations=observations,
-                metadata=metadata,
-            )
-        )
-    for step in range(exit_twap_bars):
-        decisions.append(
-            TargetDecision(
-                strategy_id=_STRATEGY_ID,
-                instrument=InstrumentRef(kind="crypto_perp", symbol=symbol),
-                decision_time=exit_time + timedelta(minutes=step),
-                as_of_time=entry_time,
-                target=target * (exit_twap_bars - 1 - step) / exit_twap_bars,
-                metadata={"exit_reason": "fixed_horizon"},
-            )
-        )
-    return decisions
+    targets = {symbol: 0.0 for symbol in evaluated}
+    active = {symbol: ev for symbol, ev in evaluated.items() if ev.raw_target != 0.0}
+    if not active:
+        return targets
+    if 0 < top_n < len(active):
+        ranked = sorted(active, key=lambda s: _rank_strength(active[s]), reverse=True)
+        active = {symbol: active[symbol] for symbol in ranked[:top_n]}
+
+    active_count = len(active)
+    breadth_share = active_count / n_universe
+    if gross_mode == "active":
+        gross = 1.0
+    elif gross_mode == "tilted":
+        gross = breadth_share**2
+    else:
+        gross = breadth_share
+
+    if weighting == "equal":
+        for symbol, ev in active.items():
+            targets[symbol] = ev.raw_target * ev.scale * gross / active_count
+        return targets
+    metrics = {symbol: _weight_metric(active[symbol], weighting) for symbol in active}
+    total = sum(metrics.values())
+    if total <= 0.0:
+        share = 1.0 / len(active)
+        for symbol, ev in active.items():
+            targets[symbol] = _sign(ev.raw_target) * share * gross
+        return targets
+    for symbol, ev in active.items():
+        targets[symbol] = _sign(ev.raw_target) * (metrics[symbol] / total) * gross
+    return targets
 
 
-def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
-    grouped_bars: dict[str, list[_BarRow]] = {}
-    grouped_funding: dict[str, list[_FundingEvent]] = {}
-    for index, bar in enumerate(bars):
-        missing = _REQUIRED_FIELDS - set(bar)
-        if missing:
-            raise ValueError(f"bar {index} missing fields: {sorted(missing)}")
+def _weight_metric(ev: _Eval, weighting: str) -> float:
+    """Non-negative cross-name weight metric for a shaped weighting mode.
 
-        symbol = str(bar["symbol"])
-        timestamp = _datetime_value(bar["timestamp"], "timestamp")
-        available_at = _datetime_value(bar["available_at"], "available_at")
-        close = _positive_float(bar["close"], "close")
-        volume = _non_negative_float(bar["volume"], "volume")
-        grouped_bars.setdefault(symbol, []).append(
-            _BarRow(
-                symbol=symbol,
-                timestamp=timestamp,
-                available_at=available_at,
-                close=close,
-                volume=volume,
-            )
-        )
+    ``inverse_vol`` weights by ``1 / recent_vol`` (risk parity across names).
+    ``conviction`` weights by vol-adjusted trend *strength* — the magnitude of the
+    formation return per unit volatility, matching the metric ``top_n`` ranks on, so a
+    strong downtrend counts as strongly as a strong uptrend and a two-sided book keeps
+    its shorts. The sign is applied by the caller. Both return ``0`` when volatility is
+    unavailable (warmup), which the caller resolves as an equal-share fallback.
+    """
 
-        if _bool_value(bar["has_funding_event"]):
-            funding_rate = _finite_float(bar["funding_rate"], "funding_rate")
-            funding_timestamp = _datetime_value(
-                bar["funding_timestamp"], "funding_timestamp"
-            )
-            grouped_funding.setdefault(symbol, []).append(
-                _FundingEvent(
-                    timestamp=funding_timestamp,
-                    bar_timestamp=timestamp,
-                    available_at=available_at,
-                    rate=funding_rate,
-                )
-            )
-
-    result: dict[str, _SymbolRows] = {}
-    for symbol, symbol_bars in grouped_bars.items():
-        ordered_bars = tuple(sorted(symbol_bars, key=lambda row: row.timestamp))
-        ordered_funding = tuple(
-            sorted(grouped_funding.get(symbol, ()), key=lambda event: event.available_at)
-        )
-        result[symbol] = _SymbolRows(
-            bars=ordered_bars,
-            timestamps=tuple(row.timestamp for row in ordered_bars),
-            funding_events=ordered_funding,
-            funding_available_at=tuple(event.available_at for event in ordered_funding),
-        )
-    return result
+    if ev.recent_vol is None or ev.recent_vol <= 0.0:
+        return 0.0
+    if weighting == "inverse_vol":
+        return 1.0 / ev.recent_vol
+    return abs(ev.formation_bps / 10_000.0) / ev.recent_vol
 
 
-def _cadence_signal_times(
-    rows_by_symbol: Mapping[str, _SymbolRows], params: Mapping[str, object]
-) -> tuple[datetime, ...]:
-    interval = _param_int(params, "decision_interval_minutes")
-    session_start = _param_int(params, "session_start_hour")
-    session_end = _param_int(params, "session_end_hour")
-    times = {
-        row.timestamp
-        for rows in rows_by_symbol.values()
-        for row in rows.bars
-        if _is_cadence_timestamp(row.timestamp, interval, session_start, session_end)
-    }
-    return tuple(sorted(times))
+def _rank_strength(ev: _Eval) -> float:
+    """Vol-adjusted trend magnitude for top_n selection; raw magnitude if vol is unknown."""
+
+    if ev.recent_vol is not None and ev.recent_vol > 0.0:
+        return abs(ev.formation_bps) / ev.recent_vol
+    return abs(ev.formation_bps)
 
 
-def _is_cadence_timestamp(
-    timestamp: datetime,
-    interval_minutes: int,
-    session_start_hour: int,
-    session_end_hour: int,
-) -> bool:
-    if timestamp.hour < session_start_hour or timestamp.hour >= session_end_hour:
-        return False
-    minute_of_day = timestamp.hour * 60 + timestamp.minute
-    return minute_of_day % interval_minutes == 0
+def _sign(value: float) -> float:
+    return 1.0 if value > 0.0 else -1.0
 
 
-def _candidate_at_signal_time(
+def _close(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-9
+
+
+def _symbol_target(
+    *,
     rows: _SymbolRows,
     signal_time: datetime,
-    *,
-    funding_lookback_events: int,
-    funding_decay: float,
-    return_lookback_minutes: int,
-    recent_return_lookback_minutes: int,
-    vol_lookback_minutes: int,
-) -> _Candidate | None:
+    lookbacks: tuple[int, ...],
+    skip_days: int,
+    signal: str,
+    confirm_lookback_days: int,
+    vol_scale: bool,
+    need_vol: bool,
+    vol_lookback_days: int,
+    trend_method: str,
+    signal_band: float,
+    prev_vote: float,
+) -> _Eval | None:
+    """Signed trend evaluation for one symbol at a rebalance time, or ``None``.
+
+    ``None`` means the symbol lacks enough formation history at this rebalance for
+    the requested lookback(s), so no decision is emitted (warmup). Otherwise returns
+    an ``_Eval`` with the signed vote, the timing/anchor bar, the bars whose closes
+    the decision reads, the primary-horizon formation return in bps for the trade
+    tape, the ex-ante vol scale, and recent annualized volatility. The vote averages
+    one ``sign`` (or ``long_flat``) vote per lookback, so a single lookback yields
+    +/-1 (or +1/0) and a blend yields a graded value in [-1, 1].
+    """
+
     signal_index = bisect_right(rows.timestamps, signal_time) - 1
     if signal_index < 0:
         return None
     signal_row = rows.bars[signal_index]
 
-    lookback_time = signal_time - timedelta(minutes=return_lookback_minutes)
-    lookback_index = bisect_right(rows.timestamps, lookback_time) - 1
-    if lookback_index < 0:
+    formation_end_time = signal_time - timedelta(days=skip_days)
+    formation_end_index = bisect_right(rows.timestamps, formation_end_time) - 1
+    if formation_end_index < 0:
         return None
-    lookback_row = rows.bars[lookback_index]
+    formation_end_row = rows.bars[formation_end_index]
 
-    funding_index = bisect_right(rows.funding_available_at, signal_row.available_at)
-    if funding_index < funding_lookback_events:
-        return None
-    funding_events = rows.funding_events[
-        funding_index - funding_lookback_events : funding_index
-    ]
+    votes: list[float] = []
+    observation_bars: list[_BarRow] = [formation_end_row]
+    primary_formation_return = 0.0
+    for position, lookback_days in enumerate(lookbacks):
+        lookback_time = formation_end_time - timedelta(days=lookback_days)
+        if trend_method == "ma_cross":
+            # Whole-path trend: current close vs the mean daily close over the window,
+            # robust to the two-endpoint noise of a point-to-point return.
+            sma = _daily_sma(rows, lookback_time, formation_end_time)
+            if sma is None:
+                return None
+            reference, sma_bars = sma
+            observation_bars.extend(sma_bars)
+        else:
+            lookback_index = bisect_right(rows.timestamps, lookback_time) - 1
+            if lookback_index < 0 or lookback_index == formation_end_index:
+                return None
+            lookback_row = rows.bars[lookback_index]
+            reference = lookback_row.close
+            observation_bars.append(lookback_row)
+        formation_return = formation_end_row.close / reference - 1.0
+        if position == 0:
+            primary_formation_return = formation_return
+        votes.append(_vote(formation_return, signal))
 
-    funding_pressure_bps = _weighted_funding_pressure_bps(funding_events, funding_decay)
-    latest_funding_bps = funding_events[-1].rate * 10_000.0
-    sign = 1 if funding_pressure_bps > 0.0 else -1 if funding_pressure_bps < 0.0 else 0
-    same_sign_funding_events = (
-        sum(1 for event in funding_events if event.rate * sign > 0.0)
-        if sign != 0
-        else 0
-    )
-    return_extension_bps = (signal_row.close / lookback_row.close - 1.0) * 10_000.0
+    target = sum(votes) / len(votes)
 
-    recent_return_bps = 0.0
-    recent_row: _BarRow | None = None
-    if recent_return_lookback_minutes > 0:
-        recent_time = signal_time - timedelta(minutes=recent_return_lookback_minutes)
-        recent_index = bisect_right(rows.timestamps, recent_time) - 1
-        if recent_index >= 0:
-            recent_row = rows.bars[recent_index]
-            recent_return_bps = (signal_row.close / recent_row.close - 1.0) * 10_000.0
+    # Hysteresis: replace the raw vote with a banded vote that holds the prior standing
+    # vote inside the no-trade zone, so whipsaw round-trips through zero become holds.
+    # Applied to the primary-horizon formation return (band is a single-horizon device).
+    if signal_band > 0.0:
+        target = _hysteresis_vote(primary_formation_return, signal, signal_band, prev_vote)
 
-    return _Candidate(
-        symbol=signal_row.symbol,
+    if confirm_lookback_days > 0:
+        confirm_time = formation_end_time - timedelta(days=confirm_lookback_days)
+        confirm_index = bisect_right(rows.timestamps, confirm_time) - 1
+        if confirm_index < 0 or confirm_index == formation_end_index:
+            return None
+        confirm_row = rows.bars[confirm_index]
+        confirm_return = formation_end_row.close / confirm_row.close - 1.0
+        observation_bars.append(confirm_row)
+        target = _confirm_gate(target, confirm_return)
+
+    scale = 1.0
+    recent_vol: float | None = None
+    if need_vol:
+        estimate = _recent_annualized_vol(rows, formation_end_time, vol_lookback_days)
+        if estimate is not None:
+            annualized_vol, vol_bars = estimate
+            observation_bars.extend(vol_bars)
+            recent_vol = annualized_vol
+            if vol_scale and annualized_vol > 0.0:
+                scale = min(1.0, _VOL_SCALE_REF_ANNUAL / annualized_vol)
+
+    return _Eval(
+        raw_target=target,
+        scale=scale,
         signal_row=signal_row,
-        lookback_row=lookback_row,
-        funding_events=funding_events,
-        funding_pressure_bps=funding_pressure_bps,
-        latest_funding_bps=latest_funding_bps,
-        same_sign_funding_events=same_sign_funding_events,
-        return_extension_bps=return_extension_bps,
-        recent_return_bps=recent_return_bps,
-        volatility=_realized_volatility(rows, signal_index, vol_lookback_minutes),
-        dollar_volume=(
-            signal_row.close * signal_row.volume
-            if signal_row.volume > 0.0
-            else None
-        ),
-        recent_row=recent_row,
+        observation_bars=tuple(observation_bars),
+        formation_bps=primary_formation_return * 10_000.0,
+        recent_vol=recent_vol,
     )
 
 
-def _weighted_funding_pressure_bps(
-    funding_events: tuple[_FundingEvent, ...], decay: float
-) -> float:
-    """Summed funding crowding in bps, optionally recency-weighted.
+def _daily_sma(
+    rows: _SymbolRows, start_time: datetime, end_time: datetime
+) -> tuple[float, tuple[_BarRow, ...]] | None:
+    """Mean of UTC-midnight daily closes over ``(start_time, end_time]``.
 
-    Events are ordered oldest-to-newest. With ``decay == 0`` every event carries
-    weight 1 and this is the plain sum (baseline). With ``decay > 0`` recent
-    settlements weigh more (``exp(-decay * age)``, age 0 = newest); weights are
-    renormalized to sum to the event count so the crowding *scale* is preserved
-    and only its recency *tilt* changes.
+    Returns ``None`` when fewer than ``_MA_MIN_DAILY`` daily closes are available
+    (warmup), and otherwise the mean and the daily bars it reads for observations. All
+    bars are at or before ``end_time`` (the decision's formation end), hence causal.
     """
 
-    if decay <= 0.0 or len(funding_events) <= 1:
-        return sum(event.rate for event in funding_events) * 10_000.0
-    count = len(funding_events)
-    weights = [math.exp(-decay * (count - 1 - i)) for i in range(count)]
-    total = sum(weights)
-    scale = count / total
-    weighted = sum(
-        weights[i] * scale * funding_events[i].rate for i in range(count)
-    )
-    return weighted * 10_000.0
-
-
-def _realized_volatility(
-    rows: _SymbolRows, signal_index: int, lookback_minutes: int
-) -> float | None:
-    """Std of 1-minute close-to-close returns over the lookback ending at the signal bar.
-
-    Causal: uses only bars at or before the signal bar. Returns ``None`` when the
-    window is too short or degenerate so weighting can fall back to equal.
-    """
-
-    lookback_time = rows.bars[signal_index].timestamp - timedelta(minutes=lookback_minutes)
-    start = bisect_left(rows.timestamps, lookback_time)
-    window = rows.bars[start : signal_index + 1]
-    if len(window) < 3:
+    lo = bisect_right(rows.daily_times, start_time)
+    hi = bisect_right(rows.daily_times, end_time)
+    window = rows.daily_bars[lo:hi]
+    if len(window) < _MA_MIN_DAILY:
         return None
-    returns = [
-        window[i].close / window[i - 1].close - 1.0 for i in range(1, len(window))
-    ]
-    mean = sum(returns) / len(returns)
-    variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
-    vol = math.sqrt(variance)
-    return vol if vol > 0.0 else None
+    mean = sum(bar.close for bar in window) / len(window)
+    return mean, window
 
 
-def _select_candidates(
-    candidates: Sequence[_Candidate],
-    market_return_bps: float,
-    params: Mapping[str, object],
-) -> list[_Selection]:
-    min_funding = _param_float(params, "min_abs_funding_bps")
-    min_return = _param_float(params, "min_abs_return_bps")
-    min_latest_funding = _param_float(params, "min_latest_abs_funding_bps")
-    min_same_sign = _param_int(params, "min_same_sign_funding_events")
-    max_recent = _param_float(params, "max_recent_same_direction_return_bps")
-    long_max_market_down = _param_float(params, "long_max_market_down_bps")
-    selection_score = _param_str(params, "selection_score")
+def _recent_annualized_vol(
+    rows: _SymbolRows, cutoff_time: datetime, lookback_days: int
+) -> tuple[float, tuple[_BarRow, ...]] | None:
+    """Annualized std of daily log returns over the window ending at ``cutoff_time``.
 
-    # Idiosyncratic dislocation is the name's price extension measured against the
-    # cross-section reference. "raw" uses the extension in bps vs the cross-section
-    # mean. "vol_normalized" divides each extension by its expected horizon move
-    # (per-minute vol × sqrt(horizon)) so the screen is comparable across names of
-    # different volatility. "beta_adjusted" subtracts a beta-scaled market move
-    # (beta ≈ name_vol / cross-section_vol) rather than the beta=1 mean, so a
-    # high-beta name's move is not mistaken for idiosyncratic dislocation.
-    mode = _param_str(params, "idiosyncratic_mode")
-    return_lookback_minutes = _param_int(params, "return_lookback_minutes")
-    betas: dict[str, float] | None = None
-    if mode == "vol_normalized":
-        min_idio = _param_float(params, "min_idiosyncratic_sigma")
-        dislocations = {
-            candidate.symbol: _dislocation_sigma(candidate, return_lookback_minutes)
-            for candidate in candidates
-        }
-        known = [value for value in dislocations.values() if value is not None]
-        if not known:
-            return []
-        market_dislocation = sum(known) / len(known)
-    else:
-        min_idio = _param_float(params, "min_idiosyncratic_return_bps")
-        dislocations = {
-            candidate.symbol: candidate.return_extension_bps for candidate in candidates
-        }
-        market_dislocation = market_return_bps
-        if mode == "beta_adjusted":
-            betas = _cross_section_betas(candidates)
-
-    selections: list[_Selection] = []
-    short_signal_multiplier = _param_float(params, "short_signal_multiplier")
-    short_min_funding = min_funding * short_signal_multiplier
-    short_min_return = min_return * short_signal_multiplier
-    short_min_latest_funding = min_latest_funding * short_signal_multiplier
-    short_min_idio = min_idio * short_signal_multiplier
-    for candidate in candidates:
-        dislocation = dislocations[candidate.symbol]
-        if dislocation is None:
-            continue
-        reference = market_dislocation * (
-            betas[candidate.symbol] if betas is not None else 1.0
-        )
-        idio_long = reference - dislocation
-        idio_short = dislocation - reference
-        if (
-            _param_bool(params, "include_negative_funding_longs")
-            and candidate.funding_pressure_bps <= -min_funding
-            and candidate.return_extension_bps <= -min_return
-            and abs(candidate.latest_funding_bps) >= min_latest_funding
-            and candidate.same_sign_funding_events >= min_same_sign
-            and candidate.recent_return_bps >= -max_recent
-            and market_return_bps >= -long_max_market_down
-            and idio_long >= min_idio
-        ):
-            selections.append(
-                _Selection(
-                    candidate=candidate,
-                    side=1,
-                    score=_score(candidate, idio_long, selection_score),
-                    idiosyncratic=idio_long,
-                )
-            )
-        if (
-            _param_bool(params, "include_positive_funding_shorts")
-            and candidate.funding_pressure_bps >= short_min_funding
-            and candidate.return_extension_bps >= short_min_return
-            and abs(candidate.latest_funding_bps) >= short_min_latest_funding
-            and candidate.same_sign_funding_events >= min_same_sign
-            and candidate.recent_return_bps <= max_recent
-            and idio_short >= short_min_idio
-        ):
-            selections.append(
-                _Selection(
-                    candidate=candidate,
-                    side=-1,
-                    score=_score(candidate, idio_short, selection_score),
-                    idiosyncratic=idio_short,
-                )
-            )
-
-    selections.sort(
-        key=lambda selection: (
-            selection.score,
-            abs(selection.candidate.funding_pressure_bps),
-            abs(selection.candidate.return_extension_bps),
-        ),
-        reverse=True,
-    )
-    return selections[: _param_int(params, "top_n")]
-
-
-def _selection_targets(
-    selections: Sequence[_Selection],
-    n_universe: int,
-    weighting: str,
-    dislocation_weight_power: float = 1.0,
-    liquidity_weight_power: float = 0.0,
-) -> list[float]:
-    """Per-selection target magnitudes (before the signed side is applied).
-
-    ``equal`` gives each name ``1/n_universe`` (gross scales with the number of
-    active names, unchanged from the equal-weight book). ``inverse_vol`` keeps the
-    same average per-name budget but reshapes it across the selected set in
-    proportion to ``1/realized_vol`` (risk parity), so gross per decision is
-    preserved while high-vol names carry proportionally less. ``dislocation``
-    reshapes the same budget in proportion to each name's idiosyncratic
-    dislocation magnitude — conviction weighting that leans into the biggest
-    capitulations. ``capacity_dislocation`` keeps that conviction signal but
-    multiplies it by causal signal-bar dollar volume, shifting weight toward
-    names the capacity model can size. All reshaping modes preserve gross per
-    decision and fall back to equal weight on a degenerate set.
+    Reads UTC-midnight daily closes known at ``cutoff_time`` (all at or before the
+    decision's formation end, hence causal). Returns ``None`` during warmup, when fewer
+    than ``_VOL_MIN_RETURNS`` daily returns are available. Also returns the daily bars
+    whose closes the estimate reads, so the decision can declare them as observations.
     """
 
-    base = 1.0 / n_universe
-    if weighting == "equal":
-        return [base] * len(selections)
-
-    if weighting in {"dislocation", "combined", "capitulation", "capacity_dislocation"}:
-        if weighting == "dislocation":
-            signal = lambda s: s.idiosyncratic  # noqa: E731
-        elif weighting == "capacity_dislocation":
-            signal = lambda s: s.idiosyncratic  # noqa: E731
-        elif weighting == "combined":
-            signal = lambda s: s.score  # noqa: E731
-        else:  # capitulation: magnitude of the name's recent same-direction move
-            signal = lambda s: -s.side * s.candidate.recent_return_bps  # noqa: E731
-        weights = [
-            max(0.0, signal(selection)) ** dislocation_weight_power
-            for selection in selections
-        ]
-        if weighting == "capacity_dislocation" and liquidity_weight_power > 0.0:
-            liquidities = [
-                selection.candidate.dollar_volume for selection in selections
-            ]
-            known = [value for value in liquidities if value is not None]
-            if known:
-                mean_liquidity = sum(known) / len(known)
-                if mean_liquidity > 0.0:
-                    weights = [
-                        weight
-                        * (
-                            (
-                                (liquidity if liquidity is not None else mean_liquidity)
-                                / mean_liquidity
-                            )
-                            ** liquidity_weight_power
-                        )
-                        for weight, liquidity in zip(weights, liquidities)
-                    ]
-        mean_weight = sum(weights) / len(weights) if weights else 0.0
-        if mean_weight <= 0.0:
-            return [base] * len(selections)
-        return [base * value / mean_weight for value in weights]
-
-    inverse: list[float | None] = [
-        1.0 / selection.candidate.volatility
-        if selection.candidate.volatility
-        else None
-        for selection in selections
-    ]
-    known_inverse: list[float] = [
-        value for value in inverse if value is not None
-    ]
-    if not known_inverse:
-        return [base] * len(selections)
-    fill = sum(known_inverse) / len(known_inverse)
-    filled_inverse = [value if value is not None else fill for value in inverse]
-    mean_inverse = sum(filled_inverse) / len(filled_inverse)
-    return [base * value / mean_inverse for value in filled_inverse]
-
-
-def _cross_section_betas(candidates: Sequence[_Candidate]) -> dict[str, float]:
-    """Per-name beta proxy to the cross-section: ``name_vol / mean_vol``.
-
-    A vol-ratio proxy for market beta (exact under the high cross-perp
-    correlation of crowded regimes). Names or a cross-section with unknown
-    volatility fall back to beta 1.0, which reproduces the plain-mean reference.
-    """
-
-    known = [candidate.volatility for candidate in candidates if candidate.volatility]
-    if not known:
-        return {candidate.symbol: 1.0 for candidate in candidates}
-    market_vol = sum(known) / len(known)
-    if market_vol <= 0.0:
-        return {candidate.symbol: 1.0 for candidate in candidates}
-    return {
-        candidate.symbol: (
-            candidate.volatility / market_vol if candidate.volatility else 1.0
-        )
-        for candidate in candidates
-    }
-
-
-def _dislocation_sigma(
-    candidate: _Candidate, return_lookback_minutes: int
-) -> float | None:
-    """Price extension in units of the name's expected move over the lookback.
-
-    Divides the raw extension by ``per_minute_vol * sqrt(horizon)`` (random-walk
-    horizon vol), so a dislocation is measured relative to each name's own
-    volatility rather than in absolute bps. Returns ``None`` when volatility is
-    unknown or degenerate so the name is excluded from vol-normalized screening.
-    """
-
-    if not candidate.volatility:
+    end = bisect_right(rows.daily_times, cutoff_time)
+    start = max(0, end - (lookback_days + 1))
+    window = rows.daily_bars[start:end]
+    if len(window) < _VOL_MIN_RETURNS + 1:
         return None
-    scale_bps = candidate.volatility * math.sqrt(return_lookback_minutes) * 10_000.0
-    if scale_bps <= 0.0:
-        return None
-    return candidate.return_extension_bps / scale_bps
+    log_returns = [
+        math.log(window[i].close / window[i - 1].close) for i in range(1, len(window))
+    ]
+    count = len(log_returns)
+    mean = sum(log_returns) / count
+    variance = sum((value - mean) ** 2 for value in log_returns) / (count - 1)
+    annualized = math.sqrt(variance) * math.sqrt(_PERIODS_PER_YEAR_DAILY)
+    return annualized, window
 
 
-def _cross_section_reference_bps(values: Sequence[float], mode: str) -> float:
-    """Cross-section reference extension: the mean, or the robust median.
+def _confirm_gate(target: float, confirm_return: float) -> float:
+    """Zero the target unless its sign agrees with the slow regime trend.
 
-    ``median`` resists the skew a few co-moving extreme names impose on the mean,
-    giving a cleaner "typical move" for the idiosyncratic dislocation.
+    A long survives only in a slow uptrend, a short only in a slow downtrend; when
+    the fast signal and the slow regime disagree (chop or transition) the book stands
+    flat. This trades with the major trend and exits whipsaw regimes rather than
+    fighting them.
     """
 
-    if not values:
+    if target > 0.0 and confirm_return <= 0.0:
         return 0.0
-    if mode == "median":
-        ordered = sorted(values)
-        mid = len(ordered) // 2
-        if len(ordered) % 2 == 1:
-            return ordered[mid]
-        return (ordered[mid - 1] + ordered[mid]) / 2.0
-    return sum(values) / len(values)
+    if target < 0.0 and confirm_return >= 0.0:
+        return 0.0
+    return target
 
 
-def _reference_volatility(selections: Sequence[_Selection]) -> float | None:
-    """Mean realized volatility across the selected names, or ``None`` if unknown.
+def _vote(formation_return: float, signal: str) -> float:
+    """One trend vote: +1 up, -1 down for ``sign``; +1 up, 0 otherwise for ``long_flat``."""
 
-    Used as the reference point for risk-time hold scaling so a name is held
-    relative to how volatile it is versus the rest of the selected book.
-    """
-
-    known = [
-        selection.candidate.volatility
-        for selection in selections
-        if selection.candidate.volatility
-    ]
-    if not known:
-        return None
-    return sum(known) / len(known)
+    if formation_return > 0.0:
+        return 1.0
+    if signal == "long_flat":
+        return 0.0
+    if formation_return < 0.0:
+        return -1.0
+    return 0.0
 
 
-def _scaled_hold_minutes(
-    base_hold: int,
-    volatility: float | None,
-    reference_volatility: float | None,
-    scaling: float,
-) -> int:
-    """Hold length, optionally scaled into risk-time.
-
-    ``scaling == 0`` returns the fixed ``base_hold``. Otherwise the hold is
-    ``base_hold * (reference_vol / name_vol) ** scaling`` — higher-vol names are
-    held shorter — clamped to ``[_HOLD_MIN_MINUTES, _HOLD_MAX_MINUTES]``. Falls
-    back to the fixed hold when either volatility is unknown.
-    """
-
-    if scaling <= 0.0 or not volatility or not reference_volatility:
-        return base_hold
-    scaled = base_hold * (reference_volatility / volatility) ** scaling
-    return int(min(_HOLD_MAX_MINUTES, max(_HOLD_MIN_MINUTES, scaled)))
-
-
-def _reference_idiosyncratic(selections: Sequence[_Selection]) -> float | None:
-    """Mean positive idiosyncratic dislocation across the selected names."""
-
-    positive = [
-        selection.idiosyncratic
-        for selection in selections
-        if selection.idiosyncratic > 0.0
-    ]
-    if not positive:
-        return None
-    return sum(positive) / len(positive)
-
-
-def _conviction_scaled_hold(
-    base_hold: int,
-    idiosyncratic: float,
-    reference_idiosyncratic: float | None,
-    scaling: float,
-) -> int:
-    """Hold length scaled by conviction (idiosyncratic dislocation magnitude).
-
-    ``scaling == 0`` returns the fixed ``base_hold``. Otherwise the hold is
-    ``base_hold * (idio / reference_idio) ** scaling`` — bigger capitulations are
-    held longer for their bigger, slower bounce — clamped to
-    ``[_HOLD_MIN_MINUTES, _HOLD_MAX_MINUTES]``. Falls back to the fixed hold when
-    the dislocation reference is unknown or non-positive.
-    """
-
-    if scaling <= 0.0 or idiosyncratic <= 0.0 or not reference_idiosyncratic:
-        return base_hold
-    scaled = base_hold * (idiosyncratic / reference_idiosyncratic) ** scaling
-    return int(min(_HOLD_MAX_MINUTES, max(_HOLD_MIN_MINUTES, scaled)))
-
-
-def _score(
-    candidate: _Candidate,
-    idiosyncratic_dislocation: float,
-    selection_score: str,
+def _hysteresis_vote(
+    formation_return: float, signal: str, band: float, prev_vote: float
 ) -> float:
-    funding_score = abs(candidate.funding_pressure_bps)
-    extension_score = max(0.0, idiosyncratic_dislocation)
-    if selection_score == "funding":
-        return funding_score
-    if selection_score == "extension":
-        return extension_score
-    return funding_score + extension_score
+    """Trend vote with a no-trade band around zero (hysteresis).
+
+    Enter/hold the trend direction only when the formation return clears ``+band``
+    (or drops below ``-band``); inside the band, hold the prior standing vote. This
+    collapses whipsaw round-trips through the zero-crossing zone into holds, cutting
+    turnover (and its capacity participation) without slowing the formation horizon.
+    """
+
+    if formation_return > band:
+        return 1.0
+    if formation_return < -band:
+        return 0.0 if signal == "long_flat" else -1.0
+    return prev_vote
 
 
-def _observations(candidate: _Candidate) -> tuple[ObservationRef, ...]:
-    return (
-        ObservationRef(
-            symbol=candidate.symbol,
-            timestamp=candidate.lookback_row.timestamp,
-            field="close",
-            source="crypto_perp_1min_with_funding",
-        ),
-        ObservationRef(
-            symbol=candidate.symbol,
-            timestamp=candidate.signal_row.timestamp,
-            field="close",
-            source="crypto_perp_1min_with_funding",
-        ),
-        ObservationRef(
-            symbol=candidate.symbol,
-            timestamp=candidate.signal_row.timestamp,
-            field="volume",
-            source="crypto_perp_1min_with_funding",
-        ),
-        *(
-            (
-                ObservationRef(
-                    symbol=candidate.symbol,
-                    timestamp=candidate.recent_row.timestamp,
-                    field="close",
-                    source="crypto_perp_1min_with_funding",
-                ),
+def _rebalance_times(
+    rows_by_symbol: Mapping[str, _SymbolRows], rebalance_days: int
+) -> tuple[datetime, ...]:
+    """UTC-midnight rebalance clock firing every ``rebalance_days`` days.
+
+    Uses the union of bar timestamps so the clock only fires where data exists; the
+    day-ordinal modulo fixes a consistent phase across the window.
+    """
+
+    times = {
+        timestamp
+        for rows in rows_by_symbol.values()
+        for timestamp in rows.timestamps
+        if timestamp.hour == 0
+        and timestamp.minute == 0
+        and timestamp.date().toordinal() % rebalance_days == 0
+    }
+    return tuple(sorted(times))
+
+
+def _rows_by_symbol(bars: Sequence[Mapping[str, object]]) -> dict[str, _SymbolRows]:
+    grouped: dict[str, list[_BarRow]] = {}
+    for index, bar in enumerate(bars):
+        missing = _REQUIRED_FIELDS - set(bar)
+        if missing:
+            raise ValueError(f"bar {index} missing fields: {sorted(missing)}")
+        symbol = str(bar["symbol"])
+        grouped.setdefault(symbol, []).append(
+            _BarRow(
+                symbol=symbol,
+                timestamp=_datetime_value(bar["timestamp"], "timestamp"),
+                available_at=_datetime_value(bar["available_at"], "available_at"),
+                close=_positive_float(bar["close"], "close"),
             )
-            if candidate.recent_row is not None
-            else ()
-        ),
-        *(
+        )
+
+    result: dict[str, _SymbolRows] = {}
+    for symbol, symbol_bars in grouped.items():
+        ordered = tuple(sorted(symbol_bars, key=lambda row: row.timestamp))
+        daily = tuple(
+            row for row in ordered if row.timestamp.hour == 0 and row.timestamp.minute == 0
+        )
+        result[symbol] = _SymbolRows(
+            bars=ordered,
+            timestamps=tuple(row.timestamp for row in ordered),
+            daily_bars=daily,
+            daily_times=tuple(row.timestamp for row in daily),
+        )
+    return result
+
+
+def _observations(symbol: str, bars: tuple[_BarRow, ...]) -> tuple[ObservationRef, ...]:
+    """Declare the close observations the decision reads, deduped by bar time."""
+
+    seen: set[datetime] = set()
+    refs: list[ObservationRef] = []
+    for row in sorted(bars, key=lambda bar: bar.timestamp):
+        if row.timestamp in seen:
+            continue
+        seen.add(row.timestamp)
+        refs.append(
             ObservationRef(
-                symbol=candidate.symbol,
-                timestamp=event.bar_timestamp,
-                field="funding_rate",
-                source="crypto_perp_1min_with_funding",
+                symbol=symbol,
+                timestamp=row.timestamp,
+                field="close",
+                source=_SOURCE,
             )
-            for event in candidate.funding_events
-        ),
-    )
+        )
+    return tuple(refs)
 
 
 def _param_int(params: Mapping[str, object], key: str) -> int:
@@ -1033,15 +760,15 @@ def _datetime_value(value: object, field_name: str) -> datetime:
     else:
         raise ValueError(f"{field_name} must be a datetime or ISO string")
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _finite_float(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ValueError(f"{name} must be numeric")
     parsed = float(value)
-    if not math.isfinite(parsed):
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
         raise ValueError(f"{name} must be finite")
     return parsed
 
@@ -1053,10 +780,12 @@ def _positive_float(value: object, name: str) -> float:
     return parsed
 
 
-def _non_negative_float(value: object, name: str) -> float:
+def _non_negative_fraction(value: object, name: str) -> float:
+    """Non-negative fraction in [0, 1); ``0`` disables the associated band."""
+
     parsed = _finite_float(value, name)
-    if parsed < 0.0:
-        raise ValueError(f"{name} must be non-negative")
+    if parsed < 0.0 or parsed >= 1.0:
+        raise ValueError(f"{name} must be in [0, 1)")
     return parsed
 
 
@@ -1080,69 +809,35 @@ def _non_negative_int(value: object, name: str) -> int:
     return parsed
 
 
-def _hour(value: object, name: str) -> int:
-    parsed = _int_value(value, name)
-    if parsed < 0 or parsed > 23:
-        raise ValueError(f"{name} must be in [0, 23]")
-    return parsed
-
-
-def _session_end_hour(value: object) -> int:
-    parsed = _int_value(value, "session_end_hour")
-    if parsed < 1 or parsed > 24:
-        raise ValueError("session_end_hour must be in [1, 24]")
-    return parsed
-
-
 def _bool_param(value: object, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be boolean")
     return value
 
 
-def _bool_value(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int):
-        return bool(value)
-    raise ValueError("has_funding_event must be boolean")
-
-
-def _selection_score(value: object) -> str:
+def _signal(value: object) -> str:
     parsed = str(value)
-    if parsed not in {"combined", "funding", "extension"}:
-        raise ValueError("selection_score must be one of: combined, funding, extension")
+    if parsed not in {"sign", "long_flat"}:
+        raise ValueError("signal must be one of: sign, long_flat")
     return parsed
 
 
-def _idiosyncratic_mode(value: object) -> str:
+def _trend_method(value: object) -> str:
     parsed = str(value)
-    if parsed not in {"raw", "vol_normalized", "beta_adjusted"}:
-        raise ValueError(
-            "idiosyncratic_mode must be one of: raw, vol_normalized, beta_adjusted"
-        )
-    return parsed
-
-
-def _cross_section_reference(value: object) -> str:
-    parsed = str(value)
-    if parsed not in {"mean", "median"}:
-        raise ValueError("cross_section_reference must be one of: mean, median")
+    if parsed not in {"return", "ma_cross"}:
+        raise ValueError("trend_method must be one of: return, ma_cross")
     return parsed
 
 
 def _weighting(value: object) -> str:
     parsed = str(value)
-    if parsed not in {
-        "equal",
-        "inverse_vol",
-        "dislocation",
-        "combined",
-        "capitulation",
-        "capacity_dislocation",
-    }:
-        raise ValueError(
-            "weighting must be one of: equal, inverse_vol, dislocation, combined, "
-            "capitulation, capacity_dislocation"
-        )
+    if parsed not in {"equal", "inverse_vol", "conviction"}:
+        raise ValueError("weighting must be one of: equal, inverse_vol, conviction")
+    return parsed
+
+
+def _gross_mode(value: object) -> str:
+    parsed = str(value)
+    if parsed not in {"universe", "active", "tilted"}:
+        raise ValueError("gross_mode must be one of: universe, active, tilted")
     return parsed

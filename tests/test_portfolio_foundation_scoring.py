@@ -1203,6 +1203,48 @@ def test_active_thesis_lock_still_rejects_changed_identity(tmp_path: Path):
         )
 
 
+def _write_best_snapshot(root: Path, params: str) -> None:
+    snapshot = root / "results" / "autoresearch" / "attempt-0001" / "snapshot"
+    snapshot.mkdir(parents=True)
+    (snapshot / "experiment.toml").write_text(params)
+
+
+def test_param_delta_vs_best_names_every_carried_over_lever(tmp_path: Path):
+    _write_best_snapshot(tmp_path, "[params]\nlookback_days = 25\ntrailing_pct = 0.0\n")
+
+    best_run_id, drift = loop._param_drift_vs_best(
+        tmp_path,
+        params={"lookback_days": 25, "trailing_pct": 0.15, "execution_bars": 10},
+        prior_rows=(_row(),),
+    )
+
+    # A lever left on from an earlier attempt confounds this one, so it is named
+    # alongside the intended lever rather than staying silent.
+    assert best_run_id == "attempt-0001"
+    assert drift == (
+        "execution_bars: None -> 10",
+        "trailing_pct: 0.0 -> 0.15",
+    )
+
+
+def test_param_delta_vs_best_is_empty_when_params_match_survivor(tmp_path: Path):
+    _write_best_snapshot(tmp_path, "[params]\nlookback_days = 25\n")
+
+    assert loop._param_drift_vs_best(
+        tmp_path,
+        params={"lookback_days": 25},
+        prior_rows=(_row(),),
+    ) == ("attempt-0001", ())
+
+
+def test_param_delta_vs_best_is_silent_before_a_survivor_exists(tmp_path: Path):
+    assert loop._param_drift_vs_best(
+        tmp_path,
+        params={"lookback_days": 25},
+        prior_rows=(),
+    ) == ("", ())
+
+
 def test_reset_lifecycle_archives_attempt_tree(tmp_path: Path):
     (tmp_path / "results.tsv").write_text("run_id\tstatus\n")
     lock = tmp_path / ".autoresearch" / "thesis_lock.json"

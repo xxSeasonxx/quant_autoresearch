@@ -1,155 +1,65 @@
 [params]
-funding_lookback_events = 5
-funding_decay = 0.0
-return_lookback_minutes = 120
-decision_interval_minutes = 240
-entry_twap_bars = 30
-exit_twap_bars = 60
+lookback_days = 30
+signal = "sign"
+blend = false
+skip_days = 0
+rebalance_days = 1
 decision_lag_minutes = 1
-session_start_hour = 0
-session_end_hour = 24
-top_n = 5
-min_cross_section = 5
-min_abs_funding_bps = 1.0
-min_abs_return_bps = 0.0
-include_positive_funding_shorts = false
-include_negative_funding_longs = true
-min_same_sign_funding_events = 3
-min_latest_abs_funding_bps = 0.0
-recent_return_lookback_minutes = 60
-max_recent_same_direction_return_bps = 1000.0
-long_max_market_down_bps = 1000.0
-min_idiosyncratic_return_bps = 2.5
-idiosyncratic_mode = "raw"
-min_idiosyncratic_sigma = 0.5
-short_signal_multiplier = 2.5
-selection_score = "combined"
-cross_section_reference = "median"
-weighting = "capacity_dislocation"
-dislocation_weight_power = 4.0
-liquidity_weight_power = 2.0
-vol_lookback_minutes = 1440
-long_hold_minutes = 720
-short_hold_minutes = 720
-hold_vol_scaling = 0.0
-hold_dislocation_scaling = 0.0
-take_profit_frac = 0.0
+confirm_lookback_days = 0
+vol_scale = false
+vol_lookback_days = 60
+trend_method = "return"
+weighting = "inverse_vol"
+gross_mode = "tilted"
+top_n = 0
+execution_bars = 20
+signal_band = 0.0
+position_smoothing = 2
 
-# Bounded search space: ranges the thesis needs tested, not pinned to baseline.
-# Causal/operational fields (decision_lag, session hours) stay pinned by design.
+# Bounded search space: the ranges this thesis needs tested, not pinned to the
+# baseline. `signal` (sign/long_flat), `blend` (bool), `trend_method`, `weighting`, and
+# `gross_mode` (universe/active/tilted) are categorical — the loop toggles the value directly, so
+# they carry no numeric bounds.
+# `lookback_days` is the main data-snooping surface: keep it on a coarse grid and do not
+# fine-tune. `decision_lag_minutes` is pinned by causality. `top_n` caps the active book
+# (0 = no cap; the universe holds 3 names).
 
-[bounds.funding_lookback_events]
-min = 3
-max = 10
+[bounds.lookback_days]
+min = 20
+max = 180
 
-[bounds.funding_decay]
-min = 0.0
-max = 2.0
+[bounds.skip_days]
+min = 0
+max = 15
 
-[bounds.return_lookback_minutes]
-min = 30
-max = 480
-
-[bounds.decision_interval_minutes]
-min = 30
-max = 720
-
-[bounds.entry_twap_bars]
+[bounds.rebalance_days]
 min = 1
-max = 30
-
-[bounds.exit_twap_bars]
-min = 1
-max = 60
+max = 7
 
 [bounds.decision_lag_minutes]
 min = 1
 max = 1
 
-[bounds.session_start_hour]
+[bounds.confirm_lookback_days]
 min = 0
-max = 0
+max = 200
 
-[bounds.session_end_hour]
-min = 24
-max = 24
+[bounds.vol_lookback_days]
+min = 10
+max = 90
 
 [bounds.top_n]
-min = 1
-max = 14
-
-[bounds.min_cross_section]
-min = 2
-max = 12
-
-[bounds.min_abs_funding_bps]
-min = 0.0
-max = 10.0
-
-[bounds.min_abs_return_bps]
-min = 0.0
-max = 50.0
-
-[bounds.min_same_sign_funding_events]
-min = 1
-max = 5
-
-[bounds.min_latest_abs_funding_bps]
-min = 0.0
-max = 10.0
-
-[bounds.recent_return_lookback_minutes]
 min = 0
-max = 240
+max = 3
 
-[bounds.vol_lookback_minutes]
-min = 240
-max = 2880
+[bounds.execution_bars]
+min = 1
+max = 30
 
-[bounds.max_recent_same_direction_return_bps]
-min = 0.0
-max = 1000.0
-
-[bounds.long_max_market_down_bps]
-min = 0.0
-max = 1000.0
-
-[bounds.min_idiosyncratic_return_bps]
-min = 0.0
-max = 50.0
-
-[bounds.min_idiosyncratic_sigma]
-min = 0.0
-max = 3.0
-
-[bounds.short_signal_multiplier]
-min = 1.0
-max = 6.0
-
-[bounds.long_hold_minutes]
-min = 120
-max = 1440
-
-[bounds.short_hold_minutes]
-min = 120
-max = 1440
-
-[bounds.hold_vol_scaling]
-min = 0.0
-max = 2.0
-
-[bounds.hold_dislocation_scaling]
-min = 0.0
-max = 2.0
-
-[bounds.dislocation_weight_power]
-min = 1.0
-max = 6.0
-
-[bounds.liquidity_weight_power]
-min = 0.0
-max = 2.0
-
-[bounds.take_profit_frac]
+[bounds.signal_band]
 min = 0.0
 max = 0.5
+
+[bounds.position_smoothing]
+min = 1
+max = 20

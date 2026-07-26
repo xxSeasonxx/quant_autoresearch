@@ -13,6 +13,30 @@ Each note should include:
 
 ## Open Items
 
+### Volume in strategy bars, for volume-aware execution under an ADV cap
+
+- **Unlocks:** participation-aware execution (VWAP-style, or any schedule that leans on
+  high-volume minutes), which is the only honest way to relieve an ADV participation cap
+  without slowing the signal. Without it, a capacity-bound book can only spread turnover
+  blindly over time, which trades execution lag for participation relief and degrades any
+  fast signal.
+- **Missing upstream capability:** strategies appear to receive no traded volume on the bars
+  they read, so a decision cannot condition size or timing on the liquidity actually
+  available in that minute — while the capacity model scores the book against a 25% ADV cap
+  measured on that same volume.
+- **Why the loop cannot test it faithfully:** the strategy is scored against a participation
+  constraint it cannot observe. Every capacity-relief lever available in-loop
+  (`execution_bars`, `position_smoothing`, `signal_band`) is volume-blind, so a pinned ADV
+  read cannot be distinguished from one a volume-aware schedule would relieve, and Train's
+  capacity verdict is pessimistic by an unknown margin.
+- **Validation it would unlock:** an honest deployable-scale ceiling, and therefore whether a
+  capacity-bound edge needs a protocol-envelope change (notional, universe depth, ADV
+  ceiling) or just better execution.
+- **Verify first:** confirm against the `quant_data` and `quant_strategies` consumer docs
+  which volume fields actually reach a strategy's bars and observation rows. This item is
+  recorded from prior-lifecycle notes and has not been re-checked against those contracts; if
+  volume is in fact available, the item is moot and the relief lever should simply be built.
+
 ### Autocorrelation-robust effective sample size for the Train-strength gate
 
 - **Unlocks:** a Train-strength gate (`R - 2*SE >= 0`) whose standard error is

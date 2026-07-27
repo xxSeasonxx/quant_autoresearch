@@ -39,7 +39,10 @@ recommendation, Season approval, lifecycle reset, and first-baseline preflight.
 Setup also declares the bounded search space: set `experiment.toml` `[bounds.*]` to
 the ranges the thesis needs tested, not pinned at `min == max`.
 
-After the first baseline starts the lifecycle, treat `protocol.toml` as frozen.
+After the first baseline starts the lifecycle, treat the research protocol as frozen.
+Only Season may increase `max_iterations`, `plateau_patience`, or
+`baseline_grace_iterations` after a configured stop, using the extension procedure
+in Stop. Every other protocol field remains frozen.
 Ordinary iteration reads only:
 
 - `program.md` — this operating contract;
@@ -264,9 +267,11 @@ keep going while new structural lessons are appearing.
 
 ## Stop
 
-**Continue rule — the only authority on whether the run is over.** While the latest
-`results.tsv` row (and the `climb` summary printed for it) shows `continuation:
-allowed` and an empty `stop_reason`, the run is not done: begin another attempt. Your own judgment that
+**Continue rule — the only authority on whether the run is over.** Run
+`conda run -n quant python -m loop status` or read the latest `climb` summary. While
+it shows `continuation: allowed` and an empty `stop_reason`, begin another attempt.
+`results.tsv` contains immutable attempt evidence; continuation and stop reason are
+derived from that evidence and the authorized stop rules. Your own judgment that
 research has converged, that the envelope binds, or that you are out of distinct
 levers is **not** a stop and must not end the run.
 
@@ -276,6 +281,20 @@ or — when the protocol sets `plateau_patience` below the budget — a post-bas
 plateau. At stop, report the frozen Train survivor, or say the thesis died on Train.
 A Train survivor is not a promotion signal — it is only a candidate for Season's
 downstream OOS, paper, and small-live review.
+
+Only Season may extend a stopped lifecycle. Season increases one or more of
+`max_iterations`, `plateau_patience`, and `baseline_grace_iterations` in
+`protocol.toml`, then records the authorization with:
+
+```bash
+conda run -n quant python -m loop extend --confirm EXTEND-LIFECYCLE
+```
+
+The values may only increase and must reopen the configured stop. The command
+rejects every research-identity change and appends an immutable event to
+`.autoresearch/lifecycle_events.jsonl`; it never edits `results.tsv`. An agent may
+resume `climb` after Season performs this operation, but must never run `extend`
+itself.
 
 A reseed recommendation is a third honest outcome, reached through the stop rules,
 never instead of them. Maintain a **Reseed Log** in `reseed_log.md` — a file you

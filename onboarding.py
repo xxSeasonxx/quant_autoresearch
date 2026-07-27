@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from math import isfinite, sqrt
 from pathlib import Path
@@ -15,6 +15,30 @@ from universe_resolver import UniverseArtifact, load_universe_artifact
 
 def protocol_sha256(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+STOP_RULE_FIELDS = (
+    "max_iterations",
+    "plateau_patience",
+    "baseline_grace_iterations",
+)
+
+
+def protocol_identity_sha256(protocol: ProtocolConfig) -> str:
+    """Hash the frozen research contract, excluding operator-owned stop rules."""
+
+    payload = asdict(protocol)
+    loop = payload["loop"]
+    for field in STOP_RULE_FIELDS:
+        del loop[field]
+    return _canonical_sha256(payload)
+
+
+def stop_rule_values(protocol: ProtocolConfig) -> dict[str, int]:
+    return {
+        field: int(getattr(protocol.loop, field))
+        for field in STOP_RULE_FIELDS
+    }
 
 
 def _sha256_text(text: str) -> str:

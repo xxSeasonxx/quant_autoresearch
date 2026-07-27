@@ -46,8 +46,6 @@ class ResultRow:
     failure_class: str
     failure_reason: str
     best_status: str
-    continuation: str
-    stop_reason: str
     elapsed_seconds: float
     artifact_dir: str
     note: str
@@ -84,8 +82,6 @@ class ResultRow:
             "failure_class",
             "failure_reason",
             "best_status",
-            "continuation",
-            "stop_reason",
             "elapsed_seconds",
             "artifact_dir",
             "note",
@@ -132,8 +128,6 @@ class ResultRow:
             "failure_class": self.failure_class,
             "failure_reason": self.failure_reason,
             "best_status": self.best_status,
-            "continuation": self.continuation,
-            "stop_reason": self.stop_reason,
             "elapsed_seconds": str(self.elapsed_seconds),
             "artifact_dir": self.artifact_dir,
             "note": _compact_ledger_note(self.note),
@@ -209,12 +203,6 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
             name="best_status",
             allowed={"updated", "unchanged"},
         ),
-        continuation=_parse_enum(
-            row["continuation"],
-            name="continuation",
-            allowed={"allowed", "repair_required", "terminal"},
-        ),
-        stop_reason=row["stop_reason"],
         elapsed_seconds=float(row["elapsed_seconds"]),
         artifact_dir=row["artifact_dir"],
         note=row["note"],
@@ -224,7 +212,7 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
 def _validate_result_chain(rows: list[ResultRow]) -> None:
     seen_run_ids: set[str] = set()
     seen_iterations: set[int] = set()
-    for index, row in enumerate(rows):
+    for row in rows:
         if row.iteration <= 0:
             raise ValueError("iteration must be > 0")
         if row.run_id in seen_run_ids:
@@ -236,9 +224,6 @@ def _validate_result_chain(rows: list[ResultRow]) -> None:
         expected_run_id = f"attempt-{row.iteration:04d}"
         if row.run_id != expected_run_id:
             raise ValueError(f"run_id must match iteration: expected {expected_run_id}")
-        if row.continuation == "terminal" and index != len(rows) - 1:
-            raise ValueError("terminal continuation row must be last")
-
     expected_iterations = list(range(1, len(rows) + 1))
     actual_iterations = [row.iteration for row in rows]
     if actual_iterations != expected_iterations:
@@ -301,37 +286,3 @@ def read_results(path: str | Path) -> list[ResultRow]:
     rows = [_parse_row(row) for row in raw_rows]
     _validate_result_chain(rows)
     return rows
-
-
-def status_summary(
-    path: str | Path,
-    *,
-    max_iterations: int,
-    plateau_patience: int,
-    subwindows: int,
-) -> dict[str, object]:
-    rows = read_results(path)
-    kept = [row for row in rows if row.status == "keep" and row.score is not None]
-    kept_scores = [row.score for row in kept if row.score is not None]
-    best = max(kept_scores, default=None)
-    best_row = max(
-        kept,
-        key=lambda row: row.score if row.score is not None else float("-inf"),
-        default=None,
-    )
-    stop_reason = next(
-        (row.stop_reason for row in reversed(rows) if row.stop_reason), ""
-    )
-    continuation = rows[-1].continuation if rows else "allowed"
-    return {
-        "attempts": len(rows),
-        "best_score": best,
-        "best_run_id": None if best_row is None else best_row.run_id,
-        "last_status": rows[-1].status if rows else "not_started",
-        "continuation": continuation,
-        "stop_reason": stop_reason,
-        "max_iterations": max_iterations,
-        "remaining_iterations": max(0, max_iterations - len(rows)),
-        "plateau_patience": plateau_patience,
-        "subwindows": subwindows,
-    }

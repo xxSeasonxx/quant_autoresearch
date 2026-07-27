@@ -4,6 +4,18 @@ Development chronology and migration rationale. Active contracts live in the
 owning docs (`program.md`, `protocol.toml`, `docs/score_research.md`, and the module
 docstrings); this file is history only.
 
+## Semantic lifecycle identity and derived stop state
+
+The thesis lock moved from a raw `protocol.toml` byte hash to a canonical semantic
+identity that excludes only the three operator-owned stop rules. Continuation and
+stop reason were removed from `results.tsv`; the harness now derives them from
+immutable attempts and authorized stop rules. Stopped lifecycles can be reopened
+only through a monotonic, Season-confirmed extension recorded in an append-only
+event chain.
+
+This was an intentional breaking cutover while no lifecycle was active. Old lock
+and ledger schemas require reset and are not translated.
+
 ## Full-window total-return score and Train-strength naming
 
 The harness now ranks gate-passing candidates by realistic-cost full-window

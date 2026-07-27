@@ -744,6 +744,29 @@ def test_stop_reason_after_attempt_covers_all_branches():
     )
 
 
+def test_lifecycle_state_reconstructs_complexity_stop_from_gate_flags(tmp_path: Path):
+    config = LoopConfig(
+        plateau_patience=3,
+        max_iterations=10,
+        min_abs_improvement=0.001,
+        min_rel_improvement=0.0,
+        baseline_grace_iterations=3,
+    )
+    row = replace(_row(), gate_flags="train_strength=pass,complexity_cap=fail")
+
+    state = loop._lifecycle_state(
+        (row,),
+        loop_config=config,
+        snapshot=None,
+        root=tmp_path,
+    )
+
+    assert state == loop.LifecycleState(
+        continuation="terminal",
+        stop_reason="complexity_exhausted",
+    )
+
+
 # --- gates -----------------------------------------------------------------
 
 
@@ -1022,8 +1045,6 @@ def _row() -> ResultRow:
         failure_class="edge",
         failure_reason="",
         best_status="updated",
-        continuation="allowed",
-        stop_reason="",
         elapsed_seconds=1.25,
         artifact_dir="results/autoresearch/attempt-0001",
         note="",
@@ -1081,6 +1102,17 @@ def test_result_log_rejects_previous_harness_header(tmp_path: Path):
         + "\t".join("x" for _ in legacy_header)
         + "\n"
     )
+
+    with pytest.raises(ValueError, match="legacy results.tsv schema"):
+        read_results(legacy)
+
+
+def test_result_log_rejects_persisted_stop_state_schema(tmp_path: Path):
+    legacy_header = ResultRow.header()
+    insert_at = legacy_header.index("elapsed_seconds")
+    legacy_header[insert_at:insert_at] = ["continuation", "stop_reason"]
+    legacy = tmp_path / "legacy.tsv"
+    legacy.write_text("\t".join(legacy_header) + "\n")
 
     with pytest.raises(ValueError, match="legacy results.tsv schema"):
         read_results(legacy)
@@ -1163,7 +1195,15 @@ def test_resolve_climb_identity_uses_explicit_args_when_provided(tmp_path: Path)
 def test_resolve_climb_identity_sources_from_lock_when_omitted(tmp_path: Path):
     lock = tmp_path / ".autoresearch" / "thesis_lock.json"
     lock.parent.mkdir(parents=True)
-    lock.write_text(json.dumps({"mechanism": "locked mech", "falsifier": "locked fals"}))
+    lock.write_text(
+        json.dumps(
+            {
+                "schema_version": loop.THESIS_LOCK_SCHEMA_VERSION,
+                "mechanism": "locked mech",
+                "falsifier": "locked fals",
+            }
+        )
+    )
     # After the lock exists, climb need not re-pass the identity (F26).
     assert loop._resolve_climb_identity(None, None, root=tmp_path) == (
         "locked mech",
@@ -1189,7 +1229,12 @@ def test_active_thesis_lock_still_rejects_changed_identity(tmp_path: Path):
         rows=(),
         mechanism="crowded funding mean reverts",
         falsifier="no post-cost robustness",
-        protocol_sha256="hash",
+        identity_sha256="hash",
+        current_stop_rules={
+            "max_iterations": 10,
+            "plateau_patience": 5,
+            "baseline_grace_iterations": 3,
+        },
         results_path="results.tsv",
     )
     with pytest.raises(ValueError, match="thesis identity changed"):
@@ -1198,9 +1243,226 @@ def test_active_thesis_lock_still_rejects_changed_identity(tmp_path: Path):
             rows=(),
             mechanism="crowded funding pressure mean reverts",
             falsifier="no post-cost robustness",
-            protocol_sha256="hash",
+            identity_sha256="hash",
+            current_stop_rules={
+                "max_iterations": 10,
+                "plateau_patience": 5,
+                "baseline_grace_iterations": 3,
+            },
             results_path="results.tsv",
         )
+
+
+def _write_stopped_baseline_lifecycle(tmp_path: Path):
+    _write_workspace(tmp_path)
+    protocol = load_protocol(tmp_path / "protocol.toml")
+    loop._ensure_active_thesis_lock(
+        tmp_path,
+        rows=(),
+        mechanism="crowded funding mean reverts",
+        falsifier="no post-cost robustness",
+        identity_sha256=loop.protocol_identity_sha256(protocol),
+        current_stop_rules=loop.stop_rule_values(protocol),
+        results_path="results.tsv",
+    )
+    rows = [
+        replace(
+            _row(),
+            run_id=f"attempt-{iteration:04d}",
+            iteration=iteration,
+            status="discard",
+            score=None,
+            best_status="unchanged",
+            artifact_dir=f"results/autoresearch/attempt-{iteration:04d}",
+        )
+        for iteration in range(1, 4)
+    ]
+    for row in rows:
+        append_result(tmp_path / "results.tsv", row)
+    return protocol, rows
+
+
+def test_extend_records_event_without_rewriting_attempt_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, rows = _write_stopped_baseline_lifecycle(tmp_path)
+    ledger = tmp_path / "results.tsv"
+    before = ledger.read_bytes()
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 3",
+            "baseline_grace_iterations = 4",
+        )
+    )
+    current = load_protocol(protocol_path)
+
+    with pytest.raises(ValueError, match="stop rules changed without authorization"):
+        loop._ensure_active_thesis_lock(
+            tmp_path,
+            rows=rows,
+            mechanism="crowded funding mean reverts",
+            falsifier="no post-cost robustness",
+            identity_sha256=loop.protocol_identity_sha256(current),
+            current_stop_rules=loop.stop_rule_values(current),
+            results_path="results.tsv",
+        )
+
+    event = loop.extend_lifecycle(
+        confirm=loop.EXTEND_CONFIRMATION,
+        root=tmp_path,
+    )
+
+    assert ledger.read_bytes() == before
+    assert event["previous_stop_reason"] == "baseline_failure"
+    assert event["current_continuation"] == "allowed"
+    assert event["previous"]["baseline_grace_iterations"] == 3
+    assert event["current"]["baseline_grace_iterations"] == 4
+    assert len((tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()) == 1
+    loop._ensure_active_thesis_lock(
+        tmp_path,
+        rows=rows,
+        mechanism="crowded funding mean reverts",
+        falsifier="no post-cost robustness",
+        identity_sha256=loop.protocol_identity_sha256(current),
+        current_stop_rules=loop.stop_rule_values(current),
+        results_path="results.tsv",
+    )
+    monkeypatch.chdir(tmp_path)
+    status = loop.run_status()
+    assert status["continuation"] == "allowed"
+    assert status["stop_reason"] == ""
+
+
+def test_extend_records_repaired_crash_as_allowed(tmp_path: Path):
+    _, rows = _write_stopped_baseline_lifecycle(tmp_path)
+    repaired_rows = (*rows[:-1], replace(rows[-1], status="crash"))
+    ledger = tmp_path / "results.tsv"
+    ledger.write_text("")
+    for row in repaired_rows:
+        append_result(ledger, row)
+
+    quick = tmp_path / ".autoresearch/quick/attempt-0003.toml"
+    quick.parent.mkdir(parents=True)
+    quick.write_text("[run]\n")
+    loop._write_attempt_snapshot(
+        tmp_path,
+        run_id="attempt-0003",
+        artifact_dir=repaired_rows[-1].artifact_dir,
+    )
+    (tmp_path / "strategy.py").write_text("__all__ = ['repaired']\n")
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 3",
+            "baseline_grace_iterations = 4",
+        )
+    )
+
+    event = loop.extend_lifecycle(
+        confirm=loop.EXTEND_CONFIRMATION,
+        root=tmp_path,
+    )
+
+    assert event["previous_stop_reason"] == "baseline_failure"
+    assert event["current_continuation"] == "allowed"
+
+
+def test_extend_rejects_decrease_and_non_reopening_change(tmp_path: Path):
+    protocol, _ = _write_stopped_baseline_lifecycle(tmp_path)
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        protocol_path.read_text()
+        .replace("baseline_grace_iterations = 3", "baseline_grace_iterations = 2")
+    )
+    with pytest.raises(ValueError, match="only increase"):
+        loop.extend_lifecycle(
+            confirm=loop.EXTEND_CONFIRMATION,
+            root=tmp_path,
+        )
+
+    protocol_path.write_text(_protocol_text().replace("max_iterations = 10", "max_iterations = 11"))
+    with pytest.raises(ValueError, match="do not reopen"):
+        loop.extend_lifecycle(
+            confirm=loop.EXTEND_CONFIRMATION,
+            root=tmp_path,
+        )
+
+    assert loop.stop_rule_values(protocol)["baseline_grace_iterations"] == 3
+
+
+def test_extend_event_chain_supports_later_authorized_extension(tmp_path: Path):
+    _write_stopped_baseline_lifecycle(tmp_path)
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 3",
+            "baseline_grace_iterations = 4",
+        )
+    )
+    first = loop.extend_lifecycle(confirm=loop.EXTEND_CONFIRMATION, root=tmp_path)
+    append_result(
+        tmp_path / "results.tsv",
+        replace(
+            _row(),
+            run_id="attempt-0004",
+            iteration=4,
+            status="discard",
+            score=None,
+            best_status="unchanged",
+            artifact_dir="results/autoresearch/attempt-0004",
+        ),
+    )
+    protocol_path.write_text(
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 4",
+            "baseline_grace_iterations = 5",
+        )
+    )
+    second = loop.extend_lifecycle(confirm=loop.EXTEND_CONFIRMATION, root=tmp_path)
+
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+    assert second["previous"] == first["current"]
+    assert len(
+        (tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()
+    ) == 2
+
+
+def test_extend_requires_exact_confirmation(tmp_path: Path):
+    with pytest.raises(ValueError, match="EXTEND-LIFECYCLE"):
+        loop.extend_lifecycle(confirm="wrong", root=tmp_path)
+
+
+def test_lifecycle_event_chain_fails_closed_when_tampered(tmp_path: Path):
+    _write_stopped_baseline_lifecycle(tmp_path)
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 3",
+            "baseline_grace_iterations = 4",
+        )
+    )
+    loop.extend_lifecycle(confirm=loop.EXTEND_CONFIRMATION, root=tmp_path)
+    events_path = tmp_path / ".autoresearch/lifecycle_events.jsonl"
+    event = json.loads(events_path.read_text())
+    event["previous"]["baseline_grace_iterations"] = 2
+    events_path.write_text(json.dumps(event) + "\n")
+    lock = loop._read_thesis_lock(tmp_path)
+    assert lock is not None
+
+    with pytest.raises(ValueError, match="malformed|inconsistent"):
+        loop._authorized_stop_rules(tmp_path, lock=lock)
+
+
+def test_legacy_thesis_lock_schema_fails_closed(tmp_path: Path):
+    lock = tmp_path / ".autoresearch/thesis_lock.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text('{"schema_version": 1}\n')
+
+    with pytest.raises(ValueError, match="legacy thesis lock schema"):
+        loop._read_thesis_lock(tmp_path)
 
 
 def _write_best_snapshot(root: Path, params: str) -> None:
@@ -1250,6 +1512,8 @@ def test_reset_lifecycle_archives_attempt_tree(tmp_path: Path):
     lock = tmp_path / ".autoresearch" / "thesis_lock.json"
     lock.parent.mkdir(parents=True)
     lock.write_text("{}\n")
+    events = tmp_path / ".autoresearch" / "lifecycle_events.jsonl"
+    events.write_text('{"event":"stop_rules_extended"}\n')
     attempt = tmp_path / "results" / "autoresearch" / "attempt-0001"
     attempt.mkdir(parents=True)
     (attempt / "run_card.json").write_text("{}\n")
@@ -1264,6 +1528,9 @@ def test_reset_lifecycle_archives_attempt_tree(tmp_path: Path):
     assert not (tmp_path / "results" / "autoresearch").exists()
     assert (archive_dir / "autoresearch" / "attempt-0001" / "run_card.json").exists()
     assert (archive_dir / "results.tsv").exists()
+    assert (archive_dir / "lifecycle_events.jsonl").read_text() == (
+        '{"event":"stop_rules_extended"}\n'
+    )
 
 
 def test_rationale_components_empty_section_fails_closed(tmp_path: Path):
@@ -1348,6 +1615,9 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     score_parts = payload["score_parts"]
     assert score_parts["full_window_total_return"] == 0.05
     assert score_parts["train_strength_lcb"] == rows[0].train_strength_lcb
+    assert score_parts["train_strength_required_annualized_sharpe"] == pytest.approx(
+        2.0 * (_P / 120.0) ** 0.5
+    )
     assert score_parts["full_train_at_risk_annualized_return"] == 0.0012 * _P
     assert score_parts["cost_stress_full_window_total_return"] == 0.05
     assert (
@@ -1600,7 +1870,19 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
         (tmp_path / "results/autoresearch/attempt-0001/run_card.json").read_text()
     )
     assert outcome.status == "crash"
-    assert row.continuation == "repair_required"
+    snapshot = loop._source_snapshot(
+        tmp_path,
+        protocol=protocol,
+        strategy_path=protocol.strategy_path,
+        experiment_path="experiment.toml",
+        rationale_path="rationale.md",
+    )
+    assert loop._lifecycle_state(
+        (row,),
+        loop_config=protocol.loop,
+        snapshot=snapshot,
+        root=tmp_path,
+    ).continuation == "repair_required"
     assert "missing portfolio foundation" in row.note
     assert run_card["failure_class"] == "foundation_unavailable"
     # Ledger row and run card must agree on the crash class (F24).

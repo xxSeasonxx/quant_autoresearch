@@ -7,7 +7,14 @@ import re
 import pytest
 
 import loop
-from onboarding import build_protocol_proposal, protocol_sha256, write_protocol_proposal
+from onboarding import (
+    build_protocol_proposal,
+    protocol_identity_sha256,
+    protocol_sha256,
+    stop_rule_values,
+    write_protocol_proposal,
+)
+from protocol import load_protocol
 from universe_resolver import universe_payload_sha256
 
 
@@ -85,6 +92,54 @@ train_strength_haircut_se = 2.0
 max_components = 3
 max_params = 10
 """.strip() + "\n"
+
+
+def test_protocol_identity_excludes_only_stop_rules(tmp_path: Path):
+    base_path = tmp_path / "base.toml"
+    base_path.write_text(_protocol_text())
+    base = load_protocol(base_path)
+
+    stop_path = tmp_path / "stop.toml"
+    stop_path.write_text(
+        _protocol_text()
+        .replace("plateau_patience = 5", "plateau_patience = 7")
+        .replace("max_iterations = 10", "max_iterations = 12")
+        .replace("baseline_grace_iterations = 3", "baseline_grace_iterations = 4")
+    )
+    formatted_path = tmp_path / "formatted.toml"
+    formatted_path.write_text("# operator comment\n\n" + _protocol_text())
+    protected_path = tmp_path / "protected.toml"
+    protected_path.write_text(
+        _protocol_text().replace(
+            "min_abs_improvement = 0.001",
+            "min_abs_improvement = 0.002",
+        )
+    )
+    protected_output_path = tmp_path / "protected-output.toml"
+    protected_output_path.write_text(
+        _protocol_text().replace(
+            "foundation_cost_stress_multiplier = 2.0",
+            "foundation_cost_stress_multiplier = 3.0",
+        )
+    )
+
+    assert protocol_identity_sha256(load_protocol(stop_path)) == protocol_identity_sha256(
+        base
+    )
+    assert protocol_identity_sha256(
+        load_protocol(formatted_path)
+    ) == protocol_identity_sha256(base)
+    assert protocol_identity_sha256(
+        load_protocol(protected_path)
+    ) != protocol_identity_sha256(base)
+    assert protocol_identity_sha256(
+        load_protocol(protected_output_path)
+    ) != protocol_identity_sha256(base)
+    assert stop_rule_values(base) == {
+        "max_iterations": 10,
+        "plateau_patience": 5,
+        "baseline_grace_iterations": 3,
+    }
 
 
 def _brief_text(
@@ -597,6 +652,7 @@ def test_reset_cli_archives_generated_lifecycle_state(
     quick_dir.mkdir(parents=True)
     (quick_dir / "attempt-0001.toml").write_text("quick\n")
     (tmp_path / ".autoresearch" / "thesis_lock.json").write_text('{"active": true}\n')
+    (tmp_path / ".autoresearch" / "lifecycle_events.jsonl").write_text("event\n")
     source_files = {
         "strategy.py": "strategy\n",
         "protocol.toml": "protocol\n",
@@ -613,9 +669,11 @@ def test_reset_cli_archives_generated_lifecycle_state(
     archive = archives[0]
     assert (archive / "results.tsv").read_text() == "results\n"
     assert (archive / "thesis_lock.json").read_text() == '{"active": true}\n'
+    assert (archive / "lifecycle_events.jsonl").read_text() == "event\n"
     assert (archive / "quick" / "attempt-0001.toml").read_text() == "quick\n"
     assert not (tmp_path / "results.tsv").exists()
     assert not (tmp_path / ".autoresearch" / "thesis_lock.json").exists()
+    assert not (tmp_path / ".autoresearch" / "lifecycle_events.jsonl").exists()
     assert not quick_dir.exists()
     for name, content in source_files.items():
         assert (tmp_path / name).read_text() == content

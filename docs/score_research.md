@@ -107,19 +107,25 @@ score a completed-trade return bag.
   `min_subwindow_trades`, `max_drawdown`, `max_symbol_concentration`,
   `effective_symbol_count`, `win_rate`, `profit_factor`, `avg_trade_net`, and
   `cost_return_sum`;
-- loop state: gate flags, `failure_class`, complexity count, failure reason,
-  keep status, continuation, stop reason, elapsed seconds, artifact directory,
-  and note.
+- attempt state: gate flags, `failure_class`, complexity count, failure reason,
+  keep status, elapsed seconds, artifact directory, and note.
 
 `score` is the ledger's single representation of full-window total return.
 A nonempty `results.tsv` must use the exact current header. A header mismatch
 fails closed and requires a new thesis lifecycle; an empty file initializes with
 the current header on first append.
 
+Continuation and stop reason are not attempt measurements and are not stored in
+the ledger. `loop status` and the `climb` summary derive them from the immutable
+rows and the currently authorized stop rules. Operator extensions are recorded in
+`.autoresearch/lifecycle_events.jsonl`.
+
 Each `run_card.json` adds:
 
 - `full_window_total_return`;
 - `train_strength_lcb`;
+- `train_strength_required_annualized_sharpe`, computed from the realized full-Train
+  effective sample size as `train_strength_haircut_se * sqrt(P / n_eff)`;
 - `full_train_at_risk_annualized_return`;
 - per-window `at_risk_annualized_return` and
   `at_risk_annualized_standard_error`;

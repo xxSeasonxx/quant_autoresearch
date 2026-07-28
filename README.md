@@ -14,6 +14,12 @@ Root files may hold either the neutral scaffold or an active local thesis. Use
 `python -m loop status` as the lifecycle-state source; do not infer state from
 checkout comments or strategy names alone.
 
+The primary mandate is a $100,000 account. A thesis remains unstarted while
+`[execution_model] mode = "unpriced"`: `status` stays readable and reports the
+setup blocker, while `baseline` and `climb` create no lifecycle state. Before the
+first baseline, onboarding must record a lawfully accessible venue and current
+per-symbol minimum-order and fixed-order-cost terms with source provenance.
+
 ## Worked example — a thesis this loop researched end-to-end
 
 **Crypto Perp Funding-Crowding Reversal.** One human-seeded thesis — crowded crypto-perp
@@ -104,6 +110,7 @@ The agent does not edit during an active thesis loop:
 - cost model
 - fill model
 - capacity model
+- account notional and execution model
 - leverage budget
 - objective kind
 - gate thresholds

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping
@@ -37,21 +38,40 @@ class CostModel:
 
 
 @dataclass(frozen=True)
+class AccountConfig:
+    initial_notional: float
+
+
+@dataclass(frozen=True)
+class InstrumentExecutionTerms:
+    min_order_notional: float
+    fixed_cost_per_order: float
+
+
+@dataclass(frozen=True)
+class ExecutionModel:
+    mode: str
+    venue: str | None = None
+    terms_as_of: str | None = None
+    source: str | None = None
+    instruments: dict[str, InstrumentExecutionTerms] | None = None
+
+
+@dataclass(frozen=True)
 class CapacityModel:
     """Operator-frozen capacity envelope passed through to the runner.
 
     `mode = "off"` runs no capacity pricing; the upstream portfolio book treats a
     traded notional book with capacity off as non-scoreable, so a real thesis must
-    set `mode = "adv_impact"` with the full impact parameter set before its book
+    set `mode = "average_bar_impact"` with the full impact parameter set before its book
     can score.
     """
 
     mode: str
-    portfolio_notional: float | None = None
-    adv_lookback_bars: int | None = None
-    adv_min_observations: int | None = None
+    average_bar_lookback_bars: int | None = None
+    average_bar_min_observations: int | None = None
     max_bar_participation: float | None = None
-    max_adv_participation: float | None = None
+    max_average_bar_participation: float | None = None
     impact_coefficient_bps: float | None = None
     impact_exponent: float | None = None
 
@@ -121,6 +141,8 @@ class ProtocolConfig:
     data: DataConfig
     fill_model: FillModel
     cost_model: CostModel
+    account: AccountConfig
+    execution_model: ExecutionModel
     capacity_model: CapacityModel
     leverage_budget: LeverageBudget
     risk_budget: RiskBudgetConfig
@@ -260,41 +282,53 @@ def _optional_text(value: object) -> str | None:
 
 def _capacity_mode(value: object) -> str:
     parsed = str(value)
-    if parsed not in {"off", "adv_impact"}:
-        raise ValueError("capacity_model.mode must be one of: off, adv_impact")
+    if parsed not in {"off", "average_bar_impact"}:
+        raise ValueError("capacity_model.mode must be one of: off, average_bar_impact")
     return parsed
 
 
 def _load_capacity_model(raw: Mapping[str, Any]) -> CapacityModel:
     mode = _capacity_mode(_required(raw, "mode"))
     if mode == "off":
+        if set(raw) != {"mode"}:
+            raise ValueError("capacity_model mode = 'off' accepts no impact parameters")
         return CapacityModel(mode="off")
-    adv_lookback_bars = _positive_int(
-        _required(raw, "adv_lookback_bars"), name="capacity_model.adv_lookback_bars"
+    allowed = {
+        "mode",
+        "average_bar_lookback_bars",
+        "average_bar_min_observations",
+        "max_bar_participation",
+        "max_average_bar_participation",
+        "impact_coefficient_bps",
+        "impact_exponent",
+    }
+    extra = sorted(set(raw) - allowed)
+    if extra:
+        raise ValueError(f"unsupported capacity_model keys: {extra}")
+    average_bar_lookback_bars = _positive_int(
+        _required(raw, "average_bar_lookback_bars"),
+        name="capacity_model.average_bar_lookback_bars",
     )
-    adv_min_observations = _positive_int(
-        _required(raw, "adv_min_observations"),
-        name="capacity_model.adv_min_observations",
+    average_bar_min_observations = _positive_int(
+        _required(raw, "average_bar_min_observations"),
+        name="capacity_model.average_bar_min_observations",
     )
-    if adv_min_observations > adv_lookback_bars:
+    if average_bar_min_observations > average_bar_lookback_bars:
         raise ValueError(
-            "capacity_model.adv_min_observations must be <= capacity_model.adv_lookback_bars"
+            "capacity_model.average_bar_min_observations must be <= "
+            "capacity_model.average_bar_lookback_bars"
         )
     return CapacityModel(
         mode=mode,
-        portfolio_notional=_positive_float(
-            _required(raw, "portfolio_notional"),
-            name="capacity_model.portfolio_notional",
-        ),
-        adv_lookback_bars=adv_lookback_bars,
-        adv_min_observations=adv_min_observations,
+        average_bar_lookback_bars=average_bar_lookback_bars,
+        average_bar_min_observations=average_bar_min_observations,
         max_bar_participation=_positive_float(
             _required(raw, "max_bar_participation"),
             name="capacity_model.max_bar_participation",
         ),
-        max_adv_participation=_positive_float(
-            _required(raw, "max_adv_participation"),
-            name="capacity_model.max_adv_participation",
+        max_average_bar_participation=_positive_float(
+            _required(raw, "max_average_bar_participation"),
+            name="capacity_model.max_average_bar_participation",
         ),
         impact_coefficient_bps=_nonnegative_float(
             _required(raw, "impact_coefficient_bps"),
@@ -303,6 +337,83 @@ def _load_capacity_model(raw: Mapping[str, Any]) -> CapacityModel:
         impact_exponent=_positive_float(
             _required(raw, "impact_exponent"), name="capacity_model.impact_exponent"
         ),
+    )
+
+
+def _load_account(raw: Mapping[str, Any]) -> AccountConfig:
+    if set(raw) != {"initial_notional"}:
+        raise ValueError("account requires only initial_notional")
+    return AccountConfig(
+        initial_notional=_positive_float(
+            _required(raw, "initial_notional"),
+            name="account.initial_notional",
+        )
+    )
+
+
+def _load_execution_model(
+    raw: Mapping[str, Any],
+    *,
+    symbols: tuple[str, ...],
+) -> ExecutionModel:
+    mode = str(_required(raw, "mode"))
+    if mode == "unpriced":
+        if set(raw) != {"mode"}:
+            raise ValueError("execution_model mode = 'unpriced' accepts no venue terms")
+        return ExecutionModel(mode="unpriced")
+    if mode != "minimum_notional":
+        raise ValueError(
+            "execution_model.mode must be one of: unpriced, minimum_notional"
+        )
+    allowed = {"mode", "venue", "terms_as_of", "source", "instruments"}
+    extra = sorted(set(raw) - allowed)
+    if extra:
+        raise ValueError(f"unsupported execution_model keys: {extra}")
+    venue = str(_required(raw, "venue")).strip()
+    source = str(_required(raw, "source")).strip()
+    terms_as_of = str(_required(raw, "terms_as_of"))
+    if not venue or not source:
+        raise ValueError("execution_model venue and source must be non-blank")
+    try:
+        date.fromisoformat(terms_as_of)
+    except ValueError as exc:
+        raise ValueError("execution_model.terms_as_of must be an ISO date") from exc
+    raw_instruments = _required(raw, "instruments")
+    if not isinstance(raw_instruments, Mapping):
+        raise ValueError("execution_model.instruments must be a table")
+    expected = set(symbols)
+    actual = {str(symbol) for symbol in raw_instruments}
+    if actual != expected:
+        raise ValueError(
+            "execution_model instrument coverage must exactly match data.symbols: "
+            f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+        )
+    instruments: dict[str, InstrumentExecutionTerms] = {}
+    for symbol in symbols:
+        raw_terms = raw_instruments[symbol]
+        if not isinstance(raw_terms, Mapping):
+            raise ValueError(f"execution_model.instruments.{symbol} must be a table")
+        if set(raw_terms) != {"min_order_notional", "fixed_cost_per_order"}:
+            raise ValueError(
+                f"execution_model.instruments.{symbol} requires "
+                "min_order_notional and fixed_cost_per_order"
+            )
+        instruments[symbol] = InstrumentExecutionTerms(
+            min_order_notional=_nonnegative_float(
+                _required(raw_terms, "min_order_notional"),
+                name=f"execution_model.instruments.{symbol}.min_order_notional",
+            ),
+            fixed_cost_per_order=_nonnegative_float(
+                _required(raw_terms, "fixed_cost_per_order"),
+                name=f"execution_model.instruments.{symbol}.fixed_cost_per_order",
+            ),
+        )
+    return ExecutionModel(
+        mode=mode,
+        venue=venue,
+        terms_as_of=terms_as_of,
+        source=source,
+        instruments=instruments,
     )
 
 
@@ -366,7 +477,19 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
     raw_data = _required(data, "data")
     raw_fill = _required(data, "fill_model")
     raw_cost = _required(data, "cost_model")
+    raw_account = _required(data, "account")
+    raw_execution = _required(data, "execution_model")
     raw_capacity = _required(data, "capacity_model")
+    for name, raw in (
+        ("data", raw_data),
+        ("fill_model", raw_fill),
+        ("cost_model", raw_cost),
+        ("account", raw_account),
+        ("execution_model", raw_execution),
+        ("capacity_model", raw_capacity),
+    ):
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"{name} must be a table")
     raw_leverage = data.get("leverage_budget", {})
     if not isinstance(raw_leverage, Mapping):
         raise ValueError("leverage_budget must be a table")
@@ -451,6 +574,8 @@ def load_protocol(path: str | Path) -> ProtocolConfig:
                 name="cost_model.slippage_bps_per_side",
             ),
         ),
+        account=_load_account(raw_account),
+        execution_model=_load_execution_model(raw_execution, symbols=symbols),
         capacity_model=_load_capacity_model(raw_capacity),
         leverage_budget=_load_leverage_budget(raw_leverage),
         risk_budget=_load_risk_budget(raw_risk_budget),
@@ -605,7 +730,9 @@ def load_experiment(path: str | Path) -> ExperimentConfig:
 
     nonnumeric_bounds = set(bounds) - numeric_params
     if nonnumeric_bounds:
-        raise ValueError(f"non-numeric params cannot have bounds: {sorted(nonnumeric_bounds)}")
+        raise ValueError(
+            f"non-numeric params cannot have bounds: {sorted(nonnumeric_bounds)}"
+        )
 
     for key in numeric_params:
         value = params[key]
@@ -655,18 +782,19 @@ def build_quick_run_config(
     if protocol.output.focused_probe_limit is not None:
         output_block["focused_probe_limit"] = protocol.output.focused_probe_limit
     if protocol.output.focused_timeout_seconds is not None:
-        output_block["focused_timeout_seconds"] = protocol.output.focused_timeout_seconds
+        output_block["focused_timeout_seconds"] = (
+            protocol.output.focused_timeout_seconds
+        )
     if protocol.output.micro_probe_limit is not None:
         output_block["micro_probe_limit"] = protocol.output.micro_probe_limit
     if protocol.output.micro_timeout_seconds is not None:
         output_block["micro_timeout_seconds"] = protocol.output.micro_timeout_seconds
     capacity_block: dict[str, object] = {"mode": protocol.capacity_model.mode}
     for field_name in (
-        "portfolio_notional",
-        "adv_lookback_bars",
-        "adv_min_observations",
+        "average_bar_lookback_bars",
+        "average_bar_min_observations",
         "max_bar_participation",
-        "max_adv_participation",
+        "max_average_bar_participation",
         "impact_coefficient_bps",
         "impact_exponent",
     ):
@@ -693,6 +821,28 @@ def build_quick_run_config(
         "cost_model": {
             "fee_bps_per_side": protocol.cost_model.fee_bps_per_side,
             "slippage_bps_per_side": protocol.cost_model.slippage_bps_per_side,
+        },
+        "account": {"initial_notional": protocol.account.initial_notional},
+        "execution_model": {
+            "mode": protocol.execution_model.mode,
+            **(
+                {}
+                if protocol.execution_model.mode == "unpriced"
+                else {
+                    "venue": protocol.execution_model.venue,
+                    "terms_as_of": protocol.execution_model.terms_as_of,
+                    "source": protocol.execution_model.source,
+                    "instruments": {
+                        symbol: {
+                            "min_order_notional": terms.min_order_notional,
+                            "fixed_cost_per_order": terms.fixed_cost_per_order,
+                        }
+                        for symbol, terms in (
+                            protocol.execution_model.instruments or {}
+                        ).items()
+                    },
+                }
+            ),
         },
         "capacity_model": capacity_block,
         "leverage_budget": {
@@ -734,13 +884,30 @@ def dumps_quick_run_config(config: Mapping[str, object]) -> str:
         "params",
         "fill_model",
         "cost_model",
+        "account",
+        "execution_model",
         "capacity_model",
         "leverage_budget",
         "risk_budget",
         "envelope",
         "output",
     ]:
-        _write_block(lines, section, config[section])  # type: ignore[arg-type]
+        values = config[section]
+        if not isinstance(values, Mapping):
+            raise TypeError(f"{section} must be a mapping")
+        if section != "execution_model":
+            _write_block(lines, section, values)
+            continue
+        execution = dict(values)
+        instruments = execution.pop("instruments", {})
+        _write_block(lines, section, execution)
+        if isinstance(instruments, Mapping):
+            for symbol, terms in instruments.items():
+                _write_block(
+                    lines,
+                    f'execution_model.instruments."{symbol}"',
+                    terms,  # type: ignore[arg-type]
+                )
     return "\n".join(lines) + "\n"
 
 

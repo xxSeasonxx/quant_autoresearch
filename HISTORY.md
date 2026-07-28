@@ -4,6 +4,25 @@ Development chronology and migration rationale. Active contracts live in the
 owning docs (`program.md`, `protocol.toml`, `docs/score_research.md`, and the module
 docstrings); this file is history only.
 
+## Small-account execution and volume-semantics cutover
+
+The protocol moved real account scale from the capacity model to required
+`[account].initial_notional`, adopted the $100,000 primary mandate, and replaced
+the local capacity vocabulary with the engine's average-bar contract. Execution
+terms became a separate required model with exact per-symbol minimum-order and
+fixed-order-cost coverage.
+
+The foundation consumer moved to portfolio-foundation v4 and engine-evidence v6,
+retired `capacity_bound` and `adv_*`, and added target reachability, maximum
+feasible book scale, minimum-order ratio, and fixed-cost share to run cards and
+the ledger. Old protocols, foundation payloads, locks, and ledger headers are
+rejected without translation.
+
+The lifecycle had no attempts, so the cutover kept the protocol unpriced and
+unstarted. Status remains readable; climb and baseline fail before creating
+lifecycle state until onboarding records a lawfully accessible venue and current
+terms provenance.
+
 ## Semantic lifecycle identity and derived stop state
 
 The thesis lock moved from a raw `protocol.toml` byte hash to a canonical semantic

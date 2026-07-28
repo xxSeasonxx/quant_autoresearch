@@ -1,51 +1,56 @@
 # Objective
 
-Keep Train attempts comparable and immutable while allowing Season to extend a
-configured stop budget without editing generated evidence. Research identity must
-remain frozen; lifecycle state must be derived from attempts and explicitly
-authorized stop rules.
+Run one immutable Train lifecycle against the $100,000 primary mandate only
+after real execution feasibility is priced from a lawfully accessible venue.
 
-## Current state
+# Current state
 
-- The compatibility-breaking lifecycle cutover is implemented and documented.
-- `results.tsv` no longer stores continuation or stop reason. Thesis locks use
-  semantic protocol identity, and extensions use
-  `.autoresearch/lifecycle_events.jsonl`.
-- The repo has no active lifecycle: `python -m loop status` reports zero attempts
-  and `continuation: allowed`.
-- The full suite passes: `116 passed`. Mypy passes for all 12 source files.
-- The ignored local setup and offload skills include
-  `.autoresearch/lifecycle_events.jsonl` in baseline preflight, provenance
-  retention, and bench cleanup.
-- `UPSTREAM_LIMITATIONS_TODO.md` and `docs/capacity-model-study-guide.md` contain
-  pre-existing work outside this implementation.
+- The repository has no active lifecycle and zero attempts.
+- `protocol.toml` fixes `[account].initial_notional = 100000.0`, uses the current
+  `average_bar_impact` capacity contract, and deliberately sets
+  `[execution_model] mode = "unpriced"`.
+- `python -m loop status` is readable and reports `continuation: blocked` plus
+  the execution-setup blocker.
+- `baseline` and `climb` fail before creating a thesis lock, ledger row, quick
+  config, or artifact while execution is unpriced.
+- Priced onboarding requires venue, terms as-of date, authoritative source, and
+  exact per-symbol minimum-order and fixed-order-cost terms.
+- The harness accepts portfolio-foundation v4 and sizing-report v2 only. Run
+  cards and `results.tsv` report `target_reached`,
+  `max_feasible_book_scale`, `minimum_order_notional_ratio`, and
+  `fixed_cost_share`; retired evidence and ledger shapes fail closed.
+- The $1 million rerun remains a non-gating diagnostic and is distinct from the
+  $100,000 scored mandate.
+- The full suite passes: 119 tests. Ruff and mypy pass.
 
-## Next steps
+# Next steps with success checks
 
-1. Review and commit the intended harness, test, and documentation files.
-   Success: the commit excludes unrelated upstream/capacity-study edits.
-2. Before the next baseline, run `new-thesis-setup`.
-   Success: the approved protocol retains micro causality replay and the baseline
-   run card reports admissible causality evidence.
-3. Treat the remaining calibration and capacity items in
-   `docs/HARNESS_CONSTRAINT_REVIEW.md` as separate operator studies.
-   Success: no threshold or engine constant changes without its own evidence and
-   approval.
+1. Season selects a venue the account may lawfully access and supplies current
+   terms provenance.
+   - Success: every configured symbol has sourced minimum-order and fixed-cost
+     terms from the same dated snapshot.
+2. Run onboarding and review its recommendation without starting Train.
+   - Success: the recommended execution model is `minimum_notional`, coverage is
+     exact, and the approved protocol hash matches `protocol.toml`.
+3. Run the first baseline only after approval.
+   - Success: attempt 0001 creates the first lock, ledger row, run card, and v4
+     foundation evidence; the execution fields reconcile with upstream evidence.
 
-## Open questions / risks
+# Open questions/risks
 
-- `extend` intentionally requires Season to edit the three stop fields before
-  recording authorization; the autonomous Train agent must not invoke it.
-- The event log is append-only by contract and validates its sequence and stop-rule
-  chain; it is not a cryptographic tamper-proof store.
-- A real stopped lifecycle has not yet exercised `extend`; temporary-workspace tests
-  cover baseline, repeated extension, rejection, and audit behavior.
+- The eligible execution venue and live terms are intentionally unresolved.
+- Lot sizes, quantity steps, price ticks, contract multipliers, multi-numeraire
+  conversion, and historical venue-rule changes remain upstream limitations.
+- `min_cost_stress_return_retention = 0.50` still needs an operator-owned
+  calibration study under the chosen venue terms.
+- `HISTORY.md` contains an unrelated, preserved `n_eff` chronology update.
 
-## Key references
+# Key references
 
-- `program.md` — active Train and extension contract.
-- `docs/score_research.md` — ledger and run-card semantics.
-- `docs/HARNESS_CONSTRAINT_REVIEW.md` — evidence and remaining studies.
-- Verification: `conda run -n quant python -m pytest -q`,
-  `conda run -n quant python -m mypy .`,
-  `conda run -n quant python -m loop status`.
+- `program.md`
+- `protocol.toml`
+- `docs/score_research.md`
+- `UPSTREAM_LIMITATIONS_TODO.md`
+- `docs/HARNESS_CONSTRAINT_REVIEW.md`
+- `onboarding.py`
+- `loop.py`

@@ -35,7 +35,9 @@ from results_log import ResultRow, append_result, read_results
 _P = 252
 
 
-def _lcb(mean_return: float, return_volatility: float, n_eff: float, *, k: float) -> float:
+def _lcb(
+    mean_return: float, return_volatility: float, n_eff: float, *, k: float
+) -> float:
     annualized = mean_return * _P
     standard_error = return_volatility * _P / sqrt(n_eff)
     return annualized - k * standard_error
@@ -98,16 +100,18 @@ def _metric(
 def _sizing(
     *,
     book_scale: float | None = 1.5,
+    max_feasible_book_scale: float | None = 2.5,
     deployed_volatility: float | None = 0.18,
     max_feasible_volatility: float | None = 0.30,
-    capacity_bound: bool | None = False,
+    target_reached: bool | None = True,
 ) -> FoundationSizing:
     return FoundationSizing(
         annualization_periods_per_year=_P,
         book_scale=book_scale,
+        max_feasible_book_scale=max_feasible_book_scale,
         deployed_volatility=deployed_volatility,
         max_feasible_volatility=max_feasible_volatility,
-        capacity_bound=capacity_bound,
+        target_reached=target_reached,
     )
 
 
@@ -133,9 +137,15 @@ def _foundation(
             ),
             subwindows=(
                 _metric("train_1"),
-                _metric("train_2", mean_return=worst_subwindow_mean, closed_trade_count=12),
+                _metric(
+                    "train_2", mean_return=worst_subwindow_mean, closed_trade_count=12
+                ),
                 _metric("train_3"),
             ),
+            max_average_bar_participation=0.05,
+            max_bar_participation=0.1,
+            minimum_order_notional_ratio=10.0,
+            fixed_cost_share=0.05,
         ),
         cost_stress=FoundationScenario(
             scenario_id="cost_stress",
@@ -145,16 +155,24 @@ def _foundation(
                 _metric("train_2", mean_return=0.0005, closed_trade_count=12),
                 _metric("train_3", mean_return=0.0007),
             ),
+            max_average_bar_participation=0.05,
+            max_bar_participation=0.1,
+            minimum_order_notional_ratio=10.0,
+            fixed_cost_share=0.10,
         ),
         sizing=sizing or _sizing(),
     )
 
 
 def _config() -> ObjectiveConfig:
-    return ObjectiveConfig(kind="full_window_total_return", subwindows=3, psr_hurdle_sharpe=0.0)
+    return ObjectiveConfig(
+        kind="full_window_total_return", subwindows=3, psr_hurdle_sharpe=0.0
+    )
 
 
-def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[str, object]:
+def _foundation_payload(
+    foundation: FoundationEvidence | None = None,
+) -> dict[str, object]:
     def metric_payload(metric: FoundationMetric) -> dict[str, object]:
         return {
             "window_id": metric.window_id,
@@ -177,7 +195,16 @@ def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[st
     def scenario_payload(scenario: FoundationScenario) -> dict[str, object]:
         return {
             "scenario_id": scenario.scenario_id,
-            "capacity": {"max_adv_participation": 0.05, "max_bar_participation": 0.1},
+            "execution": {
+                "minimum_order_notional_ratio": scenario.minimum_order_notional_ratio,
+                "fixed_cost_share": scenario.fixed_cost_share,
+            },
+            "capacity": {
+                "max_average_bar_participation": (
+                    scenario.max_average_bar_participation
+                ),
+                "max_bar_participation": scenario.max_bar_participation,
+            },
             "full_train": metric_payload(scenario.full_train),
             "subwindows": [metric_payload(metric) for metric in scenario.subwindows],
         }
@@ -185,12 +212,15 @@ def _foundation_payload(foundation: FoundationEvidence | None = None) -> dict[st
     foundation = foundation or _foundation()
     sizing = foundation.sizing
     return {
+        "schema_version": "quant_strategies.quick_run.portfolio_foundation/v4",
         "sizing_report": {
+            "schema_version": "quant_strategies.portfolio_sizing/v2",
             "annualization_periods_per_year": sizing.annualization_periods_per_year,
             "book_scale": sizing.book_scale,
+            "max_feasible_book_scale": sizing.max_feasible_book_scale,
             "deployed_volatility": sizing.deployed_volatility,
             "max_feasible_volatility": sizing.max_feasible_volatility,
-            "capacity_bound": sizing.capacity_bound,
+            "target_reached": sizing.target_reached,
         },
         "scenarios": {
             "realistic_costs": scenario_payload(foundation.realistic_costs),
@@ -292,7 +322,8 @@ def _evaluate(
 
 
 def _protocol_text() -> str:
-    return """
+    return (
+        """
 strategy_path = "strategy.py"
 strategy_id = "example"
 
@@ -311,6 +342,19 @@ entry_lag_bars = 1
 [cost_model]
 fee_bps_per_side = 1.0
 slippage_bps_per_side = 1.0
+
+[account]
+initial_notional = 100000.0
+
+[execution_model]
+mode = "minimum_notional"
+venue = "test-venue"
+terms_as_of = "2026-07-27"
+source = "https://example.test/terms"
+
+[execution_model.instruments.SPY]
+min_order_notional = 0.0
+fixed_cost_per_order = 0.0
 
 [capacity_model]
 mode = "off"
@@ -358,7 +402,27 @@ max_abs_drawdown = 0.2
 train_strength_haircut_se = 2.0
 max_components = 3
 max_params = 10
-""".strip() + "\n"
+""".strip()
+        + "\n"
+    )
+
+
+def _unpriced_protocol_text() -> str:
+    priced = """
+[execution_model]
+mode = "minimum_notional"
+venue = "test-venue"
+terms_as_of = "2026-07-27"
+source = "https://example.test/terms"
+
+[execution_model.instruments.SPY]
+min_order_notional = 0.0
+fixed_cost_per_order = 0.0
+""".strip()
+    return _protocol_text().replace(
+        priced,
+        '[execution_model]\nmode = "unpriced"',
+    )
 
 
 # --- protocol wiring -------------------------------------------------------
@@ -385,11 +449,57 @@ def test_protocol_materializes_money_objective_and_micro(tmp_path: Path):
     assert protocol.risk_budget.mode == "calibrate_vol"
     assert protocol.risk_budget.annualization_periods_per_year == 525600
     assert protocol.risk_budget.target_volatility == 0.15
+    assert protocol.account.initial_notional == 100000.0
+    assert protocol.execution_model.mode == "minimum_notional"
+    assert quick["account"] == {"initial_notional": 100000.0}
+    execution_model = quick["execution_model"]
+    assert isinstance(execution_model, Mapping)
+    assert execution_model["venue"] == "test-venue"
     risk_budget = quick["risk_budget"]
     assert isinstance(risk_budget, Mapping)
     assert risk_budget["mode"] == "calibrate_vol"
     assert risk_budget["annualization_periods_per_year"] == 525600
     assert risk_budget["target_volatility"] == 0.15
+
+
+def test_protocol_rejects_retired_capacity_shape(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        _protocol_text().replace(
+            '[capacity_model]\nmode = "off"',
+            (
+                '[capacity_model]\nmode = "average_bar_impact"\n'
+                "portfolio_notional = 100000.0\n"
+                "adv_lookback_bars = 1440\n"
+                "adv_min_observations = 60\n"
+                "max_bar_participation = 0.5\n"
+                "max_adv_participation = 0.25\n"
+                "impact_coefficient_bps = 10.0\n"
+                "impact_exponent = 0.5"
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="unsupported capacity_model keys"):
+        load_protocol(protocol_path)
+
+
+def test_foundation_parser_rejects_retired_evidence_shapes():
+    old_schema = _foundation_payload()
+    old_schema["schema_version"] = "quant_strategies.quick_run.portfolio_foundation/v3"
+    with pytest.raises(ValueError, match="unsupported portfolio foundation schema"):
+        loop._foundation_from_result(
+            SimpleNamespace(foundation=RawFoundation(old_schema))
+        )
+
+    old_sizing = _foundation_payload()
+    sizing = old_sizing["sizing_report"]
+    assert isinstance(sizing, dict)
+    sizing["capacity_bound"] = False
+    with pytest.raises(ValueError, match="capacity_bound"):
+        loop._foundation_from_result(
+            SimpleNamespace(foundation=RawFoundation(old_sizing))
+        )
 
 
 def test_protocol_rejects_unknown_objective_kind(tmp_path: Path):
@@ -436,7 +546,9 @@ def test_protocol_rejects_previous_train_strength_key(
 def test_protocol_rejects_invalid_train_strength_haircut(tmp_path: Path):
     protocol_path = tmp_path / "protocol.toml"
     protocol_path.write_text(
-        _protocol_text().replace("train_strength_haircut_se = 2.0", "train_strength_haircut_se = 0.0")
+        _protocol_text().replace(
+            "train_strength_haircut_se = 2.0", "train_strength_haircut_se = 0.0"
+        )
     )
     try:
         load_protocol(protocol_path)
@@ -450,9 +562,14 @@ def test_train_strength_haircut_is_independent_of_max_iterations(tmp_path: Path)
     base = tmp_path / "base.toml"
     base.write_text(_protocol_text())
     bigger = tmp_path / "bigger.toml"
-    bigger.write_text(_protocol_text().replace("max_iterations = 10", "max_iterations = 500"))
+    bigger.write_text(
+        _protocol_text().replace("max_iterations = 10", "max_iterations = 500")
+    )
 
-    assert load_protocol(base).gates.train_strength_haircut_se == load_protocol(bigger).gates.train_strength_haircut_se
+    assert (
+        load_protocol(base).gates.train_strength_haircut_se
+        == load_protocol(bigger).gates.train_strength_haircut_se
+    )
 
 
 def test_protocol_rejects_plateau_patience_above_max_iterations(tmp_path: Path):
@@ -474,7 +591,8 @@ def test_protocol_rejects_baseline_grace_above_max_iterations(tmp_path: Path):
         )
     )
     with pytest.raises(
-        ValueError, match="loop.baseline_grace_iterations must be <= loop.max_iterations"
+        ValueError,
+        match="loop.baseline_grace_iterations must be <= loop.max_iterations",
     ):
         load_protocol(protocol_path)
 
@@ -652,7 +770,9 @@ def test_unscoreable_window_makes_run_non_scoreable():
 
 def test_unknown_objective_kind_is_rejected():
     try:
-        score_objective((), ObjectiveConfig(kind="psr", subwindows=3), foundation=_foundation())
+        score_objective(
+            (), ObjectiveConfig(kind="psr", subwindows=3), foundation=_foundation()
+        )
     except ValueError as exc:
         assert "unsupported objective kind" in str(exc)
     else:
@@ -698,7 +818,9 @@ def test_stop_reason_after_attempt_covers_all_branches():
 
     # Continue: a keep with neither a plateau nor the cap reached.
     live = _stop_rows(((1, "keep"), (2, "discard")))
-    assert loop._stop_reason_after_attempt(live, gates=passing, loop_config=config) == ""
+    assert (
+        loop._stop_reason_after_attempt(live, gates=passing, loop_config=config) == ""
+    )
 
     # complexity_exhausted takes precedence over every other reason.
     assert (
@@ -850,10 +972,7 @@ def test_cost_stress_retention_does_not_depend_on_stress_total_return():
     _, cost_stress, gates = _evaluate(foundation)
 
     assert cost_stress.score is None
-    assert (
-        cost_stress.full_train_at_risk_annualized_return
-        == 0.0008 * _P
-    )
+    assert cost_stress.full_train_at_risk_annualized_return == 0.0008 * _P
     assert gates.by_name["cost_stress_retention"].passed
 
 
@@ -864,7 +983,10 @@ def test_cost_stress_retention_non_binding_when_realistic_nonpositive():
         cost_stress_full_mean=-0.002,
     )
     objective, _, gates = _evaluate(foundation)
-    assert objective.full_train_at_risk_annualized_return is not None and objective.full_train_at_risk_annualized_return <= 0.0
+    assert (
+        objective.full_train_at_risk_annualized_return is not None
+        and objective.full_train_at_risk_annualized_return <= 0.0
+    )
     assert gates.by_name["cost_stress_retention"].passed  # non-binding
     assert not gates.by_name["train_strength"].passed  # train_strength is the kill
 
@@ -1026,7 +1148,10 @@ def _row() -> ResultRow:
         book_scale=1.5,
         deployed_volatility=0.18,
         max_feasible_volatility=0.30,
-        capacity_bound=False,
+        target_reached=True,
+        max_feasible_book_scale=2.5,
+        minimum_order_notional_ratio=10.0,
+        fixed_cost_share=0.05,
         full_train_psr=0.98,
         worst_subwindow_psr=0.91,
         gates_passed=True,
@@ -1091,16 +1216,13 @@ def test_result_log_rejects_nonempty_legacy(tmp_path: Path):
 def test_result_log_rejects_previous_harness_header(tmp_path: Path):
     legacy_header = ResultRow.header()
     legacy_header[legacy_header.index("train_strength_lcb")] = "deflated_return_lcb"
-    legacy_header[
-        legacy_header.index("full_train_at_risk_annualized_return")
-    ] = "full_train_annualized_return"
+    legacy_header[legacy_header.index("full_train_at_risk_annualized_return")] = (
+        "full_train_annualized_return"
+    )
     legacy_header.insert(legacy_header.index("max_drawdown"), "total_return")
     legacy = tmp_path / "legacy.tsv"
     legacy.write_text(
-        "\t".join(legacy_header)
-        + "\n"
-        + "\t".join("x" for _ in legacy_header)
-        + "\n"
+        "\t".join(legacy_header) + "\n" + "\t".join("x" for _ in legacy_header) + "\n"
     )
 
     with pytest.raises(ValueError, match="legacy results.tsv schema"):
@@ -1143,7 +1265,9 @@ def _write_workspace(tmp_path: Path) -> None:
     (tmp_path / "protocol.toml").write_text(_protocol_text())
     (tmp_path / "experiment.toml").write_text("[params]\n[bounds]\n")
     (tmp_path / "strategy.py").write_text("__all__ = []\n")
-    (tmp_path / "rationale.md").write_text("## Signal Components\n\n### Component: signal\n")
+    (tmp_path / "rationale.md").write_text(
+        "## Signal Components\n\n### Component: signal\n"
+    )
 
 
 def test_climb_once_fails_closed_when_rationale_components_missing(
@@ -1151,7 +1275,9 @@ def test_climb_once_fails_closed_when_rationale_components_missing(
     monkeypatch: pytest.MonkeyPatch,
 ):
     _write_workspace(tmp_path)
-    (tmp_path / "rationale.md").write_text("# Rationale\n\n## Thesis\nNo components yet.\n")
+    (tmp_path / "rationale.md").write_text(
+        "# Rationale\n\n## Thesis\nNo components yet.\n"
+    )
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(ValueError, match="no '## Signal Components' section"):
@@ -1163,6 +1289,31 @@ def test_climb_once_fails_closed_when_rationale_components_missing(
 
     # Fail closed: no attempt is logged when the components section is malformed.
     assert not (tmp_path / "results/autoresearch/attempt-0001").exists()
+
+
+def test_unpriced_climb_preflight_creates_no_lifecycle_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write_workspace(tmp_path)
+    (tmp_path / "protocol.toml").write_text(_unpriced_protocol_text())
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="execution terms are unpriced"):
+        loop.climb_once(
+            mechanism="Funding pressure mean reverts.",
+            falsifier="No post-cost robustness.",
+            runner=lambda *args, **kwargs: None,
+        )
+
+    assert not (tmp_path / "results.tsv").exists()
+    assert not (tmp_path / ".autoresearch" / "thesis_lock.json").exists()
+    assert not (tmp_path / ".autoresearch" / "quick").exists()
+    assert not (tmp_path / "results" / "autoresearch").exists()
+    status = loop.run_status()
+    assert status["attempts"] == 0
+    assert status["continuation"] == "blocked"
+    assert status["setup_blocker"] == loop.EXECUTION_SETUP_BLOCKER
 
 
 def test_climb_once_records_universe_resolver_hash_in_lock(
@@ -1189,7 +1340,10 @@ def test_climb_once_records_universe_resolver_hash_in_lock(
 
 
 def test_resolve_climb_identity_uses_explicit_args_when_provided(tmp_path: Path):
-    assert loop._resolve_climb_identity("mech", "fals", root=tmp_path) == ("mech", "fals")
+    assert loop._resolve_climb_identity("mech", "fals", root=tmp_path) == (
+        "mech",
+        "fals",
+    )
 
 
 def test_resolve_climb_identity_sources_from_lock_when_omitted(tmp_path: Path):
@@ -1319,7 +1473,12 @@ def test_extend_records_event_without_rewriting_attempt_evidence(
     assert event["current_continuation"] == "allowed"
     assert event["previous"]["baseline_grace_iterations"] == 3
     assert event["current"]["baseline_grace_iterations"] == 4
-    assert len((tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()) == 1
+    assert (
+        len(
+            (tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()
+        )
+        == 1
+    )
     loop._ensure_active_thesis_lock(
         tmp_path,
         rows=rows,
@@ -1373,8 +1532,9 @@ def test_extend_rejects_decrease_and_non_reopening_change(tmp_path: Path):
     protocol, _ = _write_stopped_baseline_lifecycle(tmp_path)
     protocol_path = tmp_path / "protocol.toml"
     protocol_path.write_text(
-        protocol_path.read_text()
-        .replace("baseline_grace_iterations = 3", "baseline_grace_iterations = 2")
+        protocol_path.read_text().replace(
+            "baseline_grace_iterations = 3", "baseline_grace_iterations = 2"
+        )
     )
     with pytest.raises(ValueError, match="only increase"):
         loop.extend_lifecycle(
@@ -1382,7 +1542,9 @@ def test_extend_rejects_decrease_and_non_reopening_change(tmp_path: Path):
             root=tmp_path,
         )
 
-    protocol_path.write_text(_protocol_text().replace("max_iterations = 10", "max_iterations = 11"))
+    protocol_path.write_text(
+        _protocol_text().replace("max_iterations = 10", "max_iterations = 11")
+    )
     with pytest.raises(ValueError, match="do not reopen"):
         loop.extend_lifecycle(
             confirm=loop.EXTEND_CONFIRMATION,
@@ -1425,9 +1587,12 @@ def test_extend_event_chain_supports_later_authorized_extension(tmp_path: Path):
     assert first["sequence"] == 1
     assert second["sequence"] == 2
     assert second["previous"] == first["current"]
-    assert len(
-        (tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()
-    ) == 2
+    assert (
+        len(
+            (tmp_path / ".autoresearch/lifecycle_events.jsonl").read_text().splitlines()
+        )
+        == 2
+    )
 
 
 def test_extend_requires_exact_confirmation(tmp_path: Path):
@@ -1546,9 +1711,7 @@ def test_rationale_components_reject_blank_or_duplicate_headings(tmp_path: Path)
     blank.write_text("## Signal Components\n\n### Component:\n")
     duplicate = tmp_path / "duplicate.md"
     duplicate.write_text(
-        "## Signal Components\n\n"
-        "### Component: signal\n\n"
-        "### Component:  Signal \n"
+        "## Signal Components\n\n### Component: signal\n\n### Component:  Signal \n"
     )
 
     with pytest.raises(ValueError, match="must include a name"):
@@ -1603,7 +1766,10 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert rows[0].train_strength_lcb == _lcb(0.0012, 0.0010, 120.0, k=2.0)
     assert rows[0].full_train_at_risk_annualized_return == 0.0012 * _P
     assert rows[0].book_scale == 1.5
-    assert rows[0].capacity_bound is False
+    assert rows[0].target_reached is True
+    assert rows[0].max_feasible_book_scale == 2.5
+    assert rows[0].minimum_order_notional_ratio == 10.0
+    assert rows[0].fixed_cost_share == 0.05
     assert rows[0].full_train_psr is not None
     assert rows[0].trade_count == 20
     assert rows[0].win_rate == 0.5
@@ -1621,8 +1787,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert score_parts["full_train_at_risk_annualized_return"] == 0.0012 * _P
     assert score_parts["cost_stress_full_window_total_return"] == 0.05
     assert (
-        score_parts["cost_stress_full_train_at_risk_annualized_return"]
-        == 0.0008 * _P
+        score_parts["cost_stress_full_train_at_risk_annualized_return"] == 0.0008 * _P
     )
     assert len(payload["score_parts"]["windows"]) == 4
     assert payload["score_parts"]["diagnostics"][
@@ -1634,6 +1799,7 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert full_window["t_stat"] is not None
     assert "money_floor_gap" not in payload["score_parts"]["windows"][0]
     assert payload["sizing_report"]["annualization_periods_per_year"] == _P
+    assert payload["sizing_report"]["max_feasible_book_scale"] == 2.5
     realistic = payload["foundation"]["realistic_costs"]
     assert realistic["full_train"]["mean_return"] == 0.0012
     assert realistic["full_train"]["return_volatility"] == 0.0010
@@ -1644,7 +1810,9 @@ def test_run_iteration_writes_compact_row_and_run_card(tmp_path: Path):
     assert payload["failure_class"] == "edge"
 
 
-def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(tmp_path: Path):
+def test_run_iteration_scores_foundation_when_diagnostic_economics_missing(
+    tmp_path: Path,
+):
     _write_workspace(tmp_path)
     protocol = load_protocol(tmp_path / "protocol.toml")
     result = FakeRunResult(
@@ -1877,12 +2045,15 @@ def test_run_iteration_crashes_when_foundation_missing(tmp_path: Path):
         experiment_path="experiment.toml",
         rationale_path="rationale.md",
     )
-    assert loop._lifecycle_state(
-        (row,),
-        loop_config=protocol.loop,
-        snapshot=snapshot,
-        root=tmp_path,
-    ).continuation == "repair_required"
+    assert (
+        loop._lifecycle_state(
+            (row,),
+            loop_config=protocol.loop,
+            snapshot=snapshot,
+            root=tmp_path,
+        ).continuation
+        == "repair_required"
+    )
     assert "missing portfolio foundation" in row.note
     assert run_card["failure_class"] == "foundation_unavailable"
     # Ledger row and run card must agree on the crash class (F24).
@@ -1962,7 +2133,7 @@ def test_failure_class_edge_when_all_gates_pass():
     assert loop._failure_class(_gates_with(), None) == "edge"
 
 
-def test_failure_class_capacity_bound_is_not_a_failure():
+def test_failure_class_target_not_reached_is_not_a_failure():
     # A strength-passing edge that is capacity-throttled is a keeper: capacity is
     # a reported diagnostic, not a failure.
     assert loop._failure_class(_gates_with(train_strength_value=0.05), None) == "edge"

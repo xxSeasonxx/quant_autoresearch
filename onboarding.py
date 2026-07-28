@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from math import isfinite, sqrt
 from pathlib import Path
 from typing import Any, Mapping, cast
@@ -35,10 +35,7 @@ def protocol_identity_sha256(protocol: ProtocolConfig) -> str:
 
 
 def stop_rule_values(protocol: ProtocolConfig) -> dict[str, int]:
-    return {
-        field: int(getattr(protocol.loop, field))
-        for field in STOP_RULE_FIELDS
-    }
+    return {field: int(getattr(protocol.loop, field)) for field in STOP_RULE_FIELDS}
 
 
 def _sha256_text(text: str) -> str:
@@ -90,8 +87,12 @@ def _load_brief_mapping(path: str | Path) -> dict[str, Any]:
         if {"mechanism", "observable", "falsifier"} & set(parsed):
             return parsed
     if last_error is not None:
-        raise ValueError(f"could not parse setup brief TOML: {last_error}") from last_error
-    raise ValueError("setup brief must contain a TOML block with mechanism, observable, and falsifier")
+        raise ValueError(
+            f"could not parse setup brief TOML: {last_error}"
+        ) from last_error
+    raise ValueError(
+        "setup brief must contain a TOML block with mechanism, observable, and falsifier"
+    )
 
 
 def _required_text(data: Mapping[str, Any], key: str) -> str:
@@ -163,7 +164,13 @@ def _validate_universe_artifact_rule(
         if expected in (None, ""):
             continue
         if rule.get(key) != expected:
-            brief_key = "train_start" if key == "start" else "train_end" if key == "end" else key
+            brief_key = (
+                "train_start"
+                if key == "start"
+                else "train_end"
+                if key == "end"
+                else key
+            )
             raise ValueError(f"universe_artifact rule.{key} must match {brief_key}")
 
     rule_exclusions = rule.get("exclusions")
@@ -183,12 +190,16 @@ def _brief_symbols(data: Mapping[str, Any]) -> tuple[tuple[str, ...], str, str |
     if has_explicit_key and not explicit and artifact is None:
         raise ValueError("symbols must include at least one symbol")
     if explicit and artifact is not None and explicit != artifact.resolved_symbols:
-        raise ValueError("symbols must exactly match universe_artifact resolved_symbols")
+        raise ValueError(
+            "symbols must exactly match universe_artifact resolved_symbols"
+        )
     if artifact is not None:
         return artifact.resolved_symbols, artifact_path, artifact.resolver_sha256
     if explicit:
         return explicit, "", None
-    raise ValueError("either symbols or universe_artifact must include at least one symbol")
+    raise ValueError(
+        "either symbols or universe_artifact must include at least one symbol"
+    )
 
 
 def _finite_float(data: Mapping[str, Any], key: str) -> float:
@@ -259,6 +270,47 @@ def _risk_budget_mode(data: Mapping[str, Any]) -> str:
     return value
 
 
+def _execution_terms(
+    data: Mapping[str, Any],
+    *,
+    symbols: tuple[str, ...],
+) -> tuple[str, str, str, dict[str, dict[str, float]]]:
+    venue = _required_text(data, "execution_venue")
+    terms_as_of = _required_text(data, "execution_terms_as_of")
+    source = _required_text(data, "execution_source")
+    try:
+        date.fromisoformat(terms_as_of)
+    except ValueError as exc:
+        raise ValueError("execution_terms_as_of must be an ISO date") from exc
+    raw_instruments = data.get("execution_instruments")
+    if not isinstance(raw_instruments, Mapping):
+        raise ValueError("execution_instruments must be a table")
+    expected = set(symbols)
+    actual = {str(symbol) for symbol in raw_instruments}
+    if actual != expected:
+        raise ValueError(
+            "execution_instruments must exactly cover symbols: "
+            f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+        )
+    instruments: dict[str, dict[str, float]] = {}
+    for symbol in symbols:
+        raw_terms = raw_instruments[symbol]
+        if not isinstance(raw_terms, Mapping):
+            raise ValueError(f"execution_instruments.{symbol} must be a table")
+        if set(raw_terms) != {"min_order_notional", "fixed_cost_per_order"}:
+            raise ValueError(
+                f"execution_instruments.{symbol} requires min_order_notional "
+                "and fixed_cost_per_order"
+            )
+        instruments[symbol] = {
+            "min_order_notional": _nonnegative_float(raw_terms, "min_order_notional"),
+            "fixed_cost_per_order": _nonnegative_float(
+                raw_terms, "fixed_cost_per_order"
+            ),
+        }
+    return venue, terms_as_of, source, instruments
+
+
 @dataclass(frozen=True)
 class StrategyBrief:
     mechanism: str
@@ -278,11 +330,15 @@ class StrategyBrief:
     symbols: tuple[str, ...]
     universe_artifact: str
     universe_resolver_sha256: str | None
-    capital_notional: float
-    adv_lookback_bars: int
-    adv_min_observations: int
+    initial_notional: float
+    execution_venue: str
+    execution_terms_as_of: str
+    execution_source: str
+    execution_instruments: dict[str, dict[str, float]]
+    average_bar_lookback_bars: int
+    average_bar_min_observations: int
     max_bar_participation: float
-    max_adv_participation: float
+    max_average_bar_participation: float
     impact_coefficient_bps: float
     impact_exponent: float
     max_gross_exposure: float
@@ -311,11 +367,15 @@ class StrategyBrief:
 def load_strategy_brief(path: str | Path) -> StrategyBrief:
     data = _load_brief_mapping(path)
     symbols, universe_artifact, universe_resolver_sha256 = _brief_symbols(data)
-    notional_key = "capital_notional" if "capital_notional" in data else "portfolio_notional"
-    adv_lookback_bars = _positive_int(data, "adv_lookback_bars")
-    adv_min_observations = _positive_int(data, "adv_min_observations")
-    if adv_min_observations > adv_lookback_bars:
-        raise ValueError("adv_min_observations must be <= adv_lookback_bars")
+    execution_venue, execution_terms_as_of, execution_source, execution_instruments = (
+        _execution_terms(data, symbols=symbols)
+    )
+    average_bar_lookback_bars = _positive_int(data, "average_bar_lookback_bars")
+    average_bar_min_observations = _positive_int(data, "average_bar_min_observations")
+    if average_bar_min_observations > average_bar_lookback_bars:
+        raise ValueError(
+            "average_bar_min_observations must be <= average_bar_lookback_bars"
+        )
     max_iterations = _iterations(data)
     baseline_grace_iterations = _positive_int(data, "baseline_grace_iterations")
     plateau_patience = _positive_int(data, "plateau_patience")
@@ -343,11 +403,15 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         symbols=symbols,
         universe_artifact=universe_artifact,
         universe_resolver_sha256=universe_resolver_sha256,
-        capital_notional=_positive_float(data, notional_key),
-        adv_lookback_bars=adv_lookback_bars,
-        adv_min_observations=adv_min_observations,
+        initial_notional=_positive_float(data, "initial_notional"),
+        execution_venue=execution_venue,
+        execution_terms_as_of=execution_terms_as_of,
+        execution_source=execution_source,
+        execution_instruments=execution_instruments,
+        average_bar_lookback_bars=average_bar_lookback_bars,
+        average_bar_min_observations=average_bar_min_observations,
         max_bar_participation=_fraction(data, "max_bar_participation"),
-        max_adv_participation=_fraction(data, "max_adv_participation"),
+        max_average_bar_participation=_fraction(data, "max_average_bar_participation"),
         impact_coefficient_bps=_nonnegative_float(data, "impact_coefficient_bps"),
         impact_exponent=_positive_float(data, "impact_exponent"),
         max_gross_exposure=_positive_float(data, "max_gross_exposure"),
@@ -358,9 +422,7 @@ def load_strategy_brief(path: str | Path) -> StrategyBrief:
         objective_subwindows=_positive_int(data, "objective_subwindows"),
         min_trades=_nonnegative_int(data, "min_trades"),
         min_return_sample_count=_nonnegative_int(data, "min_return_sample_count"),
-        min_effective_sample_size=_nonnegative_float(
-            data, "min_effective_sample_size"
-        ),
+        min_effective_sample_size=_nonnegative_float(data, "min_effective_sample_size"),
         max_symbol_concentration=_fraction(data, "max_symbol_concentration"),
         min_cost_stress_return_retention=_fraction(
             data, "min_cost_stress_return_retention"
@@ -415,6 +477,7 @@ def _approval_checklist() -> list[str]:
         "Edited protocol-owned values were compared against the approved recommendation table; any deltas were shown to Season.",
         "rationale.md records the mechanism, observable, falsifier, assumptions, first failure mode, and the universe population with its mechanism-driven, return-blind sizing rationale.",
         "results.tsv is header-only or absent, and .autoresearch/thesis_lock.json is absent.",
+        "The selected venue is lawfully accessible to the account, and current per-symbol execution terms and provenance were reviewed.",
         "approval.protocol_sha256 equals the SHA-256 of the approved protocol.toml.",
     ]
 
@@ -500,6 +563,23 @@ def _proposal_payload_without_hash(
     # Universe-bounded: a floor above the eligible name count can never pass, so a
     # single-instrument thesis gets 1.0 and a cross-section gets the 2.0 default.
     min_effective_symbol_count = 1.0 if len(brief.symbols) <= 1 else 2.0
+    current_execution: dict[str, object] = {"mode": current.execution_model.mode}
+    if current.execution_model.mode == "minimum_notional":
+        assert current.execution_model.instruments is not None
+        current_execution.update(
+            {
+                "venue": current.execution_model.venue,
+                "terms_as_of": current.execution_model.terms_as_of,
+                "source": current.execution_model.source,
+                "instruments": {
+                    symbol: {
+                        "min_order_notional": terms.min_order_notional,
+                        "fixed_cost_per_order": terms.fixed_cost_per_order,
+                    }
+                    for symbol, terms in current.execution_model.instruments.items()
+                },
+            }
+        )
     current_protocol: dict[str, dict[str, object]] = {
         "data": {
             "kind": current.data.kind,
@@ -511,12 +591,16 @@ def _proposal_payload_without_hash(
             "load_end": current.data.load_end,
             "universe_resolver_sha256": current.data.universe_resolver_sha256,
         },
+        "account": {
+            "initial_notional": current.account.initial_notional,
+        },
+        "execution_model": current_execution,
         "capacity_model": {
-            "portfolio_notional": current.capacity_model.portfolio_notional,
-            "adv_lookback_bars": current.capacity_model.adv_lookback_bars,
-            "adv_min_observations": current.capacity_model.adv_min_observations,
+            "mode": current.capacity_model.mode,
+            "average_bar_lookback_bars": current.capacity_model.average_bar_lookback_bars,
+            "average_bar_min_observations": current.capacity_model.average_bar_min_observations,
             "max_bar_participation": current.capacity_model.max_bar_participation,
-            "max_adv_participation": current.capacity_model.max_adv_participation,
+            "max_average_bar_participation": current.capacity_model.max_average_bar_participation,
             "impact_coefficient_bps": current.capacity_model.impact_coefficient_bps,
             "impact_exponent": current.capacity_model.impact_exponent,
         },
@@ -549,9 +633,7 @@ def _proposal_payload_without_hash(
             "min_effective_symbol_count": current.gates.min_effective_symbol_count,
             "min_cost_stress_return_retention": current.gates.min_cost_stress_return_retention,
             "max_abs_drawdown": current.gates.max_abs_drawdown,
-            "train_strength_haircut_se": (
-                current.gates.train_strength_haircut_se
-            ),
+            "train_strength_haircut_se": (current.gates.train_strength_haircut_se),
             "max_components": current.gates.max_components,
             "max_params": current.gates.max_params,
         },
@@ -567,12 +649,22 @@ def _proposal_payload_without_hash(
             "load_end": brief.load_end or None,
             "universe_resolver_sha256": brief.universe_resolver_sha256,
         },
+        "account": {
+            "initial_notional": brief.initial_notional,
+        },
+        "execution_model": {
+            "mode": "minimum_notional",
+            "venue": brief.execution_venue,
+            "terms_as_of": brief.execution_terms_as_of,
+            "source": brief.execution_source,
+            "instruments": brief.execution_instruments,
+        },
         "capacity_model": {
-            "portfolio_notional": brief.capital_notional,
-            "adv_lookback_bars": brief.adv_lookback_bars,
-            "adv_min_observations": brief.adv_min_observations,
+            "mode": "average_bar_impact",
+            "average_bar_lookback_bars": brief.average_bar_lookback_bars,
+            "average_bar_min_observations": brief.average_bar_min_observations,
             "max_bar_participation": brief.max_bar_participation,
-            "max_adv_participation": brief.max_adv_participation,
+            "max_average_bar_participation": brief.max_average_bar_participation,
             "impact_coefficient_bps": brief.impact_coefficient_bps,
             "impact_exponent": brief.impact_exponent,
         },
@@ -614,13 +706,17 @@ def _proposal_payload_without_hash(
         "Train micro causality is a bounded score-admissibility check, not retention, paper, live, or deployability proof.",
     ]
     if brief.universe_resolver_sha256 is None:
-        warnings.append("Symbols are explicit Season-approved inputs; no resolver artifact was used.")
+        warnings.append(
+            "Symbols are explicit Season-approved inputs; no resolver artifact was used."
+        )
     else:
         warnings.append(
             "Resolved symbols are eligibility-based from the resolver artifact, not return-ranked or Train-result-ranked."
         )
     if current.output.causality_check != "micro":
-        warnings.append("Current protocol causality is not micro; the proposal keeps Train causality bounded on micro.")
+        warnings.append(
+            "Current protocol causality is not micro; the proposal keeps Train causality bounded on micro."
+        )
     feasibility_warning = _feasibility_warning(_feasibility_rows(recommended_protocol))
     if feasibility_warning is not None:
         warnings.append(feasibility_warning)
@@ -659,11 +755,15 @@ def _proposal_payload_without_hash(
             "data.load_start": "Use only as an execution/data-readiness buffer, not as scored Train evidence.",
             "data.load_end": "Use only as an execution/data-readiness buffer, not as scored Train evidence.",
             "data.universe_resolver_sha256": "Bind the return-blind resolver artifact hash; leave empty only for a Season-approved explicit symbol list.",
-            "capacity_model.portfolio_notional": "Map the mandate capital/notional directly into the capacity envelope.",
-            "capacity_model.adv_lookback_bars": "Use the approved liquidity-history window for ADV capacity checks.",
-            "capacity_model.adv_min_observations": "Require enough liquidity observations before capacity is trusted.",
+            "account.initial_notional": "Set the real mandate account scale used for execution feasibility and normalized costs.",
+            "execution_model.venue": "Use only a lawfully accessible execution venue.",
+            "execution_model.terms_as_of": "Snapshot current execution terms before baseline.",
+            "execution_model.source": "Record the authoritative source for the venue terms.",
+            "execution_model.instruments": "Cover every configured symbol with minimum-order and fixed-order-cost terms.",
+            "capacity_model.average_bar_lookback_bars": "Use the approved liquidity-history window for average-bar capacity checks.",
+            "capacity_model.average_bar_min_observations": "Require enough liquidity observations before capacity is trusted.",
             "capacity_model.max_bar_participation": "Cap per-bar participation from the mandate and liquidity standard.",
-            "capacity_model.max_adv_participation": "Cap ADV participation from the mandate and liquidity standard.",
+            "capacity_model.max_average_bar_participation": "Cap average-bar participation from the mandate and liquidity standard.",
             "capacity_model.impact_coefficient_bps": "Use the approved impact-cost assumption for capacity pricing.",
             "capacity_model.impact_exponent": "Use the approved market-impact curve shape.",
             "leverage_budget.max_gross_exposure": "Map the allowed gross target-book exposure ceiling directly.",
@@ -817,6 +917,8 @@ def write_protocol_proposal(
     proposal = build_protocol_proposal(brief_path, protocol_path=protocol_path)
     destination = Path(out_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(proposal.as_payload(), indent=2, sort_keys=True) + "\n")
+    destination.write_text(
+        json.dumps(proposal.as_payload(), indent=2, sort_keys=True) + "\n"
+    )
     destination.with_suffix(".md").write_text(_proposal_markdown(proposal))
     return proposal

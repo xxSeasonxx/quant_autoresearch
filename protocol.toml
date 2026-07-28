@@ -24,13 +24,18 @@ entry_lag_bars = 1
 fee_bps_per_side = 5.0
 slippage_bps_per_side = 1.0
 
+[account]
+initial_notional = 100000.0
+
+[execution_model]
+mode = "unpriced"
+
 [capacity_model]
-mode = "adv_impact"
-portfolio_notional = 1000000.0
-adv_lookback_bars = 1440
-adv_min_observations = 60
+mode = "average_bar_impact"
+average_bar_lookback_bars = 1440
+average_bar_min_observations = 60
 max_bar_participation = 0.50
-max_adv_participation = 0.25
+max_average_bar_participation = 0.25
 impact_coefficient_bps = 10.0
 impact_exponent = 0.5
 

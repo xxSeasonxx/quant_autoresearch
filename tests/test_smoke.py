@@ -15,7 +15,9 @@ def test_harness_smoke_loads_process_config():
     assert Path(protocol.strategy_path).exists()
     assert protocol.strategy_id.strip()
     assert protocol.output.causality_check == "micro"
-    assert protocol.capacity_model.mode in {"off", "adv_impact"}
+    assert protocol.capacity_model.mode in {"off", "average_bar_impact"}
+    assert protocol.account.initial_notional == 100000.0
+    assert protocol.execution_model.mode == "unpriced"
     assert quick["strategy_id"] == protocol.strategy_id
     assert quick["params"] == experiment.params
     assert quick["output"]["causality_check"] == "micro"

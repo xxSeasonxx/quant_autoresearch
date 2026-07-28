@@ -89,7 +89,8 @@ firewalled downstream OOS stage.
 ## Diagnostics
 
 PSR, Sharpe, Calmar, win rate, profit factor, sampled trades, book scale, deployed
-volatility, capacity bounds, and subwindow returns explain results. They do not
+volatility, target reachability, the sizing frontier, execution costs, capacity
+tails, and subwindow returns explain results. They do not
 replace the score or gate contract.
 
 The per-trade tape is attribution derived from the same netted-book path. Do not
@@ -102,7 +103,8 @@ score a completed-trade return bag.
 - score and strength: `score`, `train_strength_lcb`,
   `full_train_at_risk_annualized_return`, `cost_stress_return_retention`;
 - sizing: `book_scale`, `deployed_volatility`, `max_feasible_volatility`,
-  `capacity_bound`;
+  `target_reached`, and `max_feasible_book_scale`;
+- execution: `minimum_order_notional_ratio` and `fixed_cost_share`;
 - diagnostics: `full_train_psr`, `worst_subwindow_psr`, `trade_count`,
   `min_subwindow_trades`, `max_drawdown`, `max_symbol_concentration`,
   `effective_symbol_count`, `win_rate`, `profit_factor`, `avg_trade_net`, and
@@ -134,9 +136,17 @@ Each `run_card.json` adds:
 - full gate outcomes, foundation scenarios, sizing, causality, warnings, PSR
   diagnostics, and the primary failure class.
 
+Foundation scenarios preserve the upstream MECE evidence sections:
+
+- `execution`: event count, turnover, smallest real order, minimum-order ratio,
+  proportional/fixed/impact/total costs, and fixed-cost share;
+- `capacity`: participation and utilization tails, threshold exposure, peak
+  event, headroom, and crossover.
+
 A `train_strength` failure maps to `failure_class = edge_unproven`. Gate
 precedence remains causality, Train strength, breadth, minimum evidence, then the
-first remaining failed gate. A hard leverage- or capacity-budget breach is a distinct
+first remaining failed gate. A hard leverage-, execution-, or capacity-budget
+breach is a distinct
 economic verdict, not a harness error: it maps to `failure_class = infeasible`. A
 harness exception maps to `run_error`, or to `foundation_unavailable` or
 `score_unavailable` when it is raised while parsing or scoring the foundation. The

@@ -46,13 +46,11 @@ def test_derived_health_dataset_excludes_not_ready_symbols():
         dataset="crypto_spot_perp_basis_1min",
         start="2025-03-01",
         end="2025-12-31",
+        capacity_model="off",
     )
 
     assert "APT-PERP" not in payload["resolved_symbols"]
-    excluded = {
-        item["symbol"]: item["reason"]
-        for item in payload["excluded_symbols"]
-    }
+    excluded = {item["symbol"]: item["reason"] for item in payload["excluded_symbols"]}
     assert "status=not_research_ready" in excluded["APT-PERP"]
 
 
@@ -84,7 +82,7 @@ def test_derived_health_dataset_excludes_not_ready_symbols():
                 "start": "2025-01-01",
                 "end": "2025-02-01",
             },
-            "not supported for adv_impact capacity",
+            "volume_semantics='tick_count' cannot price average_bar_impact capacity",
         ),
     ],
 )

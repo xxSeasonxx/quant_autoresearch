@@ -27,7 +27,10 @@ class ResultRow:
     book_scale: float | None
     deployed_volatility: float | None
     max_feasible_volatility: float | None
-    capacity_bound: bool | None
+    target_reached: bool | None
+    max_feasible_book_scale: float | None
+    minimum_order_notional_ratio: float | None
+    fixed_cost_share: float | None
     full_train_psr: float | None
     worst_subwindow_psr: float | None
     gates_passed: bool
@@ -63,7 +66,10 @@ class ResultRow:
             "book_scale",
             "deployed_volatility",
             "max_feasible_volatility",
-            "capacity_bound",
+            "target_reached",
+            "max_feasible_book_scale",
+            "minimum_order_notional_ratio",
+            "fixed_cost_share",
             "full_train_psr",
             "worst_subwindow_psr",
             "gates_passed",
@@ -107,7 +113,10 @@ class ResultRow:
             "book_scale": optional(self.book_scale),
             "deployed_volatility": optional(self.deployed_volatility),
             "max_feasible_volatility": optional(self.max_feasible_volatility),
-            "capacity_bound": optional_bool(self.capacity_bound),
+            "target_reached": optional_bool(self.target_reached),
+            "max_feasible_book_scale": optional(self.max_feasible_book_scale),
+            "minimum_order_notional_ratio": optional(self.minimum_order_notional_ratio),
+            "fixed_cost_share": optional(self.fixed_cost_share),
             "full_train_psr": optional(self.full_train_psr),
             "worst_subwindow_psr": optional(self.worst_subwindow_psr),
             "gates_passed": "true" if self.gates_passed else "false",
@@ -178,7 +187,12 @@ def _parse_row(row: dict[str, str]) -> ResultRow:
         book_scale=_parse_float(row["book_scale"]),
         deployed_volatility=_parse_float(row["deployed_volatility"]),
         max_feasible_volatility=_parse_float(row["max_feasible_volatility"]),
-        capacity_bound=_parse_optional_bool(row["capacity_bound"], name="capacity_bound"),
+        target_reached=_parse_optional_bool(
+            row["target_reached"], name="target_reached"
+        ),
+        max_feasible_book_scale=_parse_float(row["max_feasible_book_scale"]),
+        minimum_order_notional_ratio=_parse_float(row["minimum_order_notional_ratio"]),
+        fixed_cost_share=_parse_float(row["fixed_cost_share"]),
         full_train_psr=_parse_float(row["full_train_psr"]),
         worst_subwindow_psr=_parse_float(row["worst_subwindow_psr"]),
         gates_passed=_parse_bool(row["gates_passed"], name="gates_passed"),

@@ -39,6 +39,12 @@ recommendation, Season approval, lifecycle reset, and first-baseline preflight.
 Setup also declares the bounded search space: set `experiment.toml` `[bounds.*]` to
 the ranges the thesis needs tested, not pinned at `min == max`.
 
+Before baseline, select a venue the account may lawfully access and snapshot its
+current per-symbol minimum-order and fixed-order-cost terms with an authoritative
+source and as-of date. Until then `[execution_model] mode = "unpriced"` is the
+correct protocol state: `status` reports the setup blocker and `climb` creates no
+lock, ledger row, quick config, or artifact.
+
 After the first baseline starts the lifecycle, treat the research protocol as frozen.
 Only Season may increase `max_iterations`, `plateau_patience`, or
 `baseline_grace_iterations` after a configured stop, using the extension procedure
@@ -46,7 +52,8 @@ in Stop. Every other protocol field remains frozen.
 Ordinary iteration reads only:
 
 - `program.md` — this operating contract;
-- `protocol.toml` — frozen Train data, costs, fills, capacity, leverage budget, objective, gates, and stop rules;
+- `protocol.toml` — frozen account scale, execution terms, Train data, costs,
+  fills, capacity, leverage budget, objective, gates, and stop rules;
 - `docs/score_research.md` — the frozen score, gate, and result-ledger field semantics (a frozen contract to follow, not repo browsing);
 - `experiment.toml` — bounded params and their search ranges;
 - `strategy.py` — editable target-book logic;
@@ -110,11 +117,11 @@ write to them only as warranted: `reseed_log.md` (reseed evidence; write during 
 loop, read at stop — see Stop) and `UPSTREAM_LIMITATIONS_TODO.md` (a limitation the
 engine cannot price, per the evidence boundary).
 
-`protocol.toml` owns the Train window, data kind, costs, fills, capacity model,
-leverage budget, objective, gates, and stop rules; do not change any of those from
-strategy code. The thesis identity frozen for the lifecycle is the mechanism, the
-falsifier, and the `protocol.toml` evaluation — that is what makes attempts
-comparable.
+`protocol.toml` owns the account notional, venue execution terms, Train window,
+data kind, costs, fills, capacity model, leverage budget, objective, gates, and
+stop rules; do not change any of those from strategy code. The thesis identity
+frozen for the lifecycle is the mechanism, the falsifier, and the `protocol.toml`
+evaluation — that is what makes attempts comparable.
 
 State the mechanism and falsifier as the **invariant economic hypothesis** — the
 causal edge and what would disprove it — at the widest level that still keeps
@@ -146,8 +153,15 @@ A target book is a standing portfolio, not a stream of trade tickets.
 
 - `target` is signed weight of NAV: positive long, negative short, `0` flat; a target stands until a later same-symbol decision changes it; re-emitting the same target trades nothing.
 - Gross exposure is `sum(abs(target))`; net exposure is `abs(sum(target))`.
-- The strategy owns relative allocation shape, side logic, rebalance cadence, data/time exits, and declared price-path `RiskRule`s. The operator and upstream own book scale (risk-budget sizing), gross/net ceilings, capacity, costs, fills, universe, objective, gates, and stop rules.
+- The strategy owns relative allocation shape, side logic, rebalance cadence,
+  data/time exits, and declared price-path `RiskRule`s. The operator and upstream
+  own the real account scale, venue execution terms, book scale (risk-budget
+  sizing), gross/net ceilings, capacity, costs, fills, universe, objective, gates,
+  and stop rules.
 - Gross or net exposure over the frozen budget fails closed and is non-scoreable, never clamped.
+- Every final entry, trim, reversal, close, and `RiskRule` exit must satisfy the
+  configured minimum order notional. Unpriced execution or a below-minimum order
+  fails closed; orders are never skipped, rounded, accumulated, or clamped.
 - Optimize shape, not magnitude: upstream sizes the book, so a global magnitude knob is washed out. Leverage is magnitude too — it scales return and risk together without improving the edge, so it is not a knob you turn; a different leverage budget is a reseed case for Season, not a mid-run change.
 - If capacity, financing, or execution cannot be priced by the engine, record the limitation in `UPSTREAM_LIMITATIONS_TODO.md` instead of hiding it in strategy code.
 

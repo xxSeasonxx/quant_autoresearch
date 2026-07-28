@@ -45,6 +45,10 @@ RESET_CONFIRMATION = "RESET-LIFECYCLE"
 EXTEND_CONFIRMATION = "EXTEND-LIFECYCLE"
 THESIS_LOCK_SCHEMA_VERSION = 2
 LIFECYCLE_EVENT_SCHEMA_VERSION = 1
+EXECUTION_SETUP_BLOCKER = (
+    "execution terms are unpriced; select a lawfully accessible venue and snapshot "
+    "current per-symbol terms before baseline"
+)
 
 
 @dataclass(frozen=True)
@@ -199,7 +203,9 @@ def _read_thesis_lock(root: Path) -> Mapping[str, Any] | None:
             "active thesis lock is unreadable; start a new thesis lifecycle"
         ) from exc
     if not isinstance(payload, Mapping):
-        raise ValueError("active thesis lock is malformed; start a new thesis lifecycle")
+        raise ValueError(
+            "active thesis lock is malformed; start a new thesis lifecycle"
+        )
     if payload.get("schema_version") != THESIS_LOCK_SCHEMA_VERSION:
         raise ValueError("legacy thesis lock schema; reset the thesis lifecycle")
     return payload
@@ -363,14 +369,21 @@ def _ensure_active_thesis_lock(
 
     payload = _read_thesis_lock(root)
     if payload is None:
-        raise ValueError("active thesis lock is unreadable; start a new thesis lifecycle")
+        raise ValueError(
+            "active thesis lock is unreadable; start a new thesis lifecycle"
+        )
 
-    if payload.get("mechanism") != normalized_mechanism or payload.get("falsifier") != normalized_falsifier:
+    if (
+        payload.get("mechanism") != normalized_mechanism
+        or payload.get("falsifier") != normalized_falsifier
+    ):
         raise ValueError("active thesis identity changed; start a new thesis lifecycle")
     if payload.get("protocol_identity_sha256") != identity_sha256:
         raise ValueError("active thesis protocol changed; start a new thesis lifecycle")
     if payload.get("results_path") != result_path_text:
-        raise ValueError("active thesis results path changed; start a new thesis lifecycle")
+        raise ValueError(
+            "active thesis results path changed; start a new thesis lifecycle"
+        )
     if _authorized_stop_rules(root, lock=payload) != parsed_stop_rules:
         raise ValueError("stop rules changed without authorization; run extend")
 
@@ -483,7 +496,10 @@ def _validate_foundation_metric(metric: FoundationMetric) -> None:
     concentration = metric.max_symbol_concentration
     if concentration is not None and not 0.0 <= concentration <= 1.0:
         raise ValueError("foundation max_symbol_concentration must be in [0, 1]")
-    if metric.effective_symbol_count is not None and metric.effective_symbol_count < 0.0:
+    if (
+        metric.effective_symbol_count is not None
+        and metric.effective_symbol_count < 0.0
+    ):
         raise ValueError("foundation effective_symbol_count must be >= 0")
 
 
@@ -528,7 +544,16 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
     if not isinstance(subwindows, list):
         raise ValueError("portfolio foundation scenario missing subwindows")
     capacity = raw.get("capacity")
-    capacity_map = capacity if isinstance(capacity, Mapping) else {}
+    if not isinstance(capacity, Mapping):
+        raise ValueError("portfolio foundation scenario missing capacity evidence")
+    if "max_adv_participation" in capacity:
+        raise ValueError("legacy max_adv_participation evidence is unsupported")
+    execution = raw.get("execution")
+    if not isinstance(execution, Mapping):
+        raise ValueError("portfolio foundation scenario missing execution evidence")
+    for name in ("minimum_order_notional_ratio", "fixed_cost_share"):
+        if name not in execution:
+            raise ValueError(f"portfolio foundation execution missing {name}")
     return FoundationScenario(
         scenario_id=str(raw["scenario_id"]),
         full_train=_foundation_metric(raw["full_train"]),  # type: ignore[arg-type]
@@ -536,8 +561,14 @@ def _foundation_scenario(raw: Mapping[str, object]) -> FoundationScenario:
             _foundation_metric(item)  # type: ignore[arg-type]
             for item in subwindows
         ),
-        max_adv_participation=_foundation_float(capacity_map, "max_adv_participation"),
-        max_bar_participation=_foundation_float(capacity_map, "max_bar_participation"),
+        max_average_bar_participation=_foundation_float(
+            capacity, "max_average_bar_participation"
+        ),
+        max_bar_participation=_foundation_float(capacity, "max_bar_participation"),
+        minimum_order_notional_ratio=_foundation_float(
+            execution, "minimum_order_notional_ratio"
+        ),
+        fixed_cost_share=_foundation_float(execution, "fixed_cost_share"),
     )
 
 
@@ -549,15 +580,20 @@ def _foundation_sizing(raw: object) -> FoundationSizing:
         raise ValueError(
             "sizing_report annualization_periods_per_year must be a positive integer"
         )
-    capacity_bound = raw.get("capacity_bound")
-    if capacity_bound is not None and not isinstance(capacity_bound, bool):
-        raise ValueError("sizing_report capacity_bound must be a boolean")
+    if "capacity_bound" in raw:
+        raise ValueError("legacy sizing_report capacity_bound is unsupported")
+    if "target_reached" not in raw:
+        raise ValueError("sizing_report missing target_reached")
+    target_reached = raw["target_reached"]
+    if target_reached is not None and not isinstance(target_reached, bool):
+        raise ValueError("sizing_report target_reached must be a boolean")
     return FoundationSizing(
         annualization_periods_per_year=periods,
         book_scale=_foundation_float(raw, "book_scale"),
+        max_feasible_book_scale=_foundation_float(raw, "max_feasible_book_scale"),
         deployed_volatility=_foundation_float(raw, "deployed_volatility"),
         max_feasible_volatility=_foundation_float(raw, "max_feasible_volatility"),
-        capacity_bound=capacity_bound,
+        target_reached=target_reached,
     )
 
 
@@ -566,6 +602,11 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
     if foundation is None:
         raise ValueError("run_config result missing portfolio foundation")
     matrix_payload = foundation.matrix_payload()
+    if (
+        matrix_payload.get("schema_version")
+        != "quant_strategies.quick_run.portfolio_foundation/v4"
+    ):
+        raise ValueError("unsupported portfolio foundation schema")
     scenarios = matrix_payload.get("scenarios")
     if not isinstance(scenarios, dict):
         raise ValueError("portfolio foundation payload missing scenarios")
@@ -573,11 +614,18 @@ def _foundation_from_result(result: object) -> FoundationEvidence:
         realistic = scenarios["realistic_costs"]
         cost_stress = scenarios["cost_stress"]
     except KeyError as exc:
-        raise ValueError(f"portfolio foundation missing scenario: {exc.args[0]}") from exc
+        raise ValueError(
+            f"portfolio foundation missing scenario: {exc.args[0]}"
+        ) from exc
+    sizing_payload = matrix_payload.get("sizing_report")
+    if not isinstance(sizing_payload, Mapping):
+        raise ValueError("portfolio foundation payload missing sizing_report")
+    if sizing_payload.get("schema_version") != "quant_strategies.portfolio_sizing/v2":
+        raise ValueError("unsupported portfolio sizing schema")
     return FoundationEvidence(
         realistic_costs=_foundation_scenario(realistic),
         cost_stress=_foundation_scenario(cost_stress),
-        sizing=_foundation_sizing(matrix_payload.get("sizing_report")),
+        sizing=_foundation_sizing(sizing_payload),
     )
 
 
@@ -631,7 +679,10 @@ def _make_crash_row(
         book_scale=None,
         deployed_volatility=None,
         max_feasible_volatility=None,
-        capacity_bound=None,
+        target_reached=None,
+        max_feasible_book_scale=None,
+        minimum_order_notional_ratio=None,
+        fixed_cost_share=None,
         full_train_psr=None,
         worst_subwindow_psr=None,
         gates_passed=False,
@@ -717,7 +768,20 @@ def _scored_result_row(
         max_feasible_volatility=(
             None if sizing is None else sizing.max_feasible_volatility
         ),
-        capacity_bound=None if sizing is None else sizing.capacity_bound,
+        target_reached=None if sizing is None else sizing.target_reached,
+        max_feasible_book_scale=(
+            None if sizing is None else sizing.max_feasible_book_scale
+        ),
+        minimum_order_notional_ratio=(
+            None
+            if foundation_scenario is None
+            else foundation_scenario.minimum_order_notional_ratio
+        ),
+        fixed_cost_share=(
+            None
+            if foundation_scenario is None
+            else foundation_scenario.fixed_cost_share
+        ),
         full_train_psr=objective.full_train_psr,
         worst_subwindow_psr=objective.worst_subwindow_psr,
         gates_passed=gates.passed,
@@ -832,8 +896,10 @@ def _scenario_payload(scenario: FoundationScenario | None) -> dict[str, object] 
         "scenario_id": scenario.scenario_id,
         "full_train": _metric_payload(scenario.full_train),
         "subwindows": [_metric_payload(metric) for metric in scenario.subwindows],
-        "max_adv_participation": scenario.max_adv_participation,
+        "max_average_bar_participation": scenario.max_average_bar_participation,
         "max_bar_participation": scenario.max_bar_participation,
+        "minimum_order_notional_ratio": scenario.minimum_order_notional_ratio,
+        "fixed_cost_share": scenario.fixed_cost_share,
     }
 
 
@@ -844,13 +910,16 @@ def _sizing_payload(foundation: FoundationEvidence | None) -> dict[str, object] 
     return {
         "annualization_periods_per_year": sizing.annualization_periods_per_year,
         "book_scale": sizing.book_scale,
+        "max_feasible_book_scale": sizing.max_feasible_book_scale,
         "deployed_volatility": sizing.deployed_volatility,
         "max_feasible_volatility": sizing.max_feasible_volatility,
-        "capacity_bound": sizing.capacity_bound,
+        "target_reached": sizing.target_reached,
     }
 
 
-def _window_return_payload(objective: ObjectiveResult | None) -> list[dict[str, object]]:
+def _window_return_payload(
+    objective: ObjectiveResult | None,
+) -> list[dict[str, object]]:
     if objective is None:
         return []
     payload: list[dict[str, object]] = []
@@ -911,9 +980,8 @@ def _feasibility_note(result: object) -> str:
 
     An infeasible run is no score, not a low score. The upstream verdict is typed:
     `result.outcome.failure_stage` (e.g. "feasibility") plus, on an envelope breach,
-    `result.feasibility.{reason, observed_gross, observed_net, detail}`. Surface those
-    so the next edit responds to the reason (`capacity_unpriced` → price capacity,
-    `leverage_budget_breach` → reduce intended gross) instead of only the message.
+    `result.feasibility` fields. Surface those so the next edit responds to the typed
+    reason instead of only the message.
     """
 
     message = str(getattr(result, "message", "run failed"))
@@ -927,7 +995,15 @@ def _feasibility_note(result: object) -> str:
         reason = getattr(feasibility, "reason", None)
         if reason:
             parts.append(f"feasibility={reason}")
-        for name in ("observed_gross", "observed_net"):
+        for name in (
+            "observed_gross",
+            "observed_net",
+            "symbol",
+            "observed_order_notional",
+            "minimum_order_notional",
+            "timestamp",
+            "execution_reason",
+        ):
             value = getattr(feasibility, name, None)
             if value is not None:
                 parts.append(f"{name}={value}")
@@ -952,11 +1028,13 @@ def _failure_class(
     logic. A hard feasibility breach (``infeasible``) is an economic verdict, not a
     harness bug, and takes precedence over every other class. The ``train_strength``
     gate is the key edge-strength signal: a failure means the fixed full-Train at-risk
-    return hurdle was not cleared (``edge_unproven``). Capacity *throttling* is not a
-    failure: a strength-passing but capacity-limited edge passes, and its low deployed
-    scale shows in the run score and the ``capacity_bound`` diagnostic. Precedence is
+    return hurdle was not cleared (``edge_unproven``). Capacity throttling is not a
+    failure: a strength-passing but capacity-limited edge passes, and its deployed
+    scale and target-reachability evidence are reported explicitly. Precedence is
     most-fundamental first: feasibility, then measurement validity, then the economic
-    verdict, then breadth, then evidence, then any other failed gate.
+    verdict, then breadth, then evidence, then any other failed gate. A target that
+    cannot be reached at the configured capacity envelope is reported through the
+    sizing frontier; it is not a separate failure class.
     """
     if feasibility_reason:
         return "infeasible"
@@ -1056,7 +1134,9 @@ def _write_run_card(
             if cost_stress is None
             else cost_stress.full_train_at_risk_annualized_return,
             "diagnostics": {
-                "full_train_psr": None if objective is None else objective.full_train_psr,
+                "full_train_psr": None
+                if objective is None
+                else objective.full_train_psr,
                 "subwindow_psrs": []
                 if objective is None
                 else list(objective.subwindow_psrs),
@@ -1120,8 +1200,7 @@ def _stop_reason_after_attempt(
 ) -> str:
     completed = len(rows)
     complexity_failed = (
-        gates is not None
-        and not gates.by_name["complexity_cap"].passed
+        gates is not None and not gates.by_name["complexity_cap"].passed
     ) or (
         gates is None
         and bool(rows)
@@ -1164,7 +1243,9 @@ def _best_row(rows: Sequence[ResultRow]) -> ResultRow | None:
     kept = [row for row in rows if row.status == "keep" and row.score is not None]
     if not kept:
         return None
-    return max(kept, key=lambda row: row.score if row.score is not None else float("-inf"))
+    return max(
+        kept, key=lambda row: row.score if row.score is not None else float("-inf")
+    )
 
 
 def _param_drift_vs_best(
@@ -1239,10 +1320,18 @@ def _write_attempt_snapshot(
 ) -> dict[str, str]:
     snapshot_dir = _attempt_snapshot_dir(root, artifact_dir)
     paths = {
-        "strategy": _copy_if_present(root / strategy_path, snapshot_dir / "strategy.py"),
-        "experiment": _copy_if_present(root / experiment_path, snapshot_dir / "experiment.toml"),
-        "protocol": _copy_if_present(root / protocol_path, snapshot_dir / "protocol.toml"),
-        "rationale": _copy_if_present(root / rationale_path, snapshot_dir / "rationale.md"),
+        "strategy": _copy_if_present(
+            root / strategy_path, snapshot_dir / "strategy.py"
+        ),
+        "experiment": _copy_if_present(
+            root / experiment_path, snapshot_dir / "experiment.toml"
+        ),
+        "protocol": _copy_if_present(
+            root / protocol_path, snapshot_dir / "protocol.toml"
+        ),
+        "rationale": _copy_if_present(
+            root / rationale_path, snapshot_dir / "rationale.md"
+        ),
         "quick_config": _copy_if_present(
             root / ".autoresearch" / "quick" / f"{run_id}.toml",
             snapshot_dir / "quick_config.toml",
@@ -1451,7 +1540,9 @@ def run_iteration(
     )
     # The runner resolves the config's relative `strategy_path` against the config
     # file's own directory, so the strategy must sit beside the written quick config.
-    _copy_if_present(root / protocol.strategy_path, config_path.parent / protocol.strategy_path)
+    _copy_if_present(
+        root / protocol.strategy_path, config_path.parent / protocol.strategy_path
+    )
     provenance = AttemptProvenance(
         run_id=run_id,
         artifact_dir=str(artifact_dir),
@@ -1630,6 +1721,7 @@ def run_status(
     results_path: str | Path = "results.tsv",
 ) -> dict[str, object]:
     cfg = load_protocol(protocol_path)
+    setup_blocker = _execution_setup_blocker(cfg)
     root = Path(".")
     rows = read_results(results_path)
     lock = _read_thesis_lock(root)
@@ -1639,9 +1731,13 @@ def run_status(
         )
     if lock is not None:
         if lock.get("results_path") != _normalize_lock_path(root, results_path):
-            raise ValueError("active thesis results path changed; start a new thesis lifecycle")
+            raise ValueError(
+                "active thesis results path changed; start a new thesis lifecycle"
+            )
         if lock.get("protocol_identity_sha256") != protocol_identity_sha256(cfg):
-            raise ValueError("active thesis protocol changed; start a new thesis lifecycle")
+            raise ValueError(
+                "active thesis protocol changed; start a new thesis lifecycle"
+            )
         if _authorized_stop_rules(root, lock=lock) != stop_rule_values(cfg):
             raise ValueError("stop rules changed without authorization; run extend")
     snapshot = _source_snapshot(
@@ -1658,13 +1754,16 @@ def run_status(
         root=root,
     )
     best_row = _best_row(rows)
+    continuation = "blocked" if setup_blocker and not rows else state.continuation
+    stop_reason = "" if setup_blocker and not rows else state.stop_reason
     return {
         "attempts": len(rows),
         "best_score": None if best_row is None else best_row.score,
         "best_run_id": None if best_row is None else best_row.run_id,
         "last_status": rows[-1].status if rows else "not_started",
-        "continuation": state.continuation,
-        "stop_reason": state.stop_reason,
+        "continuation": continuation,
+        "stop_reason": stop_reason,
+        "setup_blocker": setup_blocker,
         "max_iterations": cfg.loop.max_iterations,
         "remaining_iterations": max(0, cfg.loop.max_iterations - len(rows)),
         "plateau_patience": cfg.loop.plateau_patience,
@@ -1694,12 +1793,16 @@ def extend_lifecycle(
     cfg = load_protocol(protocol_source)
     rows = read_results(results_source)
     if not rows:
-        raise ValueError("extend requires a stopped lifecycle with at least one attempt")
+        raise ValueError(
+            "extend requires a stopped lifecycle with at least one attempt"
+        )
     lock = _read_thesis_lock(root_path)
     if lock is None:
         raise ValueError("active thesis lock missing; start a new thesis lifecycle")
     if lock.get("results_path") != _normalize_lock_path(root_path, results_path):
-        raise ValueError("active thesis results path changed; start a new thesis lifecycle")
+        raise ValueError(
+            "active thesis results path changed; start a new thesis lifecycle"
+        )
     identity = protocol_identity_sha256(cfg)
     if lock.get("protocol_identity_sha256") != identity:
         raise ValueError("active thesis protocol changed; start a new thesis lifecycle")
@@ -1719,7 +1822,9 @@ def extend_lifecycle(
         root=root_path,
     )
     if previous_state.continuation != "terminal":
-        raise ValueError("extend requires a lifecycle stopped by a configured stop rule")
+        raise ValueError(
+            "extend requires a lifecycle stopped by a configured stop rule"
+        )
     current_snapshot = _source_snapshot(
         root_path,
         protocol=cfg,
@@ -1772,6 +1877,9 @@ def climb_once(
     if thesis_error is not None:
         raise ValueError(thesis_error)
     cfg = load_protocol(protocol_path)
+    setup_blocker = _execution_setup_blocker(cfg)
+    if setup_blocker:
+        raise ValueError(setup_blocker)
     rows = read_results(results_path)
     snapshot = _source_snapshot(
         Path("."),
@@ -1985,6 +2093,12 @@ def _print_outcome(outcome: IterationOutcome) -> None:
     print(f"stop_reason: {outcome.stop_reason}")
 
 
+def _execution_setup_blocker(protocol: ProtocolConfig) -> str:
+    if protocol.execution_model.mode == "unpriced":
+        return EXECUTION_SETUP_BLOCKER
+    return ""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="quant-autoresearch")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2005,8 +2119,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve.add_argument("--allow-derived-status", action="append", default=[])
     resolve.add_argument(
         "--capacity-model",
-        choices=("off", "adv_impact"),
-        default="adv_impact",
+        choices=("off", "average_bar_impact"),
+        default="average_bar_impact",
     )
     baseline = subparsers.add_parser("baseline")
     baseline.add_argument("--mechanism", required=True)

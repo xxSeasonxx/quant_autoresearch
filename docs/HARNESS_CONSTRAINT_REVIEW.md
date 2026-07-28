@@ -41,7 +41,7 @@ Three measured facts carry the verdict:
   length.** `train_strength` (R − 2·SE ≥ 0) is algebraically identical to *in-sample annualized
    Sharpe ≥ 2/√Y*. Verified exactly against the ledger. So the real hurdle was **0.91** on the
    4.83-year thesis and **2.19** on the 0.84-year thesis. Nobody decided to demand Sharpe 2.19.
-3. **Half of all attempts could not deploy the risk they were scored on.** `capacity_bound = true`
+3. **Half of all attempts could not deploy the risk they were scored on.** `target_reached = false`
   in **95 of 190** attempts; deployed/max-feasible volatility sat pinned at **1.000 (median)** in
    four of six theses. One thesis ran at **0.010 vol against a 0.15 target** — a 15× shortfall.
    **But it also failed the scale-invariant strength gate in 29 of 30 scoreable attempts**, so
@@ -53,7 +53,7 @@ So the honest answer splits:
 not a demonstrated loss.** Nothing in this record shows the capacity model discarded a profitable
 strategy — the clearest candidate for that claim failed a scale-free strength test as well. What is
 established: `impact_coefficient_bps = 10.0`, `impact_exponent = 0.5`,
-`max_adv_participation = 0.25`, `max_bar_participation = 0.50` are round-number defaults with no
+`max_average_bar_participation = 0.25`, `max_bar_participation = 0.50` are round-number defaults with no
 calibration record; costs get a ×2.0 stress scenario and a dedicated retention gate while capacity
 gets **none**; and the caps bind on **maximum** participation over the window — 0.500 against a
 **mean of 0.0178** in attempt-0001 — with the near-maximum distribution unreported, so a
@@ -210,7 +210,7 @@ being pure — then violated by persisting its output. See Finding B.*
 ("proportional to dollars earned at a fixed starting NAV") while the only binding gate is
 **scale-invariant** (a t-statistic). Both choices are individually defensible. Together they mean a
 capacity-capped book gets a mechanically crushed *score* while its *gate* is untouched. The ledger
-does record enough to tell the two apart — `capacity_bound` plus `deployed`/`max_feasible` volatility
+does record enough to tell the two apart — `target_reached` plus `deployed`/`max_feasible` volatility
 — but the loop never acts on it, which is Finding D.
 
 ---
@@ -290,7 +290,7 @@ directional attempt-0013, score 0.219) and t = 1.97 with LCB −0.0026 (majors a
 ### 5.4 Capacity binding
 
 
-| Thesis                                     | capacity_bound | median deployed vol | median max-feasible vol | median utilization |
+| Thesis                                     | target not reached | median deployed vol | median max-feasible vol | median utilization |
 | ------------------------------------------ | -------------- | ------------------- | ----------------------- | ------------------ |
 | `crypto_perp_tsmom_majors`                 | 11/50          | 0.150               | 0.254                   | 0.590              |
 | `crypto_perp_funding_carry_directional`    | 9/30           | 0.200               | 0.219                   | 0.915              |
@@ -301,7 +301,7 @@ directional attempt-0013, score 0.219) and t = 1.97 with LCB −0.0026 (majors a
 
 
 Within `crypto_perp_tsmom_majors`, capacity binding costs roughly two-thirds of the score: median
-score 0.306 when `capacity_bound = true` versus **0.898** when false. `book_scale` across all
+score 0.306 when `target_reached = false` versus **0.898** when true. `book_scale` across all
 attempts: median 0.255, max 0.619.
 
 `crypto_perp_funding_xs_crowding_reversal` ran 30 attempts at deployed volatility **0.010 against a
@@ -561,28 +561,26 @@ on a dead thesis — and whether it should is an open policy question.*
 capacity allows. Score rises with deployed scale (first-order — impact and NAV compounding are
 nonlinear), while `train_strength` is a scale-free t-statistic. So when capacity binds, the **score**
 is cut and the **gate** is not. Measured: within `crypto_perp_tsmom_majors`, median score 0.306 when
-`capacity_bound = true` versus 0.898 when false.
+`target_reached = false` versus 0.898 when true.
 
 **What this repo does wrong with that.**
 
-1. **The loop reads capacity but never interprets it.** `capacity_bound = true` fired in 95 of 190
+1. **The loop reads capacity but never interprets it.** `target_reached = false` fired in 95 of 190
    attempts and changed nothing in how the result was treated — no branch, no note, no
    different next move. A field that changes the score by ~3× and triggers no response is
    instrumentation nobody acts on.
-2. **A minor emitted-field gap.** `_foundation_sizing` (`loop.py:407-413`) drops
-   `max_feasible_book_scale`. But the ledger already carries `book_scale`, `deployed_volatility`,
-   `max_feasible_volatility`, and `capacity_bound` (`loop.py:544`), so severe limitation *is*
-   detectable — `deployed/max_feasible = 1.000` says it directly. This is **ergonomics, not an
-   evidence gap**, and should not be prioritized as one.
+2. **The emitted frontier is retained locally.** `_foundation_sizing` and the run card carry
+   `max_feasible_book_scale`. The ledger already carries `book_scale`, `deployed_volatility`,
+   `max_feasible_volatility`, and `target_reached`.
 3. **The thresholds are inherited, not chosen.** `impact_coefficient_bps = 10.0`,
-   `impact_exponent = 0.5`, `max_adv_participation = 0.25`, `max_bar_participation = 0.50`,
-   `portfolio_notional = 1_000_000` are round numbers with no ADR and no local sensitivity run. The
-   *local* fix is action 7 (sweep `portfolio_notional`, find where `capacity_bound` flips) and action
-   10 (write the ADR). Calibrating the engine's coefficient is not this repo's call.
+   `impact_exponent = 0.5`, `max_average_bar_participation = 0.25`, `max_bar_participation = 0.50`,
+   `account.initial_notional = 1_000_000` are round numbers with no ADR and no local sensitivity run. The
+   local notional sensitivity is recorded in `docs/capacity-sensitivity-study.md`; action 10 remains
+   the ADR. Calibrating the engine's coefficient is not this repo's call.
 
 **The relief lever is real, but the headline comparison is confounded.** `attempt-0006` shows max bar
 participation 0.500 → 0.147, `max_feasible_book_scale` 0.097 → 0.982, deployed volatility
-0.067 → 0.150, `capacity_bound` true → false, and net total return 0.281 → 0.857 (3.05×). **It changed
+0.067 → 0.150, `target_reached` false → true, and net total return 0.281 → 0.857 (3.05×). **It changed
 two params, not one:** `execution_bars` 1 → 10 **and** `position_smoothing` 1 → 3. The capacity release
 is attributable to spreading; the return move is confounded, because `position_smoothing` changes the
 held-position path independently of capacity. So 3.05× bounds the *combined* effect of two
@@ -598,15 +596,15 @@ volume-aware execution shaping is **not blocked upstream, it is unbuilt** (actio
 claim that capacity output is a *lower bound* on deployable scale is also withdrawn: it rested on
 scheduling being inexpressible, which it is not.
 
-### Finding D2 — `portfolio_notional` does not match the operator's actual capital, and the mismatch misdirected research
+### Finding D2 — account scale must match the real mandate
 
 - **Severity:** High for the next lifecycle. **Action class:** Refactor. **Root cause:** ontology — a
   protocol constant set to a hypothetical rather than a fact.
 - **Evidence:** `protocol.toml:29`, attempt-0001 vs attempt-0006 sizing, operator-stated capital.
 
-`portfolio_notional = 1_000_000` is the assumed wallet. The operator's actual expected starting
-capital is **$10,000-$100,000** — one to two orders of magnitude smaller. Participation, and therefore
-every capacity verdict, scales linearly with this number.
+The primary mandate is **$100,000**, expressed as
+`[account].initial_notional`. Participation, minimum-order feasibility, and
+normalized fixed costs all scale from this value.
 
 The engine's own verdict on attempt-0001 is that this strategy, executed inside a single minute,
 supports a gross book of **$96,853**. At a risk-budget-preferred `book_scale ≈ 0.30`, the operator
@@ -623,20 +621,18 @@ usually harmless. Here it was not:
 2. Attempts were **spent** discovering capacity-relief levers (`execution_bars`,
    `position_smoothing`) that solve a problem the operator will not have for years.
 3. The frozen survivor's execution configuration (`execution_bars = 20`) is at least partly a capacity
-   adaptation. At $10k that means ~$50 order slices, where minimum order sizes and any fixed
-   per-order cost would dominate — **and the engine models neither** (no lot-size, minimum-notional, or
-   fixed-cost concept exists in `[cost_model]` or `[capacity_model]`).
+   adaptation. At small scale, minimum order sizes and fixed per-order costs can
+   dominate; the execution model now prices both and fails closed on undersized
+   orders.
 
 So the cost model is **optimistic in the dimension that binds at small size** (indivisibility, fixed
 costs) and the capacity model is **pessimistic in a dimension that does not bind** (impact). The
 envelope is calibrated for a large-account regime the operator is not in.
 
-**Recommendation.** Set `portfolio_notional` to real capital plus modest growth headroom (e.g. $100k
-when starting at $10k) at the next thesis setup — the bench is blank with no active lock, so this is a
-setup choice, not a reseed. Then treat scalability as a **property of a finished candidate**: run the
-frozen survivor at higher notional once as a capacity study and record the ceiling. That yields the
-actual envelope instead of silently clipping every attempt. Lowering notional to match real capital is
-honest; loosening `max_bar_participation` would not be.
+**Current action.** Keep the $100k mandate fixed. Select a lawfully accessible
+venue and snapshot its current per-symbol terms before baseline; execution remains
+deliberately unpriced until then. Treat higher-notional scalability as a separate,
+non-gating diagnostic.
 
 ### Finding E — `target_volatility` is frozen at a level never tested, and the survivor shows 2.2× headroom
 
@@ -789,8 +785,7 @@ important gates. Their zero-failure count is evidence about the *universe*, not 
 Every reviewed thesis is a **standing-position, directional** strategy. Untested by this record:
 market-neutral long/short (where `max_net_exposure` and `effective_symbol_count` bind differently),
 event-driven and low-duty-cycle strategies (where `minimum_evidence` and `trade_floor` bind hard),
-and anything using `RiskRule` barriers as a primary mechanism (where Finding D.4's latch matters
-most).
+and anything using `RiskRule` barriers as a primary mechanism.
 
 ### What to do about it
 
@@ -877,10 +872,10 @@ owning document; each points at the doc that is.
 | 1   | **done**   | **P0**   | ~~Measure realized multi-lag autocorrelation of the at-risk NAV return series; settle whether `n_eff` is honest.~~ **Done — §5.6.** Measured on 3 re-run candidates plus all 99 stored attempts: `n_eff` is honest and 4–9% conservative; the 83 sole-`train_strength` kills stand. No threshold change is warranted on SE grounds, and the upstream `n_eff` ask is closed as moot. | Add      | §5.6, §8.1, A | done |
 | 2   | **done**   | **P0**   | The lock uses a canonical identity projection excluding **exactly three fields**: `[loop].max_iterations`, `plateau_patience`, `baseline_grace_iterations`. Everything else — including all of `[output]` and `[loop].min_abs_improvement`/`min_rel_improvement` — stays hashed. | Simplify | B       | `loop.py`, `onboarding.py`                                             |
 | 3   | **done**   | **P0**   | `extend` authorizes only monotonic increases to the three stop rules and appends a chained lifecycle event. Stop state is derived; attempt rows are never rewritten. Old lock and ledger schemas are rejected. | Simplify | B       | `loop.py`, `results_log.py`                                       |
-| 4   | open   | P3       | Capture `max_feasible_book_scale` in the adapter and run card. **Downgraded** — the ledger already exposes capacity limitation via `deployed`/`max_feasible` volatility and `capacity_bound`, so this is ergonomics, not an evidence gap.                                                                                                   | Add      | D.2     | `loop.py:396-413`                                                      |
+| 4   | **done** | P3       | Capture `max_feasible_book_scale` in the adapter, ledger, and run card. | Add | D.2 | `objective.py`, `loop.py`, `results_log.py` |
 | 5   | **done**   | **P1**   | Run cards report the **realized** per-run hurdle `k·√(P/n_eff)`. No derived protocol field or unvalidated 1.5 blocking threshold was added. | Add      | A       | run card                                      |
 | 6   | open   | P2       | Decide stop policy deliberately: whether a harness-enforced plateau should exist at all, and at what patience. **Reframed** — the measured gain from patience 15 is 16 attempts in one of three lifecycles, and picking 15 from these histories would install another unvalidated constant. Needs its own analysis, not a default.          | Refactor | C       | operator study; `protocol.toml`, `program.md` Stop                     |
-| 7   | open   | **P1**   | Run a **local** capacity sensitivity: re-run one frozen candidate at several `portfolio_notional` values and record where `capacity_bound` flips. No upstream change needed — it is a protocol sweep. (A true engine-side capacity *stress scenario* is an upstream ask; see 10b.)                                                                                | Add      | D.3     | local sweep; `protocol.toml` + rerun |
+| 7   | **done** | **P1**   | The frozen attempt-0040 survivor reaches its volatility target through $1.9m and misses it at $2.0m. See `docs/capacity-sensitivity-study.md`. | Add | D.3 | direct non-gating reruns |
 | 8   | open   | **P2**   | Recalibrate `minimum_evidence` into **frequency-invariant** units (independent observations or effective years). **Retiring it is withdrawn** — it is inert only on minute data and becomes binding on daily bars (§7a). Document `complexity_cap` as a fail-safe.                                                                            | Refactor | §5.2, §7a | `protocol.toml`, `gates.py` docstring                                |
 | 8b  | open   | **P1**   | Derive frequency- and asset-class-sensitive fields from the data kind and bar cadence instead of carrying crypto-minute values forward: `minimum_evidence` floors, `min_trades`, `max_bar_participation`, `entry_lag_bars`, `impact_coefficient_bps`, `annualization_periods_per_year`. Home is `onboarding.py`, which already derives the Sharpe hurdle from the window. | Add | §7a | `onboarding.py`; **required before the first non-crypto or non-minute thesis** |
 | 9   | open   | **P2**   | Add a minimum-window / minimum-independent-observation condition so a 45-attempt search cannot run against a 10-month window.                                                                                                                                                                                                               | Add      | A       | `protocol.py` load guard                                               |
@@ -892,8 +887,7 @@ owning document; each points at the doc that is.
 | 15  | **done**   | **P1**   | Retire the stale thesis-coupled causality test. Per-attempt micro replay on actual rows plus the fail-closed local gate owns Train causality; complete replay belongs downstream. | Retire | §9      | 1 test file                                                            |
 
 
-| 17  | open   | **P1**   | Verify whether `volume` is in fact available on strategy projection rows. If confirmed, **close** `UPSTREAM_LIMITATIONS_TODO.md:16-38` as moot and build volume-aware execution shaping — a relief lever recorded as blocked that appears to be merely unbuilt. | Retire | D | `UPSTREAM_LIMITATIONS_TODO.md`, then `strategy.py` |
-| 18  | open   | **P1**   | Calibrate `min_cost_stress_return_retention` (currently `0.50`) for the operator's actual regime. Once `portfolio_notional` matches real capital, capacity goes inert and this becomes the binding **economic** gate, because fees dominate at small size. The value was set alongside the $1M crypto-minute configuration and has no mandate-grounded justification. | Add | D2, §9 | `protocol.toml`, `docs/adr/` |
+| 18  | open | **P1** | Calibrate `min_cost_stress_return_retention` for the $100k mandate and selected venue terms. Capacity is unlikely to bind at this scale, while proportional and fixed execution costs may become the binding economic gate. | Add | D2, §9 | `protocol.toml`, `docs/adr/` |
 
 ### 10b. Upstream asks — owned elsewhere, not restated here
 
@@ -902,16 +896,15 @@ item:
 
 | Ask | Owning document |
 | --- | --- |
-| Capacity denominator (`adv_*`) semantics; frontier vs target-reachability conflation; binding-event / tail diagnostic; `RiskRule` latch duration; static costs; volume-unit semantics | `quant_strategies/review-capacity-instrument-consumer-evidence.md` |
-| Small-account frictions: minimum order notional, tick size, fixed per-order cost | `UPSTREAM_LIMITATIONS_TODO.md` |
-| Volume on strategy rows (evidence now points to closing it as moot) | `UPSTREAM_LIMITATIONS_TODO.md` |
+| Discrete lot, quantity-step, price-tick, and contract-multiplier semantics | `UPSTREAM_LIMITATIONS_TODO.md` |
 
 **Reciprocal cleanup owed.** The upstream working note's finding 7 — the provisional `0.50`
 `cost_stress_retention` threshold — is a **harness** item, not an engine one. It is owned here as
 action 18 and should be dropped from that note.
 
-**Sequencing.** Items 1–3, 5, and 15 are complete. Items 4 and 7 are the capacity-honesty pair and
-matter before the next high-turnover thesis, not before the next attempt.
+**Sequencing.** Items 1–5, 7, and 15 are complete. Venue selection and a current
+execution-terms snapshot are required before the next Train attempt. The remaining
+actions retain their listed priorities.
 
 ---
 
@@ -955,7 +948,7 @@ Sharpe (§6.A); the implied-hurdle-versus-keep-rate table (§5.1); capacity bind
 and max-feasible volatilities, and the score gap between capacity-bound and unbound attempts (§5.4);
 new-best-survivor trajectories (§5.5); that, at review time, `_stop_reason_after_attempt` was pure
 while its output was persisted and the lock compared a whole-file hash (§6.B); that
-`max_feasible_book_scale` is emitted upstream and absent locally (§6.D); that
+`max_feasible_book_scale` is emitted upstream and now retained locally (§6.D); that
 `_feasibility_warning` fires only above 4.0 (§6.A); that `plateau_patience == max_iterations` in all
 seven lifecycles (§5.5); and that the initial suite failure was the thesis-coupled
 causality test retired by action 15 (§9).
@@ -963,6 +956,10 @@ causality test retired by action 15 (§9).
 Also verified from the `crypto_perp_tsmom_majors` diagnostics artifacts: the attempt-0001 /
 attempt-0006 capacity figures, the 28× max-to-mean participation ratio, and the 3.05× score move
 from the combined execution-spreading and position-smoothing change (§6.D).
+
+**Verified by direct notional reruns:** the frozen attempt-0040 survivor reaches the 15% volatility
+target at $1.9m and misses it at $2.0m under the configured capacity model. The seven-run study,
+input hashes, and capacity tails are recorded in `docs/capacity-sensitivity-study.md`.
 
 **Verified by direct measurement on re-run candidates (§5.6):** the autocorrelation function of the
 at-risk NAV return series for three candidates spanning the range of behaviour, and the resulting
@@ -990,9 +987,9 @@ The review's one open measurement is now closed, and closing it removed a suspec
 confirming one: the strength gate's standard error is honest and slightly conservative (§5.6). That
 shifts the residual risk. What remains under-validated is no longer the *statistic* but the
 *constants* chosen around it — `train_strength_haircut_se = 2.0` against a best-of-N search that
-reaches t ≈ 2 unaided, `target_volatility = 0.15`, `min_cost_stress_return_retention = 0.50`, and a
-`portfolio_notional` an order of magnitude above the operator's real capital. None of those is a
-measurement problem; each is a decision nobody has recorded (§9, action 10).
+reaches t ≈ 2 unaided, `target_volatility = 0.15`, and
+`min_cost_stress_return_retention = 0.50`. None of those is a measurement problem;
+each is a decision nobody has recorded (§9, action 10).
 
 The single largest remaining exposure is generalization: every measured number here comes from
 crypto-perp minute bars. §7a marks which findings survive a change of asset class or bar cadence and

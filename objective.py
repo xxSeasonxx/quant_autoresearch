@@ -40,6 +40,7 @@ from math import isfinite, sqrt
 from statistics import NormalDist
 from typing import Sequence
 
+
 @dataclass(frozen=True)
 class LoopConfig:
     plateau_patience: int
@@ -99,8 +100,10 @@ class FoundationScenario:
     scenario_id: str
     full_train: FoundationMetric
     subwindows: tuple[FoundationMetric, ...]
-    max_adv_participation: float | None = None
+    max_average_bar_participation: float | None = None
     max_bar_participation: float | None = None
+    minimum_order_notional_ratio: float | None = None
+    fixed_cost_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -114,9 +117,10 @@ class FoundationSizing:
 
     annualization_periods_per_year: int
     book_scale: float | None = None
+    max_feasible_book_scale: float | None = None
     deployed_volatility: float | None = None
     max_feasible_volatility: float | None = None
-    capacity_bound: bool | None = None
+    target_reached: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -236,8 +240,8 @@ def _score_foundation_scenario(
     periods_per_year: int,
 ) -> ObjectiveResult:
     counts = tuple(metric.closed_trade_count for metric in scenario.subwindows)
-    full_psr, subwindow_psrs, worst_subwindow_psr, worst_subwindow_id = _diagnostic_psrs(
-        scenario, config
+    full_psr, subwindow_psrs, worst_subwindow_psr, worst_subwindow_id = (
+        _diagnostic_psrs(scenario, config)
     )
     if len(scenario.subwindows) != config.subwindows:
         return ObjectiveResult(
@@ -255,7 +259,9 @@ def _score_foundation_scenario(
         )
 
     full_window_total_return = scenario.full_train.total_return
-    full_parts = _window_return_se(scenario.full_train, periods_per_year=periods_per_year)
+    full_parts = _window_return_se(
+        scenario.full_train, periods_per_year=periods_per_year
+    )
     full_train_at_risk_annualized_return = None if full_parts is None else full_parts[0]
     full_train_at_risk_annualized_standard_error = (
         None if full_parts is None else full_parts[1]
@@ -299,24 +305,16 @@ def _score_foundation_scenario(
         feasible=score is not None,
         subwindow_trade_counts=counts,
         window_ids=tuple(window_ids),
-        window_at_risk_annualized_returns=tuple(
-            window_at_risk_annualized_returns
-        ),
+        window_at_risk_annualized_returns=tuple(window_at_risk_annualized_returns),
         window_at_risk_annualized_standard_errors=tuple(
             window_at_risk_annualized_standard_errors
         ),
         full_window_total_return=score,
-        full_train_at_risk_annualized_return=(
-            full_train_at_risk_annualized_return
-        ),
+        full_train_at_risk_annualized_return=(full_train_at_risk_annualized_return),
         full_train_at_risk_annualized_standard_error=(
             full_train_at_risk_annualized_standard_error
         ),
-        detail=(
-            ""
-            if score is not None
-            else "full_train non-scoreable total_return"
-        ),
+        detail=("" if score is not None else "full_train non-scoreable total_return"),
         full_train_psr=full_psr,
         subwindow_psrs=subwindow_psrs,
         worst_subwindow_psr=worst_subwindow_psr,

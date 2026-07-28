@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 import json
 import re
 
@@ -19,7 +20,8 @@ from universe_resolver import universe_payload_sha256
 
 
 def _protocol_text() -> str:
-    return """
+    return (
+        """
 strategy_path = "strategy.py"
 strategy_id = "example"
 
@@ -38,13 +40,18 @@ entry_lag_bars = 1
 fee_bps_per_side = 1.0
 slippage_bps_per_side = 1.0
 
+[account]
+initial_notional = 100000.0
+
+[execution_model]
+mode = "unpriced"
+
 [capacity_model]
-mode = "adv_impact"
-portfolio_notional = 1000000.0
-adv_lookback_bars = 1440
-adv_min_observations = 60
+mode = "average_bar_impact"
+average_bar_lookback_bars = 1440
+average_bar_min_observations = 60
 max_bar_participation = 0.50
-max_adv_participation = 0.25
+max_average_bar_participation = 0.25
 impact_coefficient_bps = 10.0
 impact_exponent = 0.5
 
@@ -91,7 +98,9 @@ max_abs_drawdown = 0.2
 train_strength_haircut_se = 2.0
 max_components = 3
 max_params = 10
-""".strip() + "\n"
+""".strip()
+        + "\n"
+    )
 
 
 def test_protocol_identity_excludes_only_stop_rules(tmp_path: Path):
@@ -123,9 +132,9 @@ def test_protocol_identity_excludes_only_stop_rules(tmp_path: Path):
         )
     )
 
-    assert protocol_identity_sha256(load_protocol(stop_path)) == protocol_identity_sha256(
-        base
-    )
+    assert protocol_identity_sha256(
+        load_protocol(stop_path)
+    ) == protocol_identity_sha256(base)
     assert protocol_identity_sha256(
         load_protocol(formatted_path)
     ) == protocol_identity_sha256(base)
@@ -159,6 +168,19 @@ def _brief_text(
         universe_lines += f"symbols = [{symbols}]\n"
     if universe_artifact:
         universe_lines += f"universe_artifact = {universe_artifact!r}\n"
+    execution_symbols = (
+        ["BTC-PERP", "ETH-PERP", "SOL-PERP"]
+        if symbols is None
+        else re.findall(r'"([^"]+)"', symbols)
+    )
+    execution_tables = "\n\n".join(
+        (
+            f'[execution_instruments."{symbol}"]\n'
+            "min_order_notional = 5.0\n"
+            "fixed_cost_per_order = 0.25"
+        )
+        for symbol in execution_symbols
+    )
     return f"""
 # Test Brief
 
@@ -178,11 +200,14 @@ load_end = "2026-01-07"
 bar_cadence = "1m"
 annualization_periods_per_year = 525600
 {universe_lines.rstrip()}
-capital_notional = 2500000.0
-adv_lookback_bars = 2880
-adv_min_observations = 120
+initial_notional = 100000.0
+execution_venue = "eligible-test-venue"
+execution_terms_as_of = "2026-07-27"
+execution_source = "https://example.test/execution-terms"
+average_bar_lookback_bars = 2880
+average_bar_min_observations = 120
 max_bar_participation = 0.25
-max_adv_participation = 0.15
+max_average_bar_participation = 0.15
 impact_coefficient_bps = 12.0
 impact_exponent = 0.6
 max_gross_exposure = 1.5
@@ -206,6 +231,8 @@ max_params = 12
 exclusions = [{exclusions}]
 editable_params = ["lookback", "threshold"]
 baseline_expectations = "Baseline may fail breadth before the universe resolver exists."
+
+{execution_tables}
 ```
 """
 
@@ -230,7 +257,7 @@ def _write_universe_artifact(
                 "max_lag_days": None,
                 "require_research_ready": False,
                 "allowed_derived_statuses": ["research_ready"],
-                "capacity_model": "adv_impact",
+                "capacity_model": "average_bar_impact",
             },
         },
         "resolved_symbols": symbols,
@@ -290,11 +317,24 @@ def test_protocol_proposal_derives_mandate_values(tmp_path: Path):
     assert recommended["gates"]["max_params"] == 12
     assert recommended["objective"]["subwindows"] == 6
     assert recommended["data"]["symbols"] == ["BTC-PERP", "ETH-PERP", "SOL-PERP"]
-    assert recommended["capacity_model"]["portfolio_notional"] == 2500000.0
-    assert recommended["capacity_model"]["adv_lookback_bars"] == 2880
-    assert recommended["capacity_model"]["adv_min_observations"] == 120
+    assert recommended["account"]["initial_notional"] == 100000.0
+    assert recommended["execution_model"]["mode"] == "minimum_notional"
+    assert recommended["execution_model"]["venue"] == "eligible-test-venue"
+    assert recommended["execution_model"]["terms_as_of"] == "2026-07-27"
+    assert recommended["execution_model"]["source"] == (
+        "https://example.test/execution-terms"
+    )
+    instruments = recommended["execution_model"]["instruments"]
+    assert isinstance(instruments, Mapping)
+    assert set(instruments) == {
+        "BTC-PERP",
+        "ETH-PERP",
+        "SOL-PERP",
+    }
+    assert recommended["capacity_model"]["average_bar_lookback_bars"] == 2880
+    assert recommended["capacity_model"]["average_bar_min_observations"] == 120
     assert recommended["capacity_model"]["max_bar_participation"] == 0.25
-    assert recommended["capacity_model"]["max_adv_participation"] == 0.15
+    assert recommended["capacity_model"]["max_average_bar_participation"] == 0.15
     assert recommended["capacity_model"]["impact_coefficient_bps"] == 12.0
     assert recommended["capacity_model"]["impact_exponent"] == 0.6
     assert recommended["output"]["causality_check"] == "micro"
@@ -447,15 +487,23 @@ def test_recommended_effective_symbol_floor_is_one_for_single_instrument(
         (_brief_text(mechanism="   "), "mechanism is required"),
         (_brief_text(falsifier=""), "falsifier is required"),
         (_brief_text(symbols=""), "symbols must include at least one symbol"),
-        (_brief_text(target_volatility=float("nan")), "target_volatility must be finite"),
+        (
+            _brief_text(target_volatility=float("nan")),
+            "target_volatility must be finite",
+        ),
         (_brief_text(max_abs_drawdown=1.5), "max_abs_drawdown must be in [0, 1]"),
         (_brief_text(max_iterations=1), "max_iterations must be >= 2"),
         (
-            _brief_text().replace("adv_min_observations = 120", "adv_min_observations = 3000"),
-            "adv_min_observations must be <= adv_lookback_bars",
+            _brief_text().replace(
+                "average_bar_min_observations = 120",
+                "average_bar_min_observations = 3000",
+            ),
+            "average_bar_min_observations must be <= average_bar_lookback_bars",
         ),
         (
-            _brief_text().replace("objective_subwindows = 6", "objective_subwindows = 0"),
+            _brief_text().replace(
+                "objective_subwindows = 6", "objective_subwindows = 0"
+            ),
             "objective_subwindows must be > 0",
         ),
         (

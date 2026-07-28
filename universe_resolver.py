@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Mapping, Sequence, cast
 import hashlib
 import json
 
@@ -32,17 +32,9 @@ _SYMBOL_CONSTANTS: dict[str, str] = {
 }
 
 _BARS_DATASETS = frozenset(
-    dataset for dataset in _SYMBOL_CONSTANTS if dataset != "crypto_perp_1min_with_funding"
-)
-
-_ADV_IMPACT_DATASETS = frozenset(
-    {
-        "crypto_perp_1min_with_funding",
-        "equity_1min",
-        "equity_daily",
-        "crypto_perp_1min",
-        "crypto_spot_perp_basis_1min",
-    }
+    dataset
+    for dataset in _SYMBOL_CONSTANTS
+    if dataset != "crypto_perp_1min_with_funding"
 )
 
 
@@ -116,20 +108,25 @@ def _candidate_symbols(dataset: str) -> tuple[str, ...]:
     raw = getattr(catalog, constant)
     if not isinstance(raw, list) or not all(isinstance(symbol, str) for symbol in raw):
         raise ValueError(f"catalog constant {constant} must be a list of symbols")
-    symbols = tuple(sorted(dict.fromkeys(symbol.strip() for symbol in raw if symbol.strip())))
+    symbols = tuple(
+        sorted(dict.fromkeys(symbol.strip() for symbol in raw if symbol.strip()))
+    )
     if not symbols:
         raise ValueError(f"catalog constant {constant} has no symbols")
     return symbols
 
 
 def _validate_capacity(dataset: str, capacity_model: str) -> None:
-    if capacity_model not in {"off", "adv_impact"}:
-        raise ValueError("capacity_model must be one of: off, adv_impact")
-    if capacity_model == "adv_impact" and dataset not in _ADV_IMPACT_DATASETS:
-        supported = ", ".join(sorted(_ADV_IMPACT_DATASETS))
+    if capacity_model not in {"off", "average_bar_impact"}:
+        raise ValueError("capacity_model must be one of: off, average_bar_impact")
+    semantics = catalog.DATASET_CONTRACTS[dataset]["volume_semantics"]
+    if capacity_model == "average_bar_impact" and semantics not in {
+        "base_units",
+        "quote_notional",
+    }:
         raise ValueError(
-            f"dataset {dataset!r} is not supported for adv_impact capacity; "
-            f"use capacity_model='off' or one of: {supported}"
+            f"dataset {dataset!r} volume_semantics={semantics!r} cannot price "
+            "average_bar_impact capacity"
         )
 
 
@@ -138,9 +135,7 @@ def _derived_health_digest(dataset: str, symbols: Sequence[str]) -> dict[str, ob
         return {"sha256": None, "symbol_count": None}
     health = DERIVED_DATASET_HEALTH[dataset]
     relevant = {
-        symbol: health[symbol]
-        for symbol in sorted(symbols)
-        if symbol in health
+        symbol: health[symbol] for symbol in sorted(symbols) if symbol in health
     }
     return {
         "sha256": _canonical_sha256(cast(Mapping[str, object], relevant)),
@@ -178,7 +173,7 @@ def resolve_universe_payload(
     max_lag_days: int | None = None,
     require_research_ready: bool = False,
     allowed_derived_statuses: Sequence[str] = ("research_ready",),
-    capacity_model: str = "adv_impact",
+    capacity_model: str = "average_bar_impact",
     created_at: str | None = None,
 ) -> dict[str, object]:
     resolved_dataset = _resolve_dataset(data_kind, dataset)
@@ -189,7 +184,9 @@ def resolve_universe_payload(
         raise ValueError("end must be on or after start")
     if max_lag_days is not None and max_lag_days < 0:
         raise ValueError("max_lag_days must be >= 0")
-    allowed_statuses = tuple(status.strip() for status in allowed_derived_statuses if status.strip())
+    allowed_statuses = tuple(
+        status.strip() for status in allowed_derived_statuses if status.strip()
+    )
     if not allowed_statuses:
         raise ValueError("allowed_derived_statuses must include at least one status")
 
@@ -232,7 +229,9 @@ def resolve_universe_payload(
         excluded.append(_excluded(symbol, "explicit_exclusion_not_in_candidates"))
 
     if not resolved:
-        raise ValueError("resolved universe is empty after readiness checks and exclusions")
+        raise ValueError(
+            "resolved universe is empty after readiness checks and exclusions"
+        )
 
     payload: dict[str, object] = {
         "schema_version": 1,
@@ -270,7 +269,7 @@ def write_universe_artifact(
     max_lag_days: int | None = None,
     require_research_ready: bool = False,
     allowed_derived_statuses: Sequence[str] = ("research_ready",),
-    capacity_model: str = "adv_impact",
+    capacity_model: str = "average_bar_impact",
 ) -> dict[str, object]:
     payload = resolve_universe_payload(
         data_kind=data_kind,
@@ -320,7 +319,9 @@ def load_universe_artifact(path: str | Path) -> UniverseArtifact:
     resolved: list[str] = []
     for symbol in symbols:
         if not isinstance(symbol, str) or not symbol.strip():
-            raise ValueError("universe artifact resolved_symbols must contain non-empty strings")
+            raise ValueError(
+                "universe artifact resolved_symbols must contain non-empty strings"
+            )
         resolved.append(symbol)
     return UniverseArtifact(
         path=source,

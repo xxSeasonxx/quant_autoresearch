@@ -375,9 +375,11 @@ def _load_execution_model(
     if not venue or not source:
         raise ValueError("execution_model venue and source must be non-blank")
     try:
-        date.fromisoformat(terms_as_of)
+        parsed_terms_as_of = date.fromisoformat(terms_as_of)
     except ValueError as exc:
         raise ValueError("execution_model.terms_as_of must be an ISO date") from exc
+    if parsed_terms_as_of > date.today():
+        raise ValueError("execution_model.terms_as_of cannot be in the future")
     raw_instruments = _required(raw, "instruments")
     if not isinstance(raw_instruments, Mapping):
         raise ValueError("execution_model.instruments must be a table")

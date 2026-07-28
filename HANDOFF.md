@@ -13,15 +13,16 @@ after real execution feasibility is priced from a lawfully accessible venue.
   the execution-setup blocker.
 - `baseline` and `climb` fail before creating a thesis lock, ledger row, quick
   config, or artifact while execution is unpriced.
-- Priced onboarding requires venue, terms as-of date, authoritative source, and
-  exact per-symbol minimum-order and fixed-order-cost terms.
+- Priced onboarding requires venue, a non-future terms as-of date,
+  authoritative source, and exact per-symbol minimum-order and fixed-order-cost
+  terms.
 - The harness accepts portfolio-foundation v4 and sizing-report v2 only. Run
   cards and `results.tsv` report `target_reached`,
   `max_feasible_book_scale`, `minimum_order_notional_ratio`, and
   `fixed_cost_share`; retired evidence and ledger shapes fail closed.
 - The $1 million rerun remains a non-gating diagnostic and is distinct from the
   $100,000 scored mandate.
-- The full suite passes: 119 tests. Ruff and mypy pass.
+- The full suite passes: 121 tests. Ruff and mypy pass.
 
 # Next steps with success checks
 

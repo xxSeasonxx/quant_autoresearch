@@ -484,6 +484,22 @@ def test_protocol_rejects_retired_capacity_shape(tmp_path: Path):
         load_protocol(protocol_path)
 
 
+def test_protocol_rejects_future_execution_terms(tmp_path: Path):
+    protocol_path = tmp_path / "protocol.toml"
+    protocol_path.write_text(
+        _protocol_text().replace(
+            'terms_as_of = "2026-07-27"',
+            'terms_as_of = "2999-01-01"',
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="execution_model.terms_as_of cannot be in the future",
+    ):
+        load_protocol(protocol_path)
+
+
 def test_foundation_parser_rejects_retired_evidence_shapes():
     old_schema = _foundation_payload()
     old_schema["schema_version"] = "quant_strategies.quick_run.portfolio_foundation/v3"

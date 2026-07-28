@@ -279,9 +279,11 @@ def _execution_terms(
     terms_as_of = _required_text(data, "execution_terms_as_of")
     source = _required_text(data, "execution_source")
     try:
-        date.fromisoformat(terms_as_of)
+        parsed_terms_as_of = date.fromisoformat(terms_as_of)
     except ValueError as exc:
         raise ValueError("execution_terms_as_of must be an ISO date") from exc
+    if parsed_terms_as_of > date.today():
+        raise ValueError("execution_terms_as_of cannot be in the future")
     raw_instruments = data.get("execution_instruments")
     if not isinstance(raw_instruments, Mapping):
         raise ValueError("execution_instruments must be a table")

@@ -551,11 +551,10 @@ on a dead thesis — and whether it should is an open policy question.*
 - **Severity:** Medium (local scope). **Action class:** Refactor. **Root cause:** research practice —
   a constraint the loop reads but does not interpret.
 - **Evidence:** `loop.py:396-413`, `loop.py:544`, `protocol.toml:27-35`, §5.4.
-- **Engine-side analysis is owned elsewhere.** The capacity denominator semantics, the frontier /
-  target-reachability conflation, the missing binding-event diagnostic, static costs, and volume-unit
-  semantics are engine findings recorded in
-  `quant_strategies/review-capacity-instrument-consumer-evidence.md`. They are **not restated here.**
-  This finding covers only what this repo owns.
+- **Engine-side contracts are owned upstream.** The engine publishes dataset volume semantics,
+  target reachability, the feasible frontier, execution and capacity diagnostics, and reconciled
+  proportional, fixed, and impact costs. This finding covers only the harness's interpretation and
+  calibration of that evidence.
 
 **The local mechanic that matters.** `book_scale` is the minimum of what `risk_budget` wants and what
 capacity allows. Score rises with deployed scale (first-order — impact and NAV compounding are
@@ -572,11 +571,11 @@ is cut and the **gate** is not. Measured: within `crypto_perp_tsmom_majors`, med
 2. **The emitted frontier is retained locally.** `_foundation_sizing` and the run card carry
    `max_feasible_book_scale`. The ledger already carries `book_scale`, `deployed_volatility`,
    `max_feasible_volatility`, and `target_reached`.
-3. **The thresholds are inherited, not chosen.** `impact_coefficient_bps = 10.0`,
-   `impact_exponent = 0.5`, `max_average_bar_participation = 0.25`, `max_bar_participation = 0.50`,
-   `account.initial_notional = 1_000_000` are round numbers with no ADR and no local sensitivity run. The
-   local notional sensitivity is recorded in `docs/capacity-sensitivity-study.md`; action 10 remains
-   the ADR. Calibrating the engine's coefficient is not this repo's call.
+3. **The capacity thresholds are inherited, not calibrated.** `impact_coefficient_bps = 10.0`,
+   `impact_exponent = 0.5`, `max_average_bar_participation = 0.25`, and
+   `max_bar_participation = 0.50` are round numbers with no ADR. The local notional sensitivity is
+   recorded in `docs/capacity-sensitivity-study.md`; action 10 remains the ADR. Calibrating the
+   engine's coefficient is not this repo's call.
 
 **The relief lever is real, but the headline comparison is confounded.** `attempt-0006` shows max bar
 participation 0.500 → 0.147, `max_feasible_book_scale` 0.097 → 0.982, deployed volatility
@@ -587,14 +586,10 @@ held-position path independently of capacity. So 3.05× bounds the *combined* ef
 turnover-shaping levers. `program.md`'s "relieving a feasibility constraint is itself an alpha move"
 survives qualitatively; the point estimate does not.
 
-**Withdrawn: the "volume-blind" claim.** An earlier draft asserted, following
-`UPSTREAM_LIMITATIONS_TODO.md:16-38`, that strategies receive no traded volume and that every in-loop
-relief lever is therefore volume-blind. **An engine source read contradicts this**: capacity-enabled
-projection rows preserve the `volume` field and strategy code may use it causally. This inverts the
-conclusion and is the one place in this review where something is genuinely being left on the table —
-volume-aware execution shaping is **not blocked upstream, it is unbuilt** (action 17). The related
-claim that capacity output is a *lower bound* on deployable scale is also withdrawn: it rested on
-scheduling being inexpressible, which it is not.
+**Volume-aware execution shaping is locally expressible.** The public `quant_data` catalog declares
+volume semantics per dataset, capacity-enabled projection rows preserve `volume`, and strategy code
+may use it causally. Volume-aware execution shaping is therefore unbuilt local strategy behavior,
+not an upstream data limitation (action 17).
 
 ### Finding D2 — account scale must match the real mandate
 
@@ -836,15 +831,13 @@ crypto-perp minute bars and re-derive it on the first non-crypto or non-minute t
 `docs/adr/` holds exactly one ADR (`0001-curated-few-research-regime.md`). No decision record exists
 for any of these load-bearing choices:
 
-- the capacity-model constants (impact coefficient/exponent, ADV and bar participation caps, notional);
+- the capacity-model constants (impact coefficient/exponent and average-bar/bar participation caps);
 - `target_volatility = 0.15`;
 - `train_strength_haircut_se = 2.0` and its window coupling;
 - `plateau_patience == max_iterations` (recorded only as a line inside a review doc, which
 `docs/HARNESS_AND_DOCS_REVIEW.md` itself declares is *not* an active contract — so the rationale
 for a live behaviour currently lives in a document that disclaims authority over it);
 - the gate thresholds, several of which cannot bind.
-
-Also: `HARNESS_TODO.md:1` begins `and# Harness TODO` — a stray two-character prefix breaking the H1.
 
 **The causality regression test was thesis-coupled and failing.** A synthetic fixture cannot prove
 an arbitrary replaceable strategy causal, and requiring a replacement on every reseed creates a
@@ -968,16 +961,12 @@ reproducing the stored `return_sample_count` / `mean_return` / `return_volatilit
 the series upstream actually scored rather than a reconstruction. Lag-1 autocorrelation was
 additionally recovered in closed form for all 99 stored attempts.
 
-**Not verified:** upstream capacity/impact behaviour beyond the consumer contract; **the unit
-`volume` is denominated in for `crypto_perp_1min*`** — the `quant_data` contract annotates forex
-volume as "tick count, not notional" but leaves crypto perp "dataset-dependent", so the denominator
-of every participation ratio above is unstated (worth one clarifying question upstream); whether the
+**Not verified:** capacity/impact calibration beyond the upstream consumer contract; whether the
 0.84–0.93 variance ratio of §5.6 holds on daily bars or a wide cross-section — it is measured on three
 crypto-perp minute candidates only, and the mechanism generalizes but the magnitude is not
-established; whether volume is reachable by strategies
-(`UPSTREAM_LIMITATIONS_TODO` records this as unchecked); any claim about how these candidates would
-perform out of sample; that narrowing the lock hash (Item 2) has no consequence I have not
-considered — it needs a test that a genuine identity change still hard-stops.
+established; any claim about how these candidates would perform out of sample; that narrowing the
+lock hash (Item 2) has no consequence I have not considered — it needs a test that a genuine
+identity change still hard-stops.
 
 **Residual risk.** The central conclusion — *the apparatus is over-built and inert while three or
 four constants are under-validated and decisive* — rests on 271 attempts from 7 theses, 5 of them

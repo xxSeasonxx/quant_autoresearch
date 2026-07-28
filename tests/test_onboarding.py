@@ -516,6 +516,13 @@ def test_recommended_effective_symbol_floor_is_one_for_single_instrument(
             ),
             "baseline_grace_iterations must be <= max_iterations",
         ),
+        (
+            _brief_text().replace(
+                'execution_terms_as_of = "2026-07-27"',
+                'execution_terms_as_of = "2999-01-01"',
+            ),
+            "execution_terms_as_of cannot be in the future",
+        ),
     ],
 )
 def test_protocol_proposal_rejects_invalid_briefs(
